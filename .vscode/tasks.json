@@ -4,26 +4,12 @@
         {
             "label": "build-extensions",
             "dependsOn": [
-                "publish-aot-tool",
                 "build-ui-extension",
                 "build-workspace-extension",
                 "stage-test-vsix"
             ],
             "dependsOrder": "sequence",
             "problemMatcher": []
-        },
-        {
-            "label": "publish-aot-tool",
-            "type": "shell",
-            "command": "dotnet",
-            "args": [
-                "publish",
-                "${workspaceFolder}/src/aot-tool/src/DevCerts.Tool/DevCerts.Tool.csproj",
-                "-c", "Release",
-                "-o", "${workspaceFolder}/src/vscode-ui-extension/bin"
-            ],
-            "problemMatcher": "$msCompile",
-            "detail": "Publishes AOT binary for the current platform (RID auto-detected by dotnet publish)"
         },
         {
             "label": "build-ui-extension",
