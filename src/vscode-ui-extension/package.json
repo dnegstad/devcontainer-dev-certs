@@ -1,0 +1,45 @@
+{
+  "name": "devcontainer-dev-certs-host",
+  "displayName": "Devcontainer Dev Certificates (Host)",
+  "description": "Generates and trusts .NET HTTPS development certificates on the host machine for use in devcontainers and remote environments.",
+  "version": "0.1.0",
+  "publisher": "dnegstad",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dnegstad/devcontainer-dev-certs"
+  },
+  "api": "none",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "extensionKind": ["ui"],
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Dev Certificates (Host)",
+      "properties": {
+        "dotnet-dev-certs.autoProvision": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically generate and trust a dev cert if none exists when the workspace extension requests one"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "build:prod": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.100.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.0"
+  }
+}

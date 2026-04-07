@@ -1,0 +1,33 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+*.nupkg
+*.snupkg
+publish/
+
+# Node
+node_modules/
+dist/
+*.vsix
+.vscode-test/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.idea/
+.vs/
+.claude/
+*.swp
+*.swo
+
+# Build artifacts
+out/
+*.tgz
+publish/
+.out/

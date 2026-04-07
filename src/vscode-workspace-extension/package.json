@@ -1,0 +1,60 @@
+{
+  "name": "devcontainer-dev-certs-remote",
+  "displayName": "Devcontainer Dev Certificates (Remote)",
+  "description": "Receives and installs .NET HTTPS development certificates inside devcontainers and remote environments.",
+  "version": "0.1.0",
+  "publisher": "dnegstad",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dnegstad/devcontainer-dev-certs"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "extensionKind": ["workspace"],
+  "extensionDependencies": ["dnegstad.devcontainer-dev-certs-host"],
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "dotnet-dev-certs.injectCert",
+        "title": "Dev Certs: Inject Certificate into Remote"
+      }
+    ],
+    "configuration": {
+      "title": "Dev Certificates (Remote)",
+      "properties": {
+        "dotnet-dev-certs.autoInject": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically inject and configure the dev cert when a remote session starts"
+        },
+        "dotnet-dev-certs.sslCertDirs": {
+          "type": "string",
+          "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
+          "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Used when the devcontainer feature is not present (e.g., SSH remoting, WSL)."
+        },
+        "dotnet-dev-certs.ensureSslCertDir": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ensure SSL_CERT_DIR is configured in the remote environment when the devcontainer feature hasn't set it"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "build:prod": "node esbuild.mjs --production",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.100.0",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.0"
+  }
+}

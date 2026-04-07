@@ -1,0 +1,15 @@
+{
+    "name": "Dev Certs Test",
+    "image": "mcr.microsoft.com/devcontainers/dotnet:10.0",
+    "features": {
+        "./dotnet-dev-certs": {}
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-dotnettools.csdevkit",
+                "${containerWorkspaceFolder}/.devcontainer/dotnet-dev-certs-remote.vsix"
+            ]
+        }
+    }
+}

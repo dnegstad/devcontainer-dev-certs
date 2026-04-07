@@ -1,0 +1,7 @@
+{
+  "name": "devcontainer-dev-certs",
+  "private": true,
+  "scripts": {
+    "hydrate:sample-project": "node test/sample-project/hydrate-sample-project.mjs"
+  }
+}

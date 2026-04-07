@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Extension Host",
+            "type": "extensionHost",
+            "request": "launch",
+            "args": [
+                "${workspaceFolder}/.out/test-project",
+                "--extensionDevelopmentPath=${workspaceFolder}/src/vscode-ui-extension"
+            ],
+            "outFiles": [
+                "${workspaceFolder}/src/vscode-ui-extension/dist/**/*.js"
+            ],
+            "preLaunchTask": "build-extensions"
+        }
+    ]
+}
