@@ -24,7 +24,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.getCertMaterial",
       async () => {
-        const config = vscode.workspace.getConfiguration("dotnet-dev-certs");
+        const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
         const autoProvision = config.get<boolean>("autoProvision", true);
         const material = await certProvider.getCertMaterial(autoProvision);
 

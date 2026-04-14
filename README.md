@@ -13,7 +13,7 @@ Add the devcontainer feature to your `devcontainer.json` and everything works au
 ```json
 {
     "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/dotnet-dev-certs": {}
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs": {}
     }
 }
 ```
@@ -59,7 +59,7 @@ src/
       util/paths.ts                .NET store and OpenSSL trust directory paths
 
   devcontainer-feature/            Devcontainer feature
-    src/dotnet-dev-certs/
+    src/devcontainer-dev-certs/
       devcontainer-feature.json    Feature metadata, containerEnv, extension references
       install.sh                   Container build-time setup (creates directories)
 

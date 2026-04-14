@@ -7,9 +7,9 @@
 import { readFileSync } from "fs";
 
 const FEATURE_JSON_PATH =
-  "src/devcontainer-feature/src/dotnet-dev-certs/devcontainer-feature.json";
+  "src/devcontainer-feature/src/devcontainer-dev-certs/devcontainer-feature.json";
 const INSTALL_SH_PATH =
-  "src/devcontainer-feature/src/dotnet-dev-certs/install.sh";
+  "src/devcontainer-feature/src/devcontainer-dev-certs/install.sh";
 const UI_PKG_PATH = "src/vscode-ui-extension/package.json";
 const WORKSPACE_PKG_PATH = "src/vscode-workspace-extension/package.json";
 

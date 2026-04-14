@@ -26,7 +26,7 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  const config = vscode.workspace.getConfiguration("dotnet-dev-certs");
+  const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
 
   // Ensure SSL_CERT_DIR is configured — covers SSH remoting, WSL, and other
   // non-devcontainer scenarios where the devcontainer feature isn't present.

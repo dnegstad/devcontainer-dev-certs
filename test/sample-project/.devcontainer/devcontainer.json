@@ -2,7 +2,7 @@
     "name": "Dev Certs Test",
     "image": "mcr.microsoft.com/devcontainers/dotnet:10.0",
     "features": {
-        "./dotnet-dev-certs": {}
+        "./devcontainer-dev-certs": {}
     },
     "customizations": {
         "vscode": {

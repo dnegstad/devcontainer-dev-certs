@@ -1,8 +1,8 @@
 {
-    "id": "dotnet-dev-certs",
+    "id": "devcontainer-dev-certs",
     "version": "1.0.0",
     "name": "Dev Container Development Certificates",
-    "description": "Enables trusted HTTPS in Dev Containers by preparing certificate trust infrastructure and installing companion VS Code extensions that automatically generate, trust, and transfer ASP.NET and Aspire compatible development certificates from the host machine. Add to your devcontainer.json: \"features\": { \"ghcr.io/dnegstad/devcontainer-dev-certs/dotnet-dev-certs\": {} }",
+    "description": "Enables trusted HTTPS in Dev Containers by preparing certificate trust infrastructure and installing companion VS Code extensions that automatically generate, trust, and transfer ASP.NET and Aspire compatible development certificates from the host machine. Add to your devcontainer.json: \"features\": { \"ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs\": {} }",
     "documentationURL": "https://github.com/dnegstad/devcontainer-dev-certs",
     "keywords": ["dotnet", "https", "certificates", "ssl", "tls", "devcontainer", "remote"],
     "options": {

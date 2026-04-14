@@ -60,7 +60,7 @@ jobs:
         run: node test/validate-feature.mjs
 
       - name: Shellcheck install.sh
-        run: shellcheck src/devcontainer-feature/src/dotnet-dev-certs/install.sh
+        run: shellcheck src/devcontainer-feature/src/devcontainer-dev-certs/install.sh
 
       - name: Shellcheck setup-cert.sh
-        run: shellcheck src/devcontainer-feature/src/dotnet-dev-certs/scripts/setup-cert.sh
+        run: shellcheck src/devcontainer-feature/src/devcontainer-dev-certs/scripts/setup-cert.sh
