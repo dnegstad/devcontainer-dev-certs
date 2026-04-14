@@ -12,37 +12,40 @@ export function activate(context: vscode.ExtensionContext): void {
 
   log(`Workspace extension activated. remoteName=${vscode.env.remoteName}`);
 
-  // Register the manual inject command (always available)
+  // This extension only operates in remote contexts (devcontainer, SSH, WSL).
+  // No-op when running locally to avoid unnecessary work and user confusion.
+  if (!vscode.env.remoteName) {
+    log("Not running in a remote context, extension will no-op.");
+    return;
+  }
+
+  // Register the manual inject command
   context.subscriptions.push(
     vscode.commands.registerCommand("dotnet-dev-certs.injectCert", () =>
       injectCertificate()
     )
   );
 
-  // Auto-inject if configured and we're in a remote context.
+  const config = vscode.workspace.getConfiguration("dotnet-dev-certs");
+
+  // Ensure SSL_CERT_DIR is configured — covers SSH remoting, WSL, and other
+  // non-devcontainer scenarios where the devcontainer feature isn't present.
+  if (config.get<boolean>("ensureSslCertDir", true)) {
+    const sslCertDirs = config.get<string>(
+      "sslCertDirs",
+      "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
+    );
+    ensureSslCertDir(sslCertDirs);
+    log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
+  }
+
+  // Auto-inject if configured.
   // The UI extension is guaranteed to be activated before us because
   // we declare it in extensionDependencies and it declares "api": "none",
-  // which gives VSCode a hard cross-host activation ordering guarantee.
-  if (vscode.env.remoteName) {
-    const config = vscode.workspace.getConfiguration("dotnet-dev-certs");
-
-    // Ensure SSL_CERT_DIR is configured — covers SSH remoting, WSL, and other
-    // non-devcontainer scenarios where the devcontainer feature isn't present.
-    if (config.get<boolean>("ensureSslCertDir", true)) {
-      const sslCertDirs = config.get<string>(
-        "sslCertDirs",
-        "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
-      );
-      ensureSslCertDir(sslCertDirs);
-      log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
-    }
-
-    if (config.get<boolean>("autoInject", true)) {
-      log("Auto-inject enabled, requesting certificate material...");
-      injectCertificate();
-    }
-  } else {
-    log("Not in a remote context, skipping auto-inject.");
+  // which gives VS Code a hard cross-host activation ordering guarantee.
+  if (config.get<boolean>("autoInject", true)) {
+    log("Auto-inject enabled, requesting certificate material...");
+    injectCertificate();
   }
 }
 
