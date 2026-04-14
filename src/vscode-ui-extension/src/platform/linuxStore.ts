@@ -1,12 +1,16 @@
 import * as forge from "node-forge";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
 import { computeThumbprint } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToPem } from "../cert/exporter";
+import {
+  getDotNetStorePath,
+  getOpenSslTrustDir,
+  getPemFileName,
+} from "@devcontainer-dev-certs/shared";
 
 /**
  * Linux certificate store implementation.
@@ -20,33 +24,9 @@ import { certToPem } from "../cert/exporter";
  * 2. Writing a PEM to the OpenSSL trust directory with hash symlinks (for OpenSSL/curl/etc.)
  */
 export class LinuxCertificateStore extends BaseCertificateStore {
-  private get dotNetStorePath(): string {
-    return path.join(
-      os.homedir(),
-      ".dotnet",
-      "corefx",
-      "cryptography",
-      "x509stores",
-      "my"
-    );
-  }
-
+  /** .NET Root store is the sibling "root" directory next to "my" */
   private get dotNetRootStorePath(): string {
-    return path.join(
-      os.homedir(),
-      ".dotnet",
-      "corefx",
-      "cryptography",
-      "x509stores",
-      "root"
-    );
-  }
-
-  private get openSslTrustDir(): string {
-    return (
-      process.env.DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY ??
-      path.join(os.homedir(), ".aspnet", "dev-certs", "trust")
-    );
+    return path.resolve(getDotNetStorePath(), "..", "root");
   }
 
   async findExistingDevCert(): Promise<{
@@ -54,7 +34,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     key: forge.pki.rsa.PrivateKey;
     thumbprint: string;
   } | null> {
-    return this.findBestDevCertInDir(this.dotNetStorePath);
+    return this.findBestDevCertInDir(getDotNetStorePath());
   }
 
   async saveCertificate(
@@ -62,9 +42,9 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     key: forge.pki.rsa.PrivateKey,
     thumbprint: string
   ): Promise<void> {
-    fs.mkdirSync(this.dotNetStorePath, { recursive: true });
-    const pfxPath = path.join(this.dotNetStorePath, `${thumbprint}.pfx`);
-    this.writePfx(cert, key, pfxPath, "", 0o600);
+    const storeDir = getDotNetStorePath();
+    fs.mkdirSync(storeDir, { recursive: true });
+    this.writePfx(cert, key, path.join(storeDir, `${thumbprint}.pfx`), "", 0o600);
   }
 
   async trustCertificate(cert: forge.pki.Certificate): Promise<void> {
@@ -73,13 +53,14 @@ export class LinuxCertificateStore extends BaseCertificateStore {
   }
 
   async removeCertificates(): Promise<void> {
-    this.removeDevCertsFromDir(this.dotNetStorePath);
+    this.removeDevCertsFromDir(getDotNetStorePath());
     this.removeDevCertsFromDir(this.dotNetRootStorePath);
 
-    if (fs.existsSync(this.openSslTrustDir)) {
-      const entries = fs.readdirSync(this.openSslTrustDir);
+    const trustDir = getOpenSslTrustDir();
+    if (fs.existsSync(trustDir)) {
+      const entries = fs.readdirSync(trustDir);
       for (const entry of entries) {
-        const fullPath = path.join(this.openSslTrustDir, entry);
+        const fullPath = path.join(trustDir, entry);
         if (entry.startsWith("aspnetcore-localhost-")) {
           fs.unlinkSync(fullPath);
         } else if (isHashSymlink(entry)) {
@@ -99,10 +80,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     _cert: forge.pki.Certificate,
     thumbprint: string
   ): Promise<boolean> {
-    const pemPath = path.join(
-      this.openSslTrustDir,
-      `aspnetcore-localhost-${thumbprint}.pem`
-    );
+    const pemPath = path.join(getOpenSslTrustDir(), getPemFileName(thumbprint));
     return fs.existsSync(pemPath);
   }
 
@@ -129,14 +107,15 @@ export class LinuxCertificateStore extends BaseCertificateStore {
   }
 
   private async trustViaOpenSsl(cert: forge.pki.Certificate): Promise<void> {
-    fs.mkdirSync(this.openSslTrustDir, { recursive: true });
+    const trustDir = getOpenSslTrustDir();
+    fs.mkdirSync(trustDir, { recursive: true });
 
     const thumbprint = computeThumbprint(forge.pki.certificateToPem(cert));
-    const pemFileName = `aspnetcore-localhost-${thumbprint}.pem`;
-    const pemPath = path.join(this.openSslTrustDir, pemFileName);
+    const pemFileName = getPemFileName(thumbprint);
+    const pemPath = path.join(trustDir, pemFileName);
 
     fs.writeFileSync(pemPath, certToPem(cert), { mode: 0o644 });
-    await this.rehashDirectory(this.openSslTrustDir);
+    await this.rehashDirectory(trustDir);
   }
 
   private async rehashDirectory(directory: string): Promise<void> {

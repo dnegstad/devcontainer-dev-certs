@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
 import { CertManager } from "./cert/manager";
 import { CertProvider } from "./certProvider";
-import { log } from "./util/logger";
+import { initLogger, log } from "@devcontainer-dev-certs/shared";
 
 export function activate(context: vscode.ExtensionContext): void {
+  context.subscriptions.push(initLogger("ASP.NET Dev Certs"));
+
   const certManager = new CertManager();
   const certProvider = new CertProvider(certManager);
 

@@ -1,19 +1,14 @@
 import * as vscode from "vscode";
 import { installCert, isCertInstalled } from "./certInstaller";
 import { ensureSslCertDir } from "./util/sslCertDir";
-import type { CertMaterial } from "./certInstaller";
+import { initLogger, log } from "@devcontainer-dev-certs/shared";
+import type { CertMaterial } from "@devcontainer-dev-certs/shared";
 
 const UI_EXTENSION_ID = "dnegstad.devcontainer-dev-certs-host";
 const GET_CERT_COMMAND = "dotnet-dev-certs.getCertMaterial";
 
-let log: (message: string) => void;
-
 export function activate(context: vscode.ExtensionContext): void {
-  const channel = vscode.window.createOutputChannel("ASP.NET Dev Certs (Remote)");
-  context.subscriptions.push(channel);
-  log = (message: string) => {
-    channel.appendLine(`[${new Date().toISOString()}] ${message}`);
-  };
+  context.subscriptions.push(initLogger("ASP.NET Dev Certs (Remote)"));
 
   log(`Workspace extension activated. remoteName=${vscode.env.remoteName}`);
 

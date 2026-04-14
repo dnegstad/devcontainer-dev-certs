@@ -7,7 +7,7 @@ import {
   CertificateStatus,
   createPlatformStore,
 } from "../platform/types";
-import { log } from "../util/logger";
+import { log } from "@devcontainer-dev-certs/shared";
 
 /**
  * Certificate manager that orchestrates generation, trust, export, and status

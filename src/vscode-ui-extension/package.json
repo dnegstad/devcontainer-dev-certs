@@ -53,6 +53,7 @@
     "vitest": "^4.1.4"
   },
   "dependencies": {
+    "@devcontainer-dev-certs/shared": "*",
     "node-forge": "^1.4.0"
   }
 }

@@ -2,14 +2,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { CertManager } from "./cert/manager";
-import { log } from "./util/logger";
-
-export interface CertMaterial {
-  thumbprint: string;
-  pfxBase64: string;
-  pemCertBase64: string;
-  pemKeyBase64: string;
-}
+import { log } from "@devcontainer-dev-certs/shared";
+import type { CertMaterial } from "@devcontainer-dev-certs/shared";
 
 export class CertProvider {
   private cached: CertMaterial | null = null;

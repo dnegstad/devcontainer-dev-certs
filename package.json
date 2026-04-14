@@ -2,6 +2,7 @@
   "name": "devcontainer-dev-certs",
   "private": true,
   "workspaces": [
+    "src/shared",
     "src/vscode-ui-extension",
     "src/vscode-workspace-extension"
   ],

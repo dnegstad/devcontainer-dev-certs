@@ -5,20 +5,19 @@ import {
   getOpenSslTrustDir,
   getPfxFileName,
   getPemFileName,
-} from "./util/paths";
+} from "@devcontainer-dev-certs/shared";
 import { createHashSymlink } from "./util/rehash";
 
-export interface CertMaterial {
-  thumbprint: string;
-  pfxBase64: string;
-  pemCertBase64: string;
-  pemKeyBase64: string;
-}
+export type { CertMaterial } from "@devcontainer-dev-certs/shared";
 
 /**
  * Install certificate material into the correct paths on the remote filesystem.
  */
-export function installCert(material: CertMaterial): void {
+export function installCert(material: {
+  thumbprint: string;
+  pfxBase64: string;
+  pemCertBase64: string;
+}): void {
   const dotNetStoreDir = getDotNetStorePath();
   const trustDir = getOpenSslTrustDir();
 

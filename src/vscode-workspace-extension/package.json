@@ -60,6 +60,9 @@
     "lint": "eslint src --ext ts",
     "package": "vsce package --no-dependencies"
   },
+  "dependencies": {
+    "@devcontainer-dev-certs/shared": "*"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.100.0",
