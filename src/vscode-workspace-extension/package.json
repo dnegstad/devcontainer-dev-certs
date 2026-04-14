@@ -35,24 +35,24 @@
   "contributes": {
     "commands": [
       {
-        "command": "dotnet-dev-certs.injectCert",
+        "command": "devcontainer-dev-certs.injectCert",
         "title": "Dev Certs: Inject Certificate into Remote"
       }
     ],
     "configuration": {
       "title": "Dev Certificates (Remote)",
       "properties": {
-        "dotnet-dev-certs.autoInject": {
+        "devcontainer-dev-certs.autoInject": {
           "type": "boolean",
           "default": true,
           "description": "Automatically inject and configure the dev cert when a remote session starts"
         },
-        "dotnet-dev-certs.sslCertDirs": {
+        "devcontainer-dev-certs.sslCertDirs": {
           "type": "string",
           "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
           "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Used when the Dev Container feature is not present (e.g., SSH remoting, WSL)."
         },
-        "dotnet-dev-certs.ensureSslCertDir": {
+        "devcontainer-dev-certs.ensureSslCertDir": {
           "type": "boolean",
           "default": true,
           "description": "Ensure SSL_CERT_DIR is configured in the remote environment when the Dev Container feature hasn't set it"

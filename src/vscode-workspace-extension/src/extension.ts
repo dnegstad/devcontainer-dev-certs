@@ -5,7 +5,7 @@ import { initLogger, log } from "@devcontainer-dev-certs/shared";
 import type { CertMaterial } from "@devcontainer-dev-certs/shared";
 
 const UI_EXTENSION_ID = "dnegstad.devcontainer-dev-certs-host";
-const GET_CERT_COMMAND = "dotnet-dev-certs.getCertMaterial";
+const GET_CERT_COMMAND = "devcontainer-dev-certs.getCertMaterial";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs (Remote)"));
@@ -21,7 +21,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Register the manual inject command
   context.subscriptions.push(
-    vscode.commands.registerCommand("dotnet-dev-certs.injectCert", () =>
+    vscode.commands.registerCommand("devcontainer-dev-certs.injectCert", () =>
       injectCertificate()
     )
   );

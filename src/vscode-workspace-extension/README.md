@@ -74,9 +74,9 @@ This means any tool or service that uses OpenSSL for TLS verification — regard
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `dotnet-dev-certs.autoInject` | `true` | Automatically inject the cert when a remote session starts |
-| `dotnet-dev-certs.sslCertDirs` | `/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl` | System CA directories to include in `SSL_CERT_DIR`. Override for non-standard base images. |
-| `dotnet-dev-certs.ensureSslCertDir` | `true` | Configure `SSL_CERT_DIR` when the Dev Container feature hasn't set it (for SSH/WSL scenarios) |
+| `devcontainer-dev-certs.autoInject` | `true` | Automatically inject the cert when a remote session starts |
+| `devcontainer-dev-certs.sslCertDirs` | `/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl` | System CA directories to include in `SSL_CERT_DIR`. Override for non-standard base images. |
+| `devcontainer-dev-certs.ensureSslCertDir` | `true` | Configure `SSL_CERT_DIR` when the Dev Container feature hasn't set it (for SSH/WSL scenarios) |
 
 ## Feature Options
 

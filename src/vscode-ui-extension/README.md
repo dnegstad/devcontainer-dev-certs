@@ -121,7 +121,7 @@ Inside the container, the remote extension places the cert in two locations:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `dotnet-dev-certs.autoProvision` | `true` | Automatically generate and trust a cert when the remote extension requests one |
+| `devcontainer-dev-certs.autoProvision` | `true` | Automatically generate and trust a cert when the remote extension requests one |
 
 ## Requirements
 

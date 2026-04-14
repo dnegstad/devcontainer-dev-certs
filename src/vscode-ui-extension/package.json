@@ -33,14 +33,14 @@
   "contributes": {
     "commands": [
       {
-        "command": "dotnet-dev-certs.trustInBrowsers",
+        "command": "devcontainer-dev-certs.trustInBrowsers",
         "title": "Dev Certs: Trust Certificate in Browsers"
       }
     ],
     "configuration": {
       "title": "Dev Certificates (Host)",
       "properties": {
-        "dotnet-dev-certs.autoProvision": {
+        "devcontainer-dev-certs.autoProvision": {
           "type": "boolean",
           "default": true,
           "description": "Automatically generate and trust a dev cert if none exists when the workspace extension requests one"

@@ -22,7 +22,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Serve certificate material to the workspace extension
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "dotnet-dev-certs.getCertMaterial",
+      "devcontainer-dev-certs.getCertMaterial",
       async () => {
         const config = vscode.workspace.getConfiguration("dotnet-dev-certs");
         const autoProvision = config.get<boolean>("autoProvision", true);
@@ -41,7 +41,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Trust the dev certificate in browser NSS databases (Linux)
   context.subscriptions.push(
     vscode.commands.registerCommand(
-      "dotnet-dev-certs.trustInBrowsers",
+      "devcontainer-dev-certs.trustInBrowsers",
       async () => {
         if (process.platform !== "linux") {
           vscode.window.showInformationMessage(
@@ -131,7 +131,7 @@ async function showLinuxTrustGuidance(
   await context.globalState.update("linuxTrustGuidanceShown", true);
 
   if (choice === trustBrowsers) {
-    vscode.commands.executeCommand("dotnet-dev-certs.trustInBrowsers");
+    vscode.commands.executeCommand("devcontainer-dev-certs.trustInBrowsers");
   }
 }
 
