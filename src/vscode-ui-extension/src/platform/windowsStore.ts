@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
-import { runProcess } from "./processUtil";
+import { runProcess, runInTerminal } from "./processUtil";
 import { isValidDevCert, computeThumbprint } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
@@ -82,79 +82,62 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     key: forge.pki.rsa.PrivateKey,
     _thumbprint: string
   ): Promise<void> {
-    // Export to temp PFX, then import via PowerShell
+    // Export to temp PFX, then import via PowerShell in a visible terminal
     const tmpPfx = path.join(
       os.tmpdir(),
       `devcert-save-${Date.now()}.pfx`
     );
-    try {
-      this.writePfx(cert, key, tmpPfx, "import");
+    this.writePfx(cert, key, tmpPfx, "import");
 
-      const script = `
-        $ErrorActionPreference = 'Stop'
-        $pwd = ConvertTo-SecureString -String "import" -Force -AsPlainText
-        Import-PfxCertificate -FilePath '${tmpPfx.replace(/'/g, "''")}' -CertStoreLocation Cert:\\CurrentUser\\My -Password $pwd -Exportable | Out-Null
-      `;
+    const script =
+      `$ErrorActionPreference = 'Stop'; ` +
+      `$pwd = ConvertTo-SecureString -String "import" -Force -AsPlainText; ` +
+      `Import-PfxCertificate -FilePath '${tmpPfx.replace(/'/g, "''")}' -CertStoreLocation Cert:\\CurrentUser\\My -Password $pwd -Exportable; ` +
+      `Remove-Item '${tmpPfx.replace(/'/g, "''")}'`;
 
-      const pwsh = await getPowerShell();
-      const result = await runProcess(pwsh, [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        script,
-      ]);
+    const pwsh = await getPowerShell();
+    const exitCode = await runInTerminal("Dev Certs: Import Certificate", pwsh, [
+      "-NoProfile",
+      "-NoExit",
+      "-Command",
+      script,
+    ]);
 
-      if (result.exitCode !== 0) {
-        throw new Error(
-          `Failed to save certificate to Windows store: ${result.stderr}`
-        );
-      }
-    } finally {
-      try {
-        fs.unlinkSync(tmpPfx);
-      } catch {
-        // best effort cleanup
-      }
+    if (exitCode !== 0) {
+      // Clean up temp file if the terminal didn't
+      try { fs.unlinkSync(tmpPfx); } catch { /* ignore */ }
+      throw new Error("Failed to save certificate to Windows store. Check the terminal output for details.");
     }
   }
 
   async trustCertificate(cert: forge.pki.Certificate): Promise<void> {
-    // Export public cert as DER, import to CurrentUser\Root via PowerShell
+    // Export public cert as DER, import to CurrentUser\Root via PowerShell in a visible terminal
     const tmpCert = path.join(
       os.tmpdir(),
       `devcert-trust-${Date.now()}.cer`
     );
-    try {
-      fs.writeFileSync(tmpCert, certToDer(cert));
+    fs.writeFileSync(tmpCert, certToDer(cert));
 
-      const script = `
-        $ErrorActionPreference = 'Stop'
-        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('${tmpCert.replace(/'/g, "''")}')
-        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'CurrentUser')
-        $store.Open('ReadWrite')
-        $store.Add($cert)
-        $store.Close()
-      `;
+    const script =
+      `$ErrorActionPreference = 'Stop'; ` +
+      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('${tmpCert.replace(/'/g, "''")}'); ` +
+      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'CurrentUser'); ` +
+      `$store.Open('ReadWrite'); ` +
+      `$store.Add($cert); ` +
+      `$store.Close(); ` +
+      `Remove-Item '${tmpCert.replace(/'/g, "''")}'`;
 
-      const pwsh = await getPowerShell();
-      const result = await runProcess(pwsh, [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        script,
-      ]);
+    const pwsh = await getPowerShell();
+    const exitCode = await runInTerminal("Dev Certs: Trust Certificate", pwsh, [
+      "-NoProfile",
+      "-NoExit",
+      "-Command",
+      script,
+    ]);
 
-      if (result.exitCode !== 0) {
-        throw new Error(
-          `Failed to trust certificate on Windows: ${result.stderr}`
-        );
-      }
-    } finally {
-      try {
-        fs.unlinkSync(tmpCert);
-      } catch {
-        // best effort cleanup
-      }
+    if (exitCode !== 0) {
+      try { fs.unlinkSync(tmpCert); } catch { /* ignore */ }
+      throw new Error("Failed to trust certificate on Windows. Check the terminal output for details.");
     }
   }
 

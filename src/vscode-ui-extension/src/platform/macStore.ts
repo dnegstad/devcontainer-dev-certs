@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
-import { runProcess } from "./processUtil";
+import { runProcess, runInTerminal } from "./processUtil";
 import { isValidDevCert } from "../cert/generator";
 import { certToDer } from "../cert/exporter";
 
@@ -71,31 +71,25 @@ export class MacCertificateStore extends BaseCertificateStore {
       os.tmpdir(),
       `devcert-trust-${Date.now()}.cer`
     );
-    try {
-      fs.writeFileSync(tmpCert, certToDer(cert));
+    fs.writeFileSync(tmpCert, certToDer(cert));
 
-      const result = await runProcess("security", [
+    const exitCode = await runInTerminal(
+      "Dev Certs: Trust Certificate",
+      "security",
+      [
         "add-trusted-cert",
-        "-p",
-        "basic",
-        "-p",
-        "ssl",
-        "-k",
-        this.keychainPath,
+        "-p", "basic",
+        "-p", "ssl",
+        "-k", this.keychainPath,
         tmpCert,
-      ]);
+      ]
+    );
 
-      if (result.exitCode !== 0) {
-        throw new Error(
-          `Failed to trust certificate in keychain: ${result.stderr}`
-        );
-      }
-    } finally {
-      try {
-        fs.unlinkSync(tmpCert);
-      } catch {
-        // best effort cleanup
-      }
+    // Clean up temp file after the terminal process exits
+    try { fs.unlinkSync(tmpCert); } catch { /* ignore */ }
+
+    if (exitCode !== 0) {
+      throw new Error("Failed to trust certificate in keychain. Check the terminal output for details.");
     }
   }
 
