@@ -2,13 +2,9 @@ import * as forge from "node-forge";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { PlatformCertificateStore, CertificateStatus } from "./types";
+import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
-import {
-  isValidDevCert,
-  getCertificateVersion,
-  computeThumbprint,
-} from "../cert/generator";
+import { isValidDevCert, computeThumbprint } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
 
@@ -18,11 +14,8 @@ import { certToDer } from "../cert/exporter";
  * Uses PowerShell to interact with the Windows Certificate Store:
  * - CurrentUser\My: stores cert with private key
  * - CurrentUser\Root: trusts the public cert
- *
- * PFX import/export is done via PowerShell's Import-PfxCertificate and the
- * cert: drive for enumeration and removal.
  */
-export class WindowsCertificateStore implements PlatformCertificateStore {
+export class WindowsCertificateStore extends BaseCertificateStore {
   async findExistingDevCert(): Promise<{
     cert: forge.pki.Certificate;
     key: forge.pki.rsa.PrivateKey;
@@ -54,30 +47,9 @@ export class WindowsCertificateStore implements PlatformCertificateStore {
 
     const pfxPath = result.stdout.trim();
     try {
-      const pfxBytes = fs.readFileSync(pfxPath);
-      const p12Der = forge.util.createBuffer(pfxBytes.toString("binary"));
-      const p12Asn1 = forge.asn1.fromDer(p12Der);
-      const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, "export");
-
-      // Extract certificate
-      const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
-      const certBag = certBags[forge.pki.oids.certBag];
-      if (!certBag || certBag.length === 0) return null;
-      const cert = certBag[0].cert;
-      if (!cert) return null;
-
-      // Extract private key
-      const keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
-      const keyBag = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag];
-      if (!keyBag || keyBag.length === 0) return null;
-      const key = keyBag[0].key;
-      if (!key) return null;
-
-      if (!isValidDevCert(cert)) return null;
-
-      const thumbprint = computeThumbprint(forge.pki.certificateToPem(cert));
-
-      return { cert, key, thumbprint };
+      const loaded = this.loadPfx(pfxPath, "export");
+      if (!loaded || !isValidDevCert(loaded.cert)) return null;
+      return loaded;
     } finally {
       try {
         fs.unlinkSync(pfxPath);
@@ -90,7 +62,7 @@ export class WindowsCertificateStore implements PlatformCertificateStore {
   async saveCertificate(
     cert: forge.pki.Certificate,
     key: forge.pki.rsa.PrivateKey,
-    thumbprint: string
+    _thumbprint: string
   ): Promise<void> {
     // Export to temp PFX, then import via PowerShell
     const tmpPfx = path.join(
@@ -98,11 +70,7 @@ export class WindowsCertificateStore implements PlatformCertificateStore {
       `devcert-save-${Date.now()}.pfx`
     );
     try {
-      const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], "import", {
-        algorithm: "3des",
-      });
-      const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
-      fs.writeFileSync(tmpPfx, Buffer.from(p12Der, "binary"));
+      this.writePfx(cert, key, tmpPfx, "import");
 
       const script = `
         $ErrorActionPreference = 'Stop'
@@ -138,8 +106,7 @@ export class WindowsCertificateStore implements PlatformCertificateStore {
       `devcert-trust-${Date.now()}.cer`
     );
     try {
-      const derBytes = certToDer(cert);
-      fs.writeFileSync(tmpCert, derBytes);
+      fs.writeFileSync(tmpCert, certToDer(cert));
 
       const script = `
         $ErrorActionPreference = 'Stop'
@@ -196,34 +163,10 @@ export class WindowsCertificateStore implements PlatformCertificateStore {
     ]);
   }
 
-  async checkStatus(): Promise<CertificateStatus> {
-    const found = await this.findExistingDevCert();
-    if (!found) {
-      return {
-        exists: false,
-        isTrusted: false,
-        thumbprint: null,
-        notBefore: null,
-        notAfter: null,
-        version: -1,
-      };
-    }
-
-    const { cert, thumbprint } = found;
-    const isTrusted = await this.isTrustedInRootStore(thumbprint);
-    const version = getCertificateVersion(cert);
-
-    return {
-      exists: true,
-      isTrusted,
-      thumbprint,
-      notBefore: cert.validity.notBefore.toISOString(),
-      notAfter: cert.validity.notAfter.toISOString(),
-      version,
-    };
-  }
-
-  private async isTrustedInRootStore(thumbprint: string): Promise<boolean> {
+  protected async isTrusted(
+    _cert: forge.pki.Certificate,
+    thumbprint: string
+  ): Promise<boolean> {
     const script = `
       $cert = Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object { $_.Thumbprint -eq '${thumbprint}' }
       if ($cert) { Write-Output 'true' } else { Write-Output 'false' }
