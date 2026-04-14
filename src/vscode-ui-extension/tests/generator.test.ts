@@ -136,7 +136,7 @@ describe("generateCertificate", () => {
 
     it("includes ASP.NET HTTPS OID with current version byte", () => {
       const { cert } = makeTestCert();
-      const ext = cert.getExtension({ id: ASPNET_HTTPS_OID }) as {
+      const ext = cert.getExtension({ id: ASPNET_HTTPS_OID as unknown as number }) as {
         critical: boolean;
         value: string;
       } | null;

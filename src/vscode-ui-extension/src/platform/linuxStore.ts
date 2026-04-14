@@ -183,7 +183,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
       const pfxPath = path.join(dir, file);
       try {
         const result = this.loadPfx(pfxPath);
-        if (result && result.cert.getExtension({ id: ASPNET_HTTPS_OID })) {
+        if (result && result.cert.getExtension({ id: ASPNET_HTTPS_OID as unknown as number })) {
           fs.unlinkSync(pfxPath);
         }
       } catch {
