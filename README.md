@@ -26,7 +26,7 @@ The solution has three components that work together:
 
 1. **Devcontainer Feature** sets up the container's trust infrastructure: creates the .NET X509 store and OpenSSL trust directories, configures `SSL_CERT_DIR`, and requests installation of the two companion VS Code extensions.
 
-2. **Host Extension** (`extensionKind: ["ui"]`) runs on your local machine. It bundles a platform-specific AOT-compiled .NET tool that generates certificates identical to `dotnet dev-certs https` (same OID marker, same SAN entries, same key parameters). On first use, it generates a cert and trusts it in the host OS certificate store. It then serves the certificate material to the remote side via VS Code's cross-host command routing.
+2. **Host Extension** (`extensionKind: ["ui"]`) runs on your local machine. It generates certificates identical to `dotnet dev-certs https` (same OID marker, same SAN entries, same key parameters) using `node-forge` for X.509 certificate creation. On first use, it generates a cert and trusts it in the host OS certificate store. It then serves the certificate material to the remote side via VS Code's cross-host command routing.
 
 3. **Remote Extension** (`extensionKind: ["workspace"]`) runs inside the container. On activation, it requests certificate material from the host extension, decodes it, and places it in two locations:
    - The .NET X509 store (`~/.dotnet/corefx/cryptography/x509stores/my/`) where Kestrel discovers it automatically via its `GetDevelopmentCertificateFromStore()` fallback
@@ -38,18 +38,18 @@ The two extensions communicate using VS Code's cross-host `executeCommand()` rou
 
 ```
 src/
-  aot-tool/                        .NET 10 AOT-compiled certificate management CLI
-    src/DevCerts.Tool/
-      Certificate/                 Certificate generation (matches ASP.NET CertificateManager)
-      Platform/                    OS-specific cert stores (Windows, macOS, Linux)
-      Export/                      PFX and PEM export
-      Commands/                    CLI command handlers (generate, trust, export, check, clean)
-    tests/DevCerts.Tool.Tests/     Unit tests (xUnit)
-
   vscode-ui-extension/             VS Code host extension (extensionKind: ui)
     src/
-      aotTool/                     Spawns the AOT binary
-      certProvider.ts              Orchestrates generate/trust/export, serves cert material
+      cert/                        Certificate generation, export, and management
+        generator.ts               X.509 certificate generation (matches ASP.NET CertificateManager)
+        properties.ts              OID constants, SAN entries, key parameters
+        exporter.ts                PFX and PEM export
+        manager.ts                 Orchestrates generate/trust/export/check
+      platform/                    OS-specific cert store implementations
+        windowsStore.ts            Windows cert store via PowerShell
+        macStore.ts                macOS keychain via security CLI
+        linuxStore.ts              Linux X509Store + OpenSSL trust directory
+      certProvider.ts              Serves cert material to the workspace extension
 
   vscode-workspace-extension/      VS Code remote extension (extensionKind: workspace)
     src/
@@ -67,7 +67,7 @@ test/
   sample-project/                  Test project template (hydrated into .out/ for testing)
   hydrate.mjs                      Assembles a runnable test project from the template + feature
 
-.github/workflows/                 CI/CD (build, AOT publish, extension packaging, feature publishing)
+.github/workflows/                 CI/CD (build, extension packaging, feature publishing)
 ```
 
 ## Feature Options
@@ -81,8 +81,7 @@ test/
 
 ### Prerequisites
 
-- .NET 10 SDK
-- Node.js 20+
+- Node.js 22+
 - Docker (for devcontainer testing)
 - VS Code with the Dev Containers extension
 
@@ -90,22 +89,11 @@ test/
 
 Open the repo in VS Code and press F5. The `build-extensions` task will:
 
-1. AOT publish the `devcerts` binary for your platform into the UI extension's `bin/` directory
-2. Build both TypeScript extensions with esbuild
-3. Hydrate a test project from the template into `.out/test-project/`
-4. Package the workspace extension VSIX into the test project's `.devcontainer/`
+1. Build both TypeScript extensions with esbuild
+2. Hydrate a test project from the template into `.out/test-project/`
+3. Package the workspace extension VSIX into the test project's `.devcontainer/`
 
 The Extension Development Host opens with the UI extension loaded on the host side. To test the full devcontainer flow, reopen `.out/test-project/` in a container.
-
-### Testing the AOT Tool Directly
-
-```bash
-cd src/aot-tool
-dotnet test                           # Run unit tests
-dotnet run --project src/DevCerts.Tool -- check --json   # Check cert status
-dotnet run --project src/DevCerts.Tool -- trust          # Generate + trust
-dotnet run --project src/DevCerts.Tool -- clean          # Remove certs
-```
 
 ## Limitations
 
@@ -113,7 +101,6 @@ dotnet run --project src/DevCerts.Tool -- clean          # Remove certs
 - **VS Code only.** The companion extension pattern relies on VS Code's cross-host command routing. Other editors (JetBrains, Vim, etc.) are not supported, though the devcontainer feature includes a `setup-cert.sh` fallback script for manual use.
 - **Single certificate.** The tool manages one dev cert at a time. Running `trust` when a valid cert already exists reuses it; `clean` removes it entirely.
 - **Host trust requires user interaction.** On Windows, trusting the certificate triggers a system dialog. On macOS, the keychain may prompt for a password. This only happens once.
-- **macOS code signing not yet implemented.** The AOT binary needs to be signed and notarized with an Apple Developer ID certificate to access the macOS keychain and avoid Gatekeeper quarantine.
 
 ## Supported Platforms
 
