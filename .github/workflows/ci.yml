@@ -34,9 +34,7 @@ jobs:
         run: npm install -g @devcontainers/cli
       - name: Validate feature metadata
         run: |
-          cd src/devcontainer-feature/src/dotnet-dev-certs
-          # Validate JSON is well-formed
-          python3 -c "import json; json.load(open('devcontainer-feature.json'))"
+          node -e "JSON.parse(require('fs').readFileSync('src/devcontainer-feature/src/dotnet-dev-certs/devcontainer-feature.json', 'utf8'))"
           echo "Feature metadata is valid."
       - name: Verify install.sh is executable-compatible
         run: bash -n src/devcontainer-feature/src/dotnet-dev-certs/install.sh
