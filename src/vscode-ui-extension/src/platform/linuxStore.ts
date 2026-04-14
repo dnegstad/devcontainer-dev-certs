@@ -103,7 +103,7 @@ export class LinuxCertificateStore implements PlatformCertificateStore {
 
     const pfxPath = path.join(this.dotNetStorePath, `${thumbprint}.pfx`);
 
-    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], null, {
+    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], "", {
       algorithm: "3des",
     });
     const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
@@ -190,7 +190,7 @@ export class LinuxCertificateStore implements PlatformCertificateStore {
     const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
       null as unknown as forge.pki.rsa.PrivateKey,
       [cert],
-      null,
+      "",
       { algorithm: "3des" }
     );
     const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
@@ -287,7 +287,7 @@ export class LinuxCertificateStore implements PlatformCertificateStore {
         const result = this.loadPfx(pfxPath);
         if (
           result &&
-          result.cert.getExtension(ASPNET_HTTPS_OID)
+          result.cert.getExtension({ id: ASPNET_HTTPS_OID })
         ) {
           fs.unlinkSync(pfxPath);
         }

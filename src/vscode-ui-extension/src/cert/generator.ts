@@ -139,7 +139,7 @@ export function isValidDevCert(
  * Returns -1 if the certificate does not have the extension.
  */
 export function getCertificateVersion(cert: forge.pki.Certificate): number {
-    const ext = cert.getExtension(ASPNET_HTTPS_OID);
+    const ext = cert.getExtension({ id: ASPNET_HTTPS_OID });
     if (!ext) return -1;
 
     const value = (ext as { value?: string }).value;

@@ -1,6 +1,7 @@
 import * as forge from "node-forge";
 import { generateCertificate, GeneratedCert } from "./generator";
 import { exportPfx, exportPem } from "./exporter";
+import { VALIDITY_DAYS } from "./properties";
 import {
   PlatformCertificateStore,
   CertificateStatus,
@@ -38,7 +39,11 @@ export class CertManager {
     }
 
     log("Generating new dev certificate...");
-    const generated = generateCertificate();
+    const now = new Date();
+    const expiry = new Date(
+      now.getTime() + VALIDITY_DAYS * 24 * 60 * 60 * 1000
+    );
+    const generated = generateCertificate(now, expiry);
     this.currentCert = generated;
 
     log(`Certificate generated. Thumbprint: ${generated.thumbprint}`);

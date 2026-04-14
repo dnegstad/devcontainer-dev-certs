@@ -68,7 +68,7 @@ export class MacCertificateStore implements PlatformCertificateStore {
       `aspnetcore-localhost-${thumbprint}.pfx`
     );
 
-    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], null, {
+    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], "", {
       algorithm: "3des",
     });
     const p12Der = forge.asn1.toDer(p12Asn1).getBytes();

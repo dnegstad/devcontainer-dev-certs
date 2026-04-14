@@ -19,6 +19,8 @@ jobs:
       run: npm ci
     - name: Build UI Extension
       run: npm run build -w src/vscode-ui-extension
+    - name: Test UI Extension
+      run: npm test -w src/vscode-ui-extension
     - name: Build Workspace Extension
       run: npm run build -w src/vscode-workspace-extension
 

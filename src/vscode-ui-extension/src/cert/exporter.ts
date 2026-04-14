@@ -14,7 +14,7 @@ export function exportPfx(
 ): string {
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], password ?? null, {
+  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], password ?? "", {
     algorithm: "3des",
     friendlyName: ASPNET_HTTPS_OID_FRIENDLY_NAME,
   });
