@@ -1,0 +1,3 @@
+# Force shell scripts to use LF line endings so they execute correctly
+# inside containers when checked out on Windows.
+*.sh text eol=lf
