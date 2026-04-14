@@ -8,12 +8,29 @@ import { isValidDevCert, computeThumbprint } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
 
+/** Cached PowerShell executable name — prefers pwsh (PowerShell 7+) over powershell (5.1). */
+let resolvedPwsh: string | null = null;
+
+async function getPowerShell(): Promise<string> {
+  if (resolvedPwsh) return resolvedPwsh;
+
+  const pwshResult = await runProcess("pwsh", ["-NoProfile", "-Command", "echo ok"]);
+  if (pwshResult.exitCode === 0) {
+    resolvedPwsh = "pwsh";
+  } else {
+    resolvedPwsh = "powershell";
+  }
+  return resolvedPwsh;
+}
+
 /**
  * Windows certificate store implementation.
  *
  * Uses PowerShell to interact with the Windows Certificate Store:
  * - CurrentUser\My: stores cert with private key
  * - CurrentUser\Root: trusts the public cert
+ *
+ * Prefers pwsh (PowerShell 7+) when available, falls back to powershell (5.1).
  */
 export class WindowsCertificateStore extends BaseCertificateStore {
   async findExistingDevCert(): Promise<{
@@ -36,7 +53,8 @@ export class WindowsCertificateStore extends BaseCertificateStore {
       Write-Output $tmpPfx
     `;
 
-    const result = await runProcess("powershell", [
+    const pwsh = await getPowerShell();
+    const result = await runProcess(pwsh, [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
@@ -78,7 +96,8 @@ export class WindowsCertificateStore extends BaseCertificateStore {
         Import-PfxCertificate -FilePath '${tmpPfx.replace(/'/g, "''")}' -CertStoreLocation Cert:\\CurrentUser\\My -Password $pwd -Exportable | Out-Null
       `;
 
-      const result = await runProcess("powershell", [
+      const pwsh = await getPowerShell();
+      const result = await runProcess(pwsh, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -117,7 +136,8 @@ export class WindowsCertificateStore extends BaseCertificateStore {
         $store.Close()
       `;
 
-      const result = await runProcess("powershell", [
+      const pwsh = await getPowerShell();
+      const result = await runProcess(pwsh, [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
@@ -155,7 +175,8 @@ export class WindowsCertificateStore extends BaseCertificateStore {
       }
     `;
 
-    await runProcess("powershell", [
+    const pwsh = await getPowerShell();
+    await runProcess(pwsh, [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
@@ -172,7 +193,8 @@ export class WindowsCertificateStore extends BaseCertificateStore {
       if ($cert) { Write-Output 'true' } else { Write-Output 'false' }
     `;
 
-    const result = await runProcess("powershell", [
+    const pwsh = await getPowerShell();
+    const result = await runProcess(pwsh, [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
