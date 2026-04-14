@@ -41,7 +41,7 @@
     "watch": "node esbuild.mjs --watch",
     "test": "vitest run",
     "lint": "eslint src --ext ts",
-    "package": "vsce package"
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
