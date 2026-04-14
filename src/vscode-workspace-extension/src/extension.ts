@@ -8,7 +8,7 @@ const UI_EXTENSION_ID = "dnegstad.devcontainer-dev-certs-host";
 const GET_CERT_COMMAND = "dotnet-dev-certs.getCertMaterial";
 
 export function activate(context: vscode.ExtensionContext): void {
-  context.subscriptions.push(initLogger("ASP.NET Dev Certs (Remote)"));
+  context.subscriptions.push(initLogger("Dev Container Dev Certs (Remote)"));
 
   log(`Workspace extension activated. remoteName=${vscode.env.remoteName}`);
 
