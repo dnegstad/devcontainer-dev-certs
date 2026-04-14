@@ -61,14 +61,14 @@ check(
 
 console.log("\nSSL_CERT_DIR consistency:");
 const defaultSslDirs = feature.options?.sslCertDirs?.default;
-const containerEnvSslCertDir = feature.containerEnv?.SSL_CERT_DIR;
+const remoteEnvSslCertDir = feature.remoteEnv?.SSL_CERT_DIR;
 
-// containerEnv should be $HOME/.aspnet/dev-certs/trust:<defaultSslDirs>
-const expectedContainerEnv = `$HOME/.aspnet/dev-certs/trust:${defaultSslDirs}`;
+// remoteEnv should be ${containerEnv:HOME}/.aspnet/dev-certs/trust:<defaultSslDirs>
+const expectedRemoteEnv = `\${containerEnv:HOME}/.aspnet/dev-certs/trust:${defaultSslDirs}`;
 check(
-  "containerEnv.SSL_CERT_DIR matches trust dir + sslCertDirs default",
-  containerEnvSslCertDir === expectedContainerEnv,
-  `expected "${expectedContainerEnv}" but got "${containerEnvSslCertDir}"`
+  "remoteEnv.SSL_CERT_DIR matches trust dir + sslCertDirs default",
+  remoteEnvSslCertDir === expectedRemoteEnv,
+  `expected "${expectedRemoteEnv}" but got "${remoteEnvSslCertDir}"`
 );
 
 // install.sh DEFAULT_SSL_CERT_DIRS should match the feature option default
