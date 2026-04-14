@@ -70,7 +70,41 @@ The cert is trusted in your OS certificate store:
 |----------|----------------|
 | Windows | Added to `CurrentUser\Root` (triggers system dialog on first use) |
 | macOS | Added to login keychain via `security add-trusted-cert` |
-| Linux | Added to .NET Root store + OpenSSL trust directory |
+| Linux | Added to .NET Root store + OpenSSL trust directory + `SSL_CERT_DIR` in VS Code terminals |
+
+### Linux Trust Details
+
+On Linux, host trust involves three layers:
+
+1. **`.NET Root store`** (`~/.dotnet/corefx/cryptography/x509stores/root/`) — trusted automatically by the .NET runtime
+2. **`OpenSSL trust directory`** (`~/.aspnet/dev-certs/trust/`) — PEM certificate with hash symlinks for OpenSSL-based tools
+3. **`SSL_CERT_DIR` in VS Code terminals** — the extension prepends the trust directory to `SSL_CERT_DIR` in VS Code's integrated terminal environment, so `curl`, `wget`, and other CLI tools trust the cert automatically
+
+For tools running **outside** VS Code integrated terminals (e.g., a system terminal), set `SSL_CERT_DIR` manually:
+
+```bash
+export SSL_CERT_DIR="$HOME/.aspnet/dev-certs/trust:$SSL_CERT_DIR"
+```
+
+#### Browser Trust (Firefox / Chromium)
+
+Firefox and Chromium on Linux use [NSS](https://firefox-source-docs.mozilla.org/security/nss/) for certificate trust — they do **not** read from OpenSSL trust directories. This extension provides a **"Dev Certs: Trust Certificate in Browsers"** command (available from the Command Palette) that:
+
+- Checks for `certutil` (from `libnss3-tools`) on the PATH
+- If available, automatically trusts the cert in Chromium (`~/.pki/nssdb/`) and Firefox profile NSS databases
+- If `certutil` is not installed or no browser databases are found, displays the certificate path so you can import it manually
+
+To install `certutil`:
+
+| Distro | Command |
+|--------|---------|
+| Debian / Ubuntu | `sudo apt install libnss3-tools` |
+| Fedora / RHEL | `sudo dnf install nss-tools` |
+| Arch | `sudo pacman -S nss` |
+
+To import manually in Firefox: **Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import**, then select the PEM file from `~/.aspnet/dev-certs/trust/`.
+
+> **Note:** The default trust directory is `~/.aspnet/dev-certs/trust/`. This can be overridden with the `DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY` environment variable.
 
 ### Cross-Host Transfer
 

@@ -31,6 +31,12 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "dotnet-dev-certs.trustInBrowsers",
+        "title": "Dev Certs: Trust Certificate in Browsers"
+      }
+    ],
     "configuration": {
       "title": "Dev Certificates (Host)",
       "properties": {
