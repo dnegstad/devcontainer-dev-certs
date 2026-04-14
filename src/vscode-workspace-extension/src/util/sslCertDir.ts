@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { getOpenSslTrustDir } from "./paths";
+import { getOpenSslTrustDir } from "@devcontainer-dev-certs/shared";
 
 /**
  * Ensure SSL_CERT_DIR includes the dev-certs trust directory alongside

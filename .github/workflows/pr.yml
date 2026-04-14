@@ -1,12 +1,9 @@
-name: CI
+name: PR
 
 on:
-  push:
+  pull_request:
     branches: [main]
 
 jobs:
   build:
     uses: ./.github/workflows/build-extensions.yml
-    with:
-      production: true
-      upload-vsix: true

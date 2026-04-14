@@ -1,20 +1,14 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { ToolRunner } from "./aotTool/toolRunner";
-import { log } from "./util/logger";
-
-export interface CertMaterial {
-  thumbprint: string;
-  pfxBase64: string;
-  pemCertBase64: string;
-  pemKeyBase64: string;
-}
+import { CertManager } from "./cert/manager";
+import { log } from "@devcontainer-dev-certs/shared";
+import type { CertMaterial } from "@devcontainer-dev-certs/shared";
 
 export class CertProvider {
   private cached: CertMaterial | null = null;
 
-  constructor(private readonly toolRunner: ToolRunner) {}
+  constructor(private readonly certManager: CertManager) {}
 
   /**
    * Ensure a valid dev cert exists and is trusted, then return its material as base64.
@@ -25,7 +19,7 @@ export class CertProvider {
   ): Promise<CertMaterial | null> {
     if (this.cached) {
       // Verify the cached cert is still valid
-      const status = await this.toolRunner.check();
+      const status = await this.certManager.check();
       if (
         status.exists &&
         status.thumbprint === this.cached.thumbprint
@@ -35,7 +29,7 @@ export class CertProvider {
       this.cached = null;
     }
 
-    const status = await this.toolRunner.check();
+    const status = await this.certManager.check();
 
     if (!status.exists || !status.isTrusted) {
       if (!autoProvision) {
@@ -43,7 +37,7 @@ export class CertProvider {
         return null;
       }
       log("Ensuring certificate is generated and trusted...");
-      await this.toolRunner.trust();
+      await this.certManager.trust();
     }
 
     // Export to temp dir
@@ -54,14 +48,14 @@ export class CertProvider {
     fs.mkdirSync(tmpDir, { recursive: true });
 
     try {
-      await this.toolRunner.exportCert("pfx", tmpDir);
-      await this.toolRunner.exportCert("pem", tmpDir);
+      await this.certManager.exportCert("pfx", tmpDir);
+      await this.certManager.exportCert("pem", tmpDir);
 
       const pfxPath = path.join(tmpDir, "aspnetcore-dev.pfx");
       const pemCertPath = path.join(tmpDir, "aspnetcore-dev.pem");
       const pemKeyPath = path.join(tmpDir, "aspnetcore-dev.key");
 
-      const updatedStatus = await this.toolRunner.check();
+      const updatedStatus = await this.certManager.check();
 
       const material: CertMaterial = {
         thumbprint: updatedStatus.thumbprint!,

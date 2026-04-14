@@ -9,7 +9,7 @@ DEFAULT_SSL_CERT_DIRS="/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var
 REMOTE_USER="${_REMOTE_USER:-vscode}"
 REMOTE_USER_HOME="${_REMOTE_USER_HOME:-/home/${REMOTE_USER}}"
 
-echo "Setting up ASP.NET dev certificate infrastructure..."
+echo "Setting up dev certificate infrastructure..."
 
 # Install NSS tools if requested (for Chromium/Firefox trust)
 if [ "${TRUST_NSS}" = "true" ]; then
@@ -50,6 +50,6 @@ if id "${REMOTE_USER}" &>/dev/null; then
     chown -R "${REMOTE_USER}" "${REMOTE_USER_HOME}/.aspnet"
 fi
 
-echo "ASP.NET dev certificate infrastructure ready."
+echo "Dev certificate infrastructure ready."
 echo "  .NET cert store: ${DOTNET_STORE_DIR}"
 echo "  OpenSSL trust:   ${TRUST_DIR}"

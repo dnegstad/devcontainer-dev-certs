@@ -1,15 +1,15 @@
 import * as vscode from "vscode";
-import { ToolRunner } from "./aotTool/toolRunner";
+import { CertManager } from "./cert/manager";
 import { CertProvider } from "./certProvider";
-import { getToolPath } from "./util/platform";
-import { log } from "./util/logger";
+import { initLogger, log } from "@devcontainer-dev-certs/shared";
 
 export function activate(context: vscode.ExtensionContext): void {
-  const toolPath = getToolPath(context.extensionPath);
-  const toolRunner = new ToolRunner(toolPath);
-  const certProvider = new CertProvider(toolRunner);
+  context.subscriptions.push(initLogger("Dev Container Dev Certs"));
 
-  log(`UI extension activated. Tool path: ${toolPath}`);
+  const certManager = new CertManager();
+  const certProvider = new CertProvider(certManager);
+
+  log("UI extension activated (managed certificate provider).");
 
   context.subscriptions.push(
     vscode.commands.registerCommand(

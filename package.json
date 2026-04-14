@@ -1,6 +1,11 @@
 {
   "name": "devcontainer-dev-certs",
   "private": true,
+  "workspaces": [
+    "src/shared",
+    "src/vscode-ui-extension",
+    "src/vscode-workspace-extension"
+  ],
   "scripts": {
     "hydrate:sample-project": "node test/sample-project/hydrate-sample-project.mjs"
   }

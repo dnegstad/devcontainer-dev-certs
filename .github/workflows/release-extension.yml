@@ -9,154 +9,23 @@ permissions:
   contents: write
 
 jobs:
-  build-aot:
-    name: AOT Build (${{ matrix.rid }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - rid: win-x64
-            os: windows-latest
-            binary: devcerts.exe
-          - rid: win-arm64
-            os: windows-latest
-            binary: devcerts.exe
-          - rid: linux-x64
-            os: ubuntu-latest
-            binary: devcerts
-          - rid: linux-arm64
-            os: ubuntu-24.04-arm
-            binary: devcerts
-          - rid: linux-musl-x64
-            os: ubuntu-latest
-            binary: devcerts
-            container: alpine:latest
-          - rid: osx-x64
-            os: macos-13
-            binary: devcerts
-          - rid: osx-arm64
-            os: macos-14
-            binary: devcerts
-    container: ${{ matrix.container || '' }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install .NET SDK (Alpine)
-        if: matrix.container == 'alpine:latest'
-        run: |
-          apk add --no-cache dotnet-sdk-10.0 bash clang build-base zlib-dev
-
-      - uses: actions/setup-dotnet@v4
-        if: matrix.container != 'alpine:latest'
-        with:
-          dotnet-version: "10.0.x"
-
-      - name: Publish AOT
-        run: dotnet publish src/aot-tool/src/DevCerts.Tool/DevCerts.Tool.csproj -r ${{ matrix.rid }} -c Release -o publish/${{ matrix.rid }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: devcerts-${{ matrix.rid }}
-          path: publish/${{ matrix.rid }}/${{ matrix.binary }}
-
-  build-ui-extension:
-    name: UI Extension (${{ matrix.target }})
-    needs: build-aot
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - target: win32-x64
-            rid: win-x64
-            binary: devcerts.exe
-          - target: win32-arm64
-            rid: win-arm64
-            binary: devcerts.exe
-          - target: linux-x64
-            rid: linux-x64
-            binary: devcerts
-          - target: linux-arm64
-            rid: linux-arm64
-            binary: devcerts
-          - target: alpine-x64
-            rid: linux-musl-x64
-            binary: devcerts
-          - target: darwin-x64
-            rid: osx-x64
-            binary: devcerts
-          - target: darwin-arm64
-            rid: osx-arm64
-            binary: devcerts
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Download AOT binary
-        uses: actions/download-artifact@v4
-        with:
-          name: devcerts-${{ matrix.rid }}
-          path: src/vscode-ui-extension/bin
-
-      - name: Rename and set permissions
-        run: |
-          mv "src/vscode-ui-extension/bin/${{ matrix.binary }}" "src/vscode-ui-extension/bin/${{ matrix.binary }}" 2>/dev/null || true
-          chmod +x "src/vscode-ui-extension/bin/${{ matrix.binary }}" 2>/dev/null || true
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: src/vscode-ui-extension
-
-      - name: Build
-        run: npm run build:prod
-        working-directory: src/vscode-ui-extension
-
-      - name: Package VSIX
-        run: npx @vscode/vsce package --target ${{ matrix.target }}
-        working-directory: src/vscode-ui-extension
-
-      - name: Upload VSIX
-        uses: actions/upload-artifact@v4
-        with:
-          name: vsix-ui-${{ matrix.target }}
-          path: src/vscode-ui-extension/*.vsix
-
-  build-workspace-extension:
-    name: Workspace Extension
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install dependencies
-        run: npm ci
-        working-directory: src/vscode-workspace-extension
-      - name: Build
-        run: npm run build:prod
-        working-directory: src/vscode-workspace-extension
-      - name: Package VSIX
-        run: npx @vscode/vsce package
-        working-directory: src/vscode-workspace-extension
-      - name: Upload VSIX
-        uses: actions/upload-artifact@v4
-        with:
-          name: vsix-workspace
-          path: src/vscode-workspace-extension/*.vsix
+  build:
+    name: Extensions
+    uses: ./.github/workflows/build-extensions.yml
+    with:
+      production: true
+      upload-vsix: true
 
   publish:
     name: Publish
-    needs: [build-ui-extension, build-workspace-extension]
+    needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download all VSIXes
+      - name: Download VSIX artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: vsix-*
+          name: vsix
           path: vsix
-          merge-multiple: true
 
       - name: List VSIXes
         run: ls -la vsix/
