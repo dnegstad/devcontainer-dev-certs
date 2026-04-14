@@ -24,16 +24,22 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.getCertMaterial",
       async () => {
-        const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
-        const autoProvision = config.get<boolean>("autoProvision", true);
-        const material = await certProvider.getCertMaterial(autoProvision);
+        try {
+          const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
+          const autoProvision = config.get<boolean>("autoProvision", true);
+          const material = await certProvider.getCertMaterial(autoProvision);
 
-        if (material) {
-          ensureTerminalSslCertDir(context);
-          showLinuxTrustGuidance(context);
+          if (material) {
+            ensureTerminalSslCertDir(context);
+            showLinuxTrustGuidance(context);
+          }
+
+          return material;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          log(`Error providing certificate material: ${message}`);
+          throw err;
         }
-
-        return material;
       }
     )
   );

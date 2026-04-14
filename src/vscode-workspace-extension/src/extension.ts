@@ -90,9 +90,10 @@ async function injectCertificate(): Promise<void> {
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    log(`Error during injection: ${message}`);
+    log(`Error during injection (from host extension): ${message}`);
     vscode.window.showErrorMessage(
-      `Dev Certs: Failed to get certificate from host: ${message}`
+      "Dev Certs: The host extension failed to provide the certificate. " +
+        "Check the Dev Container Dev Certs output on the host for details."
     );
   }
 }
