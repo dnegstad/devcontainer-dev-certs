@@ -5,21 +5,5 @@ on:
     branches: [main]
 
 jobs:
-  extensions:
-    name: Extensions
+  build:
     uses: ./.github/workflows/build-extensions.yml
-
-  feature-validate:
-    name: Devcontainer Feature - Validate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Validate feature metadata
-        run: |
-          node -e "JSON.parse(require('fs').readFileSync('src/devcontainer-feature/src/dotnet-dev-certs/devcontainer-feature.json', 'utf8'))"
-          echo "Feature metadata is valid."
-      - name: Verify install.sh is executable-compatible
-        run: bash -n src/devcontainer-feature/src/dotnet-dev-certs/install.sh

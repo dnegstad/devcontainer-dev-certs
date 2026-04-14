@@ -13,8 +13,8 @@ on:
         default: false
 
 jobs:
-  build:
-    name: Build & Test
+  extensions:
+    name: Build & Test Extensions
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,3 +48,21 @@ jobs:
         with:
           name: vsix
           path: src/vscode-*-extension/*.vsix
+
+  feature:
+    name: Validate Devcontainer Feature
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate feature metadata and consistency
+        run: node test/validate-feature.mjs
+
+      - name: Shellcheck install.sh
+        run: shellcheck src/devcontainer-feature/src/dotnet-dev-certs/install.sh
+
+      - name: Shellcheck setup-cert.sh
+        run: shellcheck src/devcontainer-feature/src/dotnet-dev-certs/scripts/setup-cert.sh
