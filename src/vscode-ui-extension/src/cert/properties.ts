@@ -3,9 +3,6 @@
  * These values must stay in sync with dotnet dev-certs to produce functionally identical certs.
  */
 
-/** Subject name used for the dev cert. */
-export const SUBJECT_NAME = "CN=localhost";
-
 /** RSA key size in bits. */
 export const RSA_KEY_SIZE = 2048;
 
@@ -32,9 +29,6 @@ export const CURRENT_CERTIFICATE_VERSION = 6;
  * Version 4 was introduced in .NET SDK 10.0.100 / runtime 10.0.0.
  */
 export const MINIMUM_CERTIFICATE_VERSION = 4;
-
-/** OID for Server Authentication extended key usage. */
-export const SERVER_AUTHENTICATION_OID = "1.3.6.1.5.5.7.3.1";
 
 /** DNS names for Subject Alternative Names. */
 export const SAN_DNS_NAMES = [

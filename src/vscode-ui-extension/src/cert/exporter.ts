@@ -1,6 +1,7 @@
 import * as forge from "node-forge";
 import * as fs from "fs";
 import * as path from "path";
+import { ASPNET_HTTPS_OID_FRIENDLY_NAME } from "./properties";
 
 /**
  * Export a certificate with its private key as a PFX/PKCS12 file.
@@ -15,7 +16,7 @@ export function exportPfx(
 
   const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], password ?? null, {
     algorithm: "3des",
-    friendlyName: "ASP.NET Core HTTPS development certificate",
+    friendlyName: ASPNET_HTTPS_OID_FRIENDLY_NAME,
   });
   const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
   const outPath = path.join(outputDir, "aspnetcore-dev.pfx");
