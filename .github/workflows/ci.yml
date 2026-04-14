@@ -7,35 +7,20 @@ on:
     branches: [main]
 
 jobs:
-  ui-extension-build:
-    name: UI Extension - Build
+  extensions:
+    name: VSCode Extensions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install dependencies
-        run: npm ci
-        working-directory: src/vscode-ui-extension
-      - name: Build
-        run: npm run build
-        working-directory: src/vscode-ui-extension
-
-  workspace-extension-build:
-    name: Workspace Extension - Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install dependencies
-        run: npm ci
-        working-directory: src/vscode-workspace-extension
-      - name: Build
-        run: npm run build
-        working-directory: src/vscode-workspace-extension
+    - uses: actions/checkout@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+    - name: Install dependencies
+      run: npm ci
+    - name: Build UI Extension
+      run: npm run build -w src/vscode-ui-extension
+    - name: Build Workspace Extension
+      run: npm run build -w src/vscode-workspace-extension
 
   feature-validate:
     name: Devcontainer Feature - Validate
@@ -44,7 +29,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Install devcontainer CLI
         run: npm install -g @devcontainers/cli
       - name: Validate feature metadata
