@@ -10,7 +10,7 @@
     "url": "https://github.com/dnegstad/devcontainer-dev-certs"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.100.0"
   },
   "extensionKind": ["workspace"],
   "extensionDependencies": ["dnegstad.devcontainer-dev-certs-host"],
@@ -52,7 +52,7 @@
     "lint": "eslint src --ext ts"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^22.0.0",
     "@types/vscode": "^1.100.0",
     "esbuild": "^0.28.0",
     "typescript": "^5.9.0"
