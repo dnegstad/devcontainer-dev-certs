@@ -40,8 +40,9 @@
             "args": [
                 "vsce",
                 "package",
+                "--no-dependencies",
                 "--out",
-                "${workspaceFolder}/.out/test-project/.devcontainer/dotnet-dev-certs-remote.vsix"
+                "${workspaceFolder}/.out/test-project/.devcontainer/devcontainer-dev-certs-remote.vsix"
             ],
             "options": {
                 "cwd": "${workspaceFolder}/src/vscode-workspace-extension"

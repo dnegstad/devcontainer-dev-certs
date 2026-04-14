@@ -8,7 +8,7 @@
         "vscode": {
             "extensions": [
                 "ms-dotnettools.csdevkit",
-                "${containerWorkspaceFolder}/.devcontainer/dotnet-dev-certs-remote.vsix"
+                "${containerWorkspaceFolder}/.devcontainer/devcontainer-dev-certs-remote.vsix"
             ]
         }
     }
