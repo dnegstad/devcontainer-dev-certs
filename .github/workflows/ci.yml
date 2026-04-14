@@ -8,21 +8,8 @@ on:
 
 jobs:
   extensions:
-    name: VSCode Extensions
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-node@v4
-      with:
-        node-version: "22"
-    - name: Install dependencies
-      run: npm ci
-    - name: Build UI Extension
-      run: npm run build -w src/vscode-ui-extension
-    - name: Test UI Extension
-      run: npm test -w src/vscode-ui-extension
-    - name: Build Workspace Extension
-      run: npm run build -w src/vscode-workspace-extension
+    name: Extensions
+    uses: ./.github/workflows/build-extensions.yml
 
   feature-validate:
     name: Devcontainer Feature - Validate
@@ -32,8 +19,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Install devcontainer CLI
-        run: npm install -g @devcontainers/cli
       - name: Validate feature metadata
         run: |
           node -e "JSON.parse(require('fs').readFileSync('src/devcontainer-feature/src/dotnet-dev-certs/devcontainer-feature.json', 'utf8'))"

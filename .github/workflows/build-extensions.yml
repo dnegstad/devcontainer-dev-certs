@@ -1,0 +1,52 @@
+name: Build Extensions
+
+on:
+  workflow_call:
+    inputs:
+      production:
+        description: Use production build (minified, no sourcemaps)
+        type: boolean
+        default: false
+      upload-vsix:
+        description: Package and upload VSIX artifacts
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build UI Extension
+        run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/vscode-ui-extension
+
+      - name: Test UI Extension
+        run: npm test -w src/vscode-ui-extension
+
+      - name: Build Workspace Extension
+        run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/vscode-workspace-extension
+
+      - name: Package UI Extension VSIX
+        if: inputs.upload-vsix
+        run: npx @vscode/vsce package
+        working-directory: src/vscode-ui-extension
+
+      - name: Package Workspace Extension VSIX
+        if: inputs.upload-vsix
+        run: npx @vscode/vsce package
+        working-directory: src/vscode-workspace-extension
+
+      - name: Upload VSIX artifacts
+        if: inputs.upload-vsix
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: src/vscode-*-extension/*.vsix

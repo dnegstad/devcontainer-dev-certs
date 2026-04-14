@@ -9,67 +9,23 @@ permissions:
   contents: write
 
 jobs:
-  build-ui-extension:
-    name: UI Extension
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: src/vscode-ui-extension
-
-      - name: Build
-        run: npm run build:prod
-        working-directory: src/vscode-ui-extension
-
-      - name: Package VSIX
-        run: npx @vscode/vsce package
-        working-directory: src/vscode-ui-extension
-
-      - name: Upload VSIX
-        uses: actions/upload-artifact@v4
-        with:
-          name: vsix-ui
-          path: src/vscode-ui-extension/*.vsix
-
-  build-workspace-extension:
-    name: Workspace Extension
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - name: Install dependencies
-        run: npm ci
-        working-directory: src/vscode-workspace-extension
-      - name: Build
-        run: npm run build:prod
-        working-directory: src/vscode-workspace-extension
-      - name: Package VSIX
-        run: npx @vscode/vsce package
-        working-directory: src/vscode-workspace-extension
-      - name: Upload VSIX
-        uses: actions/upload-artifact@v4
-        with:
-          name: vsix-workspace
-          path: src/vscode-workspace-extension/*.vsix
+  build:
+    name: Extensions
+    uses: ./.github/workflows/build-extensions.yml
+    with:
+      production: true
+      upload-vsix: true
 
   publish:
     name: Publish
-    needs: [build-ui-extension, build-workspace-extension]
+    needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download all VSIXes
+      - name: Download VSIX artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: vsix-*
+          name: vsix
           path: vsix
-          merge-multiple: true
 
       - name: List VSIXes
         run: ls -la vsix/
