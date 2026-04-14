@@ -125,7 +125,7 @@ Inside the container, the remote extension places the cert in two locations:
 
 ## Requirements
 
-- VS Code 1.85 or later
+- VS Code 1.100 or later
 - [Dev Container Dev Certificates (Remote)](https://marketplace.visualstudio.com/items?itemName=dnegstad.devcontainer-dev-certs-remote) installed in the remote environment
 
 No .NET installation is required on your host machine.

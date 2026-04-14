@@ -108,7 +108,7 @@ This extension honors the following environment variables, matching the behavior
 
 ## Requirements
 
-- VS Code 1.85 or later
+- VS Code 1.100 or later
 - [Dev Container Dev Certificates (Host)](https://marketplace.visualstudio.com/items?itemName=dnegstad.devcontainer-dev-certs-host) installed on the local machine
 
 This extension is self-contained and does not require on any additional dependencies on your host or in the container.
