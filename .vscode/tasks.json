@@ -38,7 +38,7 @@
             "type": "shell",
             "command": "npx",
             "args": [
-                "@vscode/vsce",
+                "vsce",
                 "package",
                 "--out",
                 "${workspaceFolder}/.out/test-project/.devcontainer/dotnet-dev-certs-remote.vsix"

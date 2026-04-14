@@ -12,10 +12,18 @@
   "engines": {
     "vscode": "^1.100.0"
   },
-  "extensionKind": ["workspace"],
-  "extensionDependencies": ["dnegstad.devcontainer-dev-certs-host"],
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "extensionKind": [
+    "workspace"
+  ],
+  "extensionDependencies": [
+    "dnegstad.devcontainer-dev-certs-host"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -49,11 +57,13 @@
     "build": "node esbuild.mjs",
     "build:prod": "node esbuild.mjs --production",
     "watch": "node esbuild.mjs --watch",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.100.0",
+    "@vscode/vsce": "^3.8.0",
     "esbuild": "^0.28.0",
     "typescript": "^5.9.0"
   }
