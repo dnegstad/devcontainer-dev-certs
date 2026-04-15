@@ -1,8 +1,8 @@
 {
-    "id": "dotnet-dev-certs",
-    "version": "1.0.0",
-    "name": ".NET Development Certificates",
-    "description": "Enables trusted HTTPS for .NET workloads (Kestrel, Aspire) in devcontainers by preparing the certificate trust infrastructure and installing companion VS Code extensions that automatically generate, trust, and transfer development certificates from the host machine. Add to your devcontainer.json: \"features\": { \"ghcr.io/dnegstad/devcontainer-dev-certs/dotnet-dev-certs\": {} }",
+    "id": "devcontainer-dev-certs",
+    "version": "0.1.0",
+    "name": "Dev Container Development Certificates",
+    "description": "Enables trusted HTTPS in Dev Containers by preparing certificate trust infrastructure and installing companion VS Code extensions that automatically generate, trust, and transfer ASP.NET and Aspire compatible development certificates from the host machine. Add to your devcontainer.json: \"features\": { \"ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs\": {} }",
     "documentationURL": "https://github.com/dnegstad/devcontainer-dev-certs",
     "keywords": ["dotnet", "https", "certificates", "ssl", "tls", "devcontainer", "remote"],
     "options": {
@@ -25,8 +25,8 @@
             ]
         }
     },
-    "containerEnv": {
-        "SSL_CERT_DIR": "$HOME/.aspnet/dev-certs/trust:/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
+    "remoteEnv": {
+        "SSL_CERT_DIR": "${containerEnv:HOME}/.aspnet/dev-certs/trust:/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
     },
     "installsAfter": [
         "ghcr.io/devcontainers/features/common-utils",

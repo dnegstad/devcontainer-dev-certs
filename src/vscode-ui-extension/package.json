@@ -1,7 +1,7 @@
 {
   "name": "devcontainer-dev-certs-host",
-  "displayName": "Devcontainer Dev Certificates (Host)",
-  "description": "Generates and trusts .NET HTTPS development certificates on the host machine for use in devcontainers and remote environments.",
+  "displayName": "Dev Container Dev Certificates (Host)",
+  "description": "Generates and trusts ASP.NET and Aspire compatible HTTPS development certificates on the host machine for use in Dev Containers and remote environments.",
   "version": "0.1.0",
   "publisher": "dnegstad",
   "license": "MIT",
@@ -16,6 +16,13 @@
   "extensionKind": [
     "ui"
   ],
+  "keywords": [
+    "dotnet",
+    "aspnet",
+    "aspire",
+    "devcontainer",
+    "https"
+  ],
   "categories": [
     "Other"
   ],
@@ -24,10 +31,16 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "commands": [
+      {
+        "command": "devcontainer-dev-certs.trustInBrowsers",
+        "title": "Dev Certs: Trust Certificate in Browsers"
+      }
+    ],
     "configuration": {
       "title": "Dev Certificates (Host)",
       "properties": {
-        "dotnet-dev-certs.autoProvision": {
+        "devcontainer-dev-certs.autoProvision": {
           "type": "boolean",
           "default": true,
           "description": "Automatically generate and trust a dev cert if none exists when the workspace extension requests one"

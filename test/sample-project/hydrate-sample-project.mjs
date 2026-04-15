@@ -5,7 +5,7 @@
 //
 // Output: <repo-root>/.out/test-project/
 //   - Copies test/sample-project/ as the base (excluding this script)
-//   - Copies the devcontainer feature into .devcontainer/dotnet-dev-certs/
+//   - Copies the devcontainer feature into .devcontainer/devcontainer-dev-certs/
 //
 // The "stage-test-vsix" VSCode task handles building and placing
 // the VSIX directly into the hydrated .devcontainer/ folder.
@@ -21,7 +21,7 @@ import { fileURLToPath } from "url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, "..", "..");
-const featureDir = join(repoRoot, "src", "devcontainer-feature", "src", "dotnet-dev-certs");
+const featureDir = join(repoRoot, "src", "devcontainer-feature", "src", "devcontainer-dev-certs");
 const outDir = join(repoRoot, ".out", "test-project");
 
 // Clean and recreate output
@@ -39,6 +39,6 @@ cpSync(scriptDir, outDir, {
 });
 
 // Copy feature into .devcontainer/
-cpSync(featureDir, join(outDir, ".devcontainer", "dotnet-dev-certs"), { recursive: true });
+cpSync(featureDir, join(outDir, ".devcontainer", "devcontainer-dev-certs"), { recursive: true });
 
 console.log(`Test project hydrated at: ${outDir}`);

@@ -5,44 +5,47 @@ import { initLogger, log } from "@devcontainer-dev-certs/shared";
 import type { CertMaterial } from "@devcontainer-dev-certs/shared";
 
 const UI_EXTENSION_ID = "dnegstad.devcontainer-dev-certs-host";
-const GET_CERT_COMMAND = "dotnet-dev-certs.getCertMaterial";
+const GET_CERT_COMMAND = "devcontainer-dev-certs.getCertMaterial";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs (Remote)"));
 
   log(`Workspace extension activated. remoteName=${vscode.env.remoteName}`);
 
-  // Register the manual inject command (always available)
+  // This extension only operates in remote contexts (devcontainer, SSH, WSL).
+  // No-op when running locally to avoid unnecessary work and user confusion.
+  if (!vscode.env.remoteName) {
+    log("Not running in a remote context, extension will no-op.");
+    return;
+  }
+
+  // Register the manual inject command
   context.subscriptions.push(
-    vscode.commands.registerCommand("dotnet-dev-certs.injectCert", () =>
+    vscode.commands.registerCommand("devcontainer-dev-certs.injectCert", () =>
       injectCertificate()
     )
   );
 
-  // Auto-inject if configured and we're in a remote context.
+  const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
+
+  // Ensure SSL_CERT_DIR is configured — covers SSH remoting, WSL, and other
+  // non-devcontainer scenarios where the devcontainer feature isn't present.
+  if (config.get<boolean>("ensureSslCertDir", true)) {
+    const sslCertDirs = config.get<string>(
+      "sslCertDirs",
+      "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
+    );
+    ensureSslCertDir(sslCertDirs);
+    log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
+  }
+
+  // Auto-inject if configured.
   // The UI extension is guaranteed to be activated before us because
   // we declare it in extensionDependencies and it declares "api": "none",
-  // which gives VSCode a hard cross-host activation ordering guarantee.
-  if (vscode.env.remoteName) {
-    const config = vscode.workspace.getConfiguration("dotnet-dev-certs");
-
-    // Ensure SSL_CERT_DIR is configured — covers SSH remoting, WSL, and other
-    // non-devcontainer scenarios where the devcontainer feature isn't present.
-    if (config.get<boolean>("ensureSslCertDir", true)) {
-      const sslCertDirs = config.get<string>(
-        "sslCertDirs",
-        "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
-      );
-      ensureSslCertDir(sslCertDirs);
-      log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
-    }
-
-    if (config.get<boolean>("autoInject", true)) {
-      log("Auto-inject enabled, requesting certificate material...");
-      injectCertificate();
-    }
-  } else {
-    log("Not in a remote context, skipping auto-inject.");
+  // which gives VS Code a hard cross-host activation ordering guarantee.
+  if (config.get<boolean>("autoInject", true)) {
+    log("Auto-inject enabled, requesting certificate material...");
+    injectCertificate();
   }
 }
 
@@ -87,9 +90,10 @@ async function injectCertificate(): Promise<void> {
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    log(`Error during injection: ${message}`);
+    log(`Error during injection (from host extension): ${message}`);
     vscode.window.showErrorMessage(
-      `Dev Certs: Failed to get certificate from host: ${message}`
+      "Dev Certs: The host extension failed to provide the certificate. " +
+        "Check the Dev Container Dev Certs output on the host for details."
     );
   }
 }

@@ -183,7 +183,8 @@ export class LinuxCertificateStore extends BaseCertificateStore {
       const pfxPath = path.join(dir, file);
       try {
         const result = this.loadPfx(pfxPath);
-        if (result && result.cert.getExtension({ id: ASPNET_HTTPS_OID })) {
+        // node-forge types incorrectly declare id as number, but it's correct to pass the OID string directly
+        if (result && result.cert.getExtension({ id: ASPNET_HTTPS_OID as unknown as number })) {
           fs.unlinkSync(pfxPath);
         }
       } catch {

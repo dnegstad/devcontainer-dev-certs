@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
+import * as vscode from "vscode";
 
 const execFileAsync = promisify(execFile);
 
@@ -36,4 +37,34 @@ export async function runProcess(
       stderr: error.stderr ?? error.message,
     };
   }
+}
+
+/**
+ * Run a command in a visible VS Code terminal and wait for it to complete.
+ * Returns the process exit code. The terminal is disposed automatically
+ * after the process exits.
+ *
+ * Use this for trust operations so users can see what's being executed.
+ */
+export function runInTerminal(
+  name: string,
+  command: string,
+  args: string[]
+): Promise<number> {
+  return new Promise((resolve) => {
+    const terminal = vscode.window.createTerminal({
+      name,
+      shellPath: command,
+      shellArgs: args,
+      isTransient: true,
+    });
+    terminal.show();
+
+    const disposable = vscode.window.onDidCloseTerminal((t) => {
+      if (t === terminal) {
+        disposable.dispose();
+        resolve(t.exitStatus?.code ?? 1);
+      }
+    });
+  });
 }

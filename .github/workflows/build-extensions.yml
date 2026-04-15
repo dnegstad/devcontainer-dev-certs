@@ -17,10 +17,13 @@ jobs:
     name: Build & Test Extensions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
+
+      - name: Install system dependencies for integration tests
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends libnss3-tools
 
       - name: Install dependencies
         run: npm ci
@@ -42,7 +45,7 @@ jobs:
 
       - name: Upload VSIX artifacts
         if: inputs.upload-vsix
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: vsix
           path: src/vscode-*-extension/*.vsix
@@ -51,8 +54,8 @@ jobs:
     name: Validate Devcontainer Feature
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
 
@@ -60,7 +63,7 @@ jobs:
         run: node test/validate-feature.mjs
 
       - name: Shellcheck install.sh
-        run: shellcheck src/devcontainer-feature/src/dotnet-dev-certs/install.sh
+        run: shellcheck src/devcontainer-feature/src/devcontainer-dev-certs/install.sh
 
       - name: Shellcheck setup-cert.sh
-        run: shellcheck src/devcontainer-feature/src/dotnet-dev-certs/scripts/setup-cert.sh
+        run: shellcheck src/devcontainer-feature/src/devcontainer-dev-certs/scripts/setup-cert.sh

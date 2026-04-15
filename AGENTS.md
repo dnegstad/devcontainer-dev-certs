@@ -6,7 +6,7 @@ This is a monorepo containing three components that together provide automatic H
 
 The system uses the VS Code **companion extension pattern**: two extensions communicate via cross-host `executeCommand()` routing.
 
-- **UI extension** (`src/vscode-ui-extension/`) — `extensionKind: ["ui"]`, runs on the host machine. Uses `node-forge` for X.509 certificate generation and platform-specific mechanisms for OS trust store management. Registers a single internal command `dotnet-dev-certs.getCertMaterial` that generates, trusts, and exports the certificate, returning PFX + PEM as base64. Platform trust is handled via PowerShell (Windows), the `security` CLI (macOS), and file-based stores with OpenSSL rehash (Linux).
+- **UI extension** (`src/vscode-ui-extension/`) — `extensionKind: ["ui"]`, runs on the host machine. Uses `node-forge` for X.509 certificate generation and platform-specific mechanisms for OS trust store management. Registers a single internal command `devcontainer-dev-certs.getCertMaterial` that generates, trusts, and exports the certificate, returning PFX + PEM as base64. Platform trust is handled via PowerShell (Windows), the `security` CLI (macOS), and file-based stores with OpenSSL rehash (Linux).
 
 - **Workspace extension** (`src/vscode-workspace-extension/`) — `extensionKind: ["workspace"]`, runs in the remote (container/SSH/WSL). Declares `extensionDependencies` on the UI extension with `"api": "none"` for guaranteed cross-host activation ordering. Calls `getCertMaterial`, writes PFX to the .NET X509 store path and PEM + hash symlinks to the OpenSSL trust directory.
 

@@ -1,0 +1,58 @@
+name: Bump Version
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    name: Create version bump PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: main
+
+      - name: Compute next version
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          # Split into major.minor.patch (strip any existing prerelease suffix)
+          BASE="${TAG%%-*}"
+          IFS='.' read -r major minor patch <<< "$BASE"
+          NEXT="${major}.${minor}.$((patch + 1))-pre"
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Released $TAG → next dev version: $NEXT"
+
+      - name: Update version in all manifests
+        run: |
+          NEXT="${{ steps.version.outputs.next }}"
+
+          # Extension package.json files
+          for f in \
+            src/vscode-ui-extension/package.json \
+            src/vscode-workspace-extension/package.json \
+            src/shared/package.json; do
+            jq --arg v "$NEXT" '.version = $v' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+          done
+
+          # Devcontainer feature JSON
+          f="src/devcontainer-feature/src/devcontainer-dev-certs/devcontainer-feature.json"
+          jq --arg v "$NEXT" '.version = $v' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+
+      - name: Create pull request
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
+        with:
+          branch: chore/bump-${{ steps.version.outputs.next }}
+          commit-message: "Bump version to ${{ steps.version.outputs.next }}"
+          title: "Bump version to ${{ steps.version.outputs.next }}"
+          body: |
+            Automated version bump after release `${{ github.ref_name }}`.
+
+            Sets all component versions to `${{ steps.version.outputs.next }}` (prerelease of next patch).
+          delete-branch: true
