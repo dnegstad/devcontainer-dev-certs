@@ -43,7 +43,7 @@
         "devcontainer-dev-certs.autoProvision": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically generate and trust a dev cert if none exists when the workspace extension requests one"
+          "description": "Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to false to disable provisioning entirely."
         }
       }
     }

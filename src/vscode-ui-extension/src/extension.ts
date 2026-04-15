@@ -27,7 +27,27 @@ export function activate(context: vscode.ExtensionContext): void {
         try {
           const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
           const autoProvision = config.get<boolean>("autoProvision", true);
-          const material = await certProvider.getCertMaterial(autoProvision);
+
+          if (!autoProvision) {
+            return await certProvider.getCertMaterial(false);
+          }
+
+          // Check if provisioning is actually needed
+          const status = await certManager.check();
+          if (!status.exists || !status.isTrusted) {
+            // Consent required before first-time generation/trust
+            const consented = context.globalState.get<boolean>("certProvisionConsented");
+            if (!consented) {
+              const userConsented = await promptForCertConsent();
+              if (!userConsented) {
+                log("User declined certificate provisioning.");
+                return null;
+              }
+              await context.globalState.update("certProvisionConsented", true);
+            }
+          }
+
+          const material = await certProvider.getCertMaterial(true);
 
           if (material) {
             ensureTerminalSslCertDir(context);
@@ -96,6 +116,30 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     )
   );
+}
+
+/**
+ * Show a modal consent dialog before first-time certificate provisioning.
+ * Explains what the extension does and includes platform-specific details
+ * about any OS-level prompts the user will see.
+ */
+async function promptForCertConsent(): Promise<boolean> {
+  const enable = "Enable";
+  const platformDetail =
+    process.platform === "darwin"
+      ? "macOS will prompt you for your login keychain password to complete the trust step."
+      : process.platform === "win32"
+        ? "Windows will ask you to confirm adding the certificate to your user certificate store."
+        : "The certificate will be added to your local trust store.";
+
+  const choice = await vscode.window.showInformationMessage(
+    "Dev Certs: This extension generates and trusts an HTTPS development certificate " +
+      "so Dev Containers can serve over HTTPS without browser warnings. " +
+      platformDetail,
+    { modal: true },
+    enable
+  );
+  return choice === enable;
 }
 
 /**
