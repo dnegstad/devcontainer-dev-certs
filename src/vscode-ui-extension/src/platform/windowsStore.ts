@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
-import { runProcess, runInTerminal } from "./processUtil";
+import { runProcess } from "./processUtil";
 import { isValidDevCert, computeThumbprint } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
@@ -118,7 +118,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   }
 
   async trustCertificate(cert: forge.pki.Certificate): Promise<void> {
-    // Export public cert as DER, import to CurrentUser\Root via PowerShell in a visible terminal
+    // Export public cert as DER, import to CurrentUser\Root via X509Store API
     const tmpCert = path.join(
       os.tmpdir(),
       `devcert-trust-${Date.now()}.cer`
@@ -135,16 +135,16 @@ export class WindowsCertificateStore extends BaseCertificateStore {
       `Remove-Item '${tmpCert.replace(/'/g, "''")}'`;
 
     const pwsh = await getPowerShell();
-    const exitCode = await runInTerminal("Dev Certs: Trust Certificate", pwsh, [
+    const result = await runProcess(pwsh, [
       "-NoProfile",
-      "-NoExit",
+      "-NonInteractive",
       "-Command",
       script,
     ]);
 
-    if (exitCode !== 0) {
+    if (result.exitCode !== 0) {
       try { fs.unlinkSync(tmpCert); } catch { /* ignore */ }
-      throw new Error("Failed to trust certificate on Windows. Check the terminal output for details.");
+      throw new Error(`Failed to trust certificate on Windows: ${result.stderr}`);
     }
   }
 
