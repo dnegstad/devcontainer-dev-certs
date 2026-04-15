@@ -82,7 +82,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     key: forge.pki.rsa.PrivateKey,
     _thumbprint: string
   ): Promise<void> {
-    // Export to temp PFX, then import via PowerShell in a visible terminal
+    // Export to temp PFX, then import via X509Store API (more reliable than Import-PfxCertificate)
     const tmpPfx = path.join(
       os.tmpdir(),
       `devcert-save-${Date.now()}.pfx`
@@ -91,22 +91,29 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
-      `$pwd = ConvertTo-SecureString -String "import" -Force -AsPlainText; ` +
-      `Import-PfxCertificate -FilePath '${tmpPfx.replace(/'/g, "''")}' -CertStoreLocation Cert:\\CurrentUser\\My -Password $pwd -Exportable; ` +
+      `$pfxBytes = [System.IO.File]::ReadAllBytes('${tmpPfx.replace(/'/g, "''")}'); ` +
+      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(` +
+        `$pfxBytes, 'import', ` +
+        `[System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor ` +
+        `[System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet); ` +
+      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'CurrentUser'); ` +
+      `$store.Open('ReadWrite'); ` +
+      `$store.Add($cert); ` +
+      `$store.Close(); ` +
       `Remove-Item '${tmpPfx.replace(/'/g, "''")}'`;
 
     const pwsh = await getPowerShell();
-    const exitCode = await runInTerminal("Dev Certs: Import Certificate", pwsh, [
+    const result = await runProcess(pwsh, [
       "-NoProfile",
-      "-NoExit",
+      "-NonInteractive",
       "-Command",
       script,
     ]);
 
-    if (exitCode !== 0) {
-      // Clean up temp file if the terminal didn't
+    if (result.exitCode !== 0) {
+      // Clean up temp file if PowerShell didn't
       try { fs.unlinkSync(tmpPfx); } catch { /* ignore */ }
-      throw new Error("Failed to save certificate to Windows store. Check the terminal output for details.");
+      throw new Error(`Failed to save certificate to Windows store: ${result.stderr}`);
     }
   }
 
