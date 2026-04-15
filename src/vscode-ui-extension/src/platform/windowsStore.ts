@@ -92,10 +92,8 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
       `$pfxBytes = [System.IO.File]::ReadAllBytes('${tmpPfx.replace(/'/g, "''")}'); ` +
-      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2(` +
-        `$pfxBytes, 'import', ` +
-        `[System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable -bor ` +
-        `[System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet); ` +
+      `$flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]'Exportable, PersistKeySet'; ` +
+      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxBytes, 'import', $flags); ` +
       `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'CurrentUser'); ` +
       `$store.Open('ReadWrite'); ` +
       `$store.Add($cert); ` +
