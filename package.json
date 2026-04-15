@@ -8,5 +8,8 @@
   ],
   "scripts": {
     "hydrate:sample-project": "node test/sample-project/hydrate-sample-project.mjs"
+  },
+  "devDependencies": {
+    "semver": "^7.7.4"
   }
 }

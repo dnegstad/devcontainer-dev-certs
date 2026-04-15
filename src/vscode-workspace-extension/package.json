@@ -2,7 +2,7 @@
   "name": "devcontainer-dev-certs-remote",
   "displayName": "Dev Container Dev Certificates (Remote)",
   "description": "Receives and installs ASP.NET and Aspire compatible HTTPS development certificates inside Dev Containers and remote environments.",
-  "version": "0.1.0",
+  "version": "0.1.1-pre",
   "publisher": "dnegstad",
   "license": "MIT",
   "repository": {
