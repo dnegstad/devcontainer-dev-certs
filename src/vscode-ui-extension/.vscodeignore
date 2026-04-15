@@ -6,3 +6,4 @@ esbuild.mjs
 **/*.ts
 !dist/**
 !bin/**
+!images/**
