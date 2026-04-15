@@ -58,29 +58,42 @@ async function injectCertificate(): Promise<void> {
     return;
   }
 
+  // Retrieve certificate material from the host UI extension
+  let material: CertMaterial | null;
   try {
     log("Calling getCertMaterial on UI extension...");
-    const material = (await vscode.commands.executeCommand(
+    material = (await vscode.commands.executeCommand(
       GET_CERT_COMMAND
     )) as CertMaterial | null;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(`Error retrieving certificate from host: ${message}`);
+    vscode.window.showErrorMessage(
+      "Dev Certs: Failed to generate or trust the certificate on the host machine. " +
+        "Check the Dev Container Dev Certs output on the host for details."
+    );
+    return;
+  }
 
-    if (!material) {
-      log("getCertMaterial returned null.");
-      vscode.window.showWarningMessage(
-        "Dev Certs: The host extension could not provide certificate material. " +
-          "Check the host extension output for details."
-      );
-      return;
-    }
+  if (!material) {
+    log("getCertMaterial returned null.");
+    vscode.window.showWarningMessage(
+      "Dev Certs: The host extension could not provide certificate material. " +
+        "Check the host extension output for details."
+    );
+    return;
+  }
 
-    log(`Received cert material. Thumbprint: ${material.thumbprint}`);
+  log(`Received cert material. Thumbprint: ${material.thumbprint}`);
 
-    // Idempotent — skip if already installed
-    if (isCertInstalled(material.thumbprint)) {
-      log("Certificate already installed, skipping.");
-      return;
-    }
+  // Idempotent — skip if already installed
+  if (isCertInstalled(material.thumbprint)) {
+    log("Certificate already installed, skipping.");
+    return;
+  }
 
+  // Install certificate into the remote environment
+  try {
     log("Installing certificate files...");
     installCert(material);
     log("Certificate installed successfully.");
@@ -90,10 +103,10 @@ async function injectCertificate(): Promise<void> {
     );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    log(`Error during injection (from host extension): ${message}`);
+    log(`Error installing certificate in remote: ${message}`);
     vscode.window.showErrorMessage(
-      "Dev Certs: The host extension failed to provide the certificate. " +
-        "Check the Dev Container Dev Certs output on the host for details."
+      "Dev Certs: Failed to install the certificate in the remote environment. " +
+        message
     );
   }
 }

@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
-import { runProcess, runInTerminal } from "./processUtil";
+import { runProcess } from "./processUtil";
 import { isValidDevCert, computeThumbprint } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
@@ -82,7 +82,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     key: forge.pki.rsa.PrivateKey,
     _thumbprint: string
   ): Promise<void> {
-    // Export to temp PFX, then import via PowerShell in a visible terminal
+    // Export to temp PFX, then import via X509Store API (more reliable than Import-PfxCertificate)
     const tmpPfx = path.join(
       os.tmpdir(),
       `devcert-save-${Date.now()}.pfx`
@@ -91,27 +91,32 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
-      `$pwd = ConvertTo-SecureString -String "import" -Force -AsPlainText; ` +
-      `Import-PfxCertificate -FilePath '${tmpPfx.replace(/'/g, "''")}' -CertStoreLocation Cert:\\CurrentUser\\My -Password $pwd -Exportable; ` +
+      `$pfxBytes = [System.IO.File]::ReadAllBytes('${tmpPfx.replace(/'/g, "''")}'); ` +
+      `$flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]'Exportable, PersistKeySet'; ` +
+      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxBytes, 'import', $flags); ` +
+      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'CurrentUser'); ` +
+      `$store.Open('ReadWrite'); ` +
+      `$store.Add($cert); ` +
+      `$store.Close(); ` +
       `Remove-Item '${tmpPfx.replace(/'/g, "''")}'`;
 
     const pwsh = await getPowerShell();
-    const exitCode = await runInTerminal("Dev Certs: Import Certificate", pwsh, [
+    const result = await runProcess(pwsh, [
       "-NoProfile",
-      "-NoExit",
+      "-NonInteractive",
       "-Command",
       script,
     ]);
 
-    if (exitCode !== 0) {
-      // Clean up temp file if the terminal didn't
+    if (result.exitCode !== 0) {
+      // Clean up temp file if PowerShell didn't
       try { fs.unlinkSync(tmpPfx); } catch { /* ignore */ }
-      throw new Error("Failed to save certificate to Windows store. Check the terminal output for details.");
+      throw new Error(`Failed to save certificate to Windows store: ${result.stderr}`);
     }
   }
 
   async trustCertificate(cert: forge.pki.Certificate): Promise<void> {
-    // Export public cert as DER, import to CurrentUser\Root via PowerShell in a visible terminal
+    // Export public cert as DER, import to CurrentUser\Root via X509Store API
     const tmpCert = path.join(
       os.tmpdir(),
       `devcert-trust-${Date.now()}.cer`
@@ -128,16 +133,16 @@ export class WindowsCertificateStore extends BaseCertificateStore {
       `Remove-Item '${tmpCert.replace(/'/g, "''")}'`;
 
     const pwsh = await getPowerShell();
-    const exitCode = await runInTerminal("Dev Certs: Trust Certificate", pwsh, [
+    const result = await runProcess(pwsh, [
       "-NoProfile",
-      "-NoExit",
+      "-NonInteractive",
       "-Command",
       script,
     ]);
 
-    if (exitCode !== 0) {
+    if (result.exitCode !== 0) {
       try { fs.unlinkSync(tmpCert); } catch { /* ignore */ }
-      throw new Error("Failed to trust certificate on Windows. Check the terminal output for details.");
+      throw new Error(`Failed to trust certificate on Windows: ${result.stderr}`);
     }
   }
 
