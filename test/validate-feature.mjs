@@ -5,6 +5,7 @@
  * Run from the repository root: node test/validate-feature.mjs
  */
 import { readFileSync } from "fs";
+import semver from "semver";
 
 const FEATURE_JSON_PATH =
   "src/devcontainer-feature/src/devcontainer-dev-certs/devcontainer-feature.json";
@@ -12,7 +13,6 @@ const INSTALL_SH_PATH =
   "src/devcontainer-feature/src/devcontainer-dev-certs/install.sh";
 const UI_PKG_PATH = "src/vscode-ui-extension/package.json";
 const WORKSPACE_PKG_PATH = "src/vscode-workspace-extension/package.json";
-
 let failures = 0;
 
 function check(label, ok, detail) {
@@ -35,7 +35,7 @@ const workspacePkg = JSON.parse(readFileSync(WORKSPACE_PKG_PATH, "utf8"));
 
 console.log("Feature metadata (required fields):");
 check("id", typeof feature.id === "string" && feature.id.length > 0, "missing or empty");
-check("version", typeof feature.version === "string" && /^\d+\.\d+\.\d+$/.test(feature.version), `invalid semver: ${feature.version}`);
+check("version", typeof feature.version === "string" && semver.parse(feature.version, throwErrors) != null, `invalid semver: ${feature.version}`);
 check("name", typeof feature.name === "string" && feature.name.length > 0, "missing or empty");
 check("description", typeof feature.description === "string" && feature.description.length > 0, "missing or empty");
 
