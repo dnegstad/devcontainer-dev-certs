@@ -35,7 +35,7 @@ const workspacePkg = JSON.parse(readFileSync(WORKSPACE_PKG_PATH, "utf8"));
 
 console.log("Feature metadata (required fields):");
 check("id", typeof feature.id === "string" && feature.id.length > 0, "missing or empty");
-check("version", typeof feature.version === "string" && semver.parse(feature.version, throwErrors) != null, `invalid semver: ${feature.version}`);
+check("version", typeof feature.version === "string" && semver.parse(feature.version, {}, false) != null, `invalid semver: ${feature.version}`);
 check("name", typeof feature.name === "string" && feature.name.length > 0, "missing or empty");
 check("description", typeof feature.description === "string" && feature.description.length > 0, "missing or empty");
 
