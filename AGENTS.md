@@ -8,7 +8,7 @@ The system uses the VS Code **companion extension pattern**: two extensions comm
 
 - **UI extension** (`src/vscode-ui-extension/`) — `extensionKind: ["ui"]`, runs on the host machine. Uses `node-forge` for X.509 certificate generation and platform-specific mechanisms for OS trust store management. Registers a single internal command `devcontainer-dev-certs.getCertMaterial` that generates, trusts, and exports the certificate, returning PFX + PEM as base64. Platform trust is handled via PowerShell (Windows), the `security` CLI (macOS), and file-based stores with OpenSSL rehash (Linux).
 
-- **Workspace extension** (`src/vscode-workspace-extension/`) — `extensionKind: ["workspace"]`, runs in the remote (container/SSH/WSL). Declares `extensionDependencies` on the UI extension with `"api": "none"` for guaranteed cross-host activation ordering. Calls `getCertMaterial`, writes PFX to the .NET X509 store path and PEM + hash symlinks to the OpenSSL trust directory.
+- **Workspace extension** (`src/vscode-workspace-extension/`) — `extensionKind: ["workspace"]`, runs in the remote (container/SSH/WSL). Uses `vscode.extensions.getExtension()` to detect whether the UI extension is installed and prompts for installation if missing. Polls for the UI extension's command to handle the cross-host activation race. Calls `getCertMaterial`, writes PFX to the .NET X509 store path and PEM + hash symlinks to the OpenSSL trust directory.
 
 - **Devcontainer feature** (`src/devcontainer-feature/`) — sets `SSL_CERT_DIR` via `containerEnv`, creates `.dotnet/corefx/cryptography/x509stores/my/` and `.aspnet/dev-certs/trust/` directories, requests both extensions via `customizations.vscode.extensions`.
 

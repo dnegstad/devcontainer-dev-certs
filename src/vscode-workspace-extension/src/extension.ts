@@ -40,9 +40,6 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   // Auto-inject if configured.
-  // The UI extension is guaranteed to be activated before us because
-  // we declare it in extensionDependencies and it declares "api": "none",
-  // which gives VS Code a hard cross-host activation ordering guarantee.
   if (config.get<boolean>("autoInject", true)) {
     log("Auto-inject enabled, requesting certificate material...");
     injectCertificate();
@@ -50,11 +47,28 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 async function injectCertificate(): Promise<void> {
-  // Verify the command is available — if not, the UI extension isn't installed
-  const commands = await vscode.commands.getCommands(true);
-  if (!commands.includes(GET_CERT_COMMAND)) {
-    log(`Command ${GET_CERT_COMMAND} not found — UI extension not available.`);
+  // Check whether the UI extension is installed on the host.
+  // We intentionally do not use extensionDependencies because that
+  // prevents activation entirely when the host extension is missing,
+  // which blocks us from showing a helpful install prompt.
+  const uiExtension = vscode.extensions.getExtension(UI_EXTENSION_ID);
+  if (!uiExtension) {
+    log(`UI extension ${UI_EXTENSION_ID} not installed.`);
     await promptInstallUiExtension();
+    return;
+  }
+
+  // Without extensionDependencies there is no cross-host activation
+  // ordering guarantee — the UI extension may still be activating.
+  // Wait for its command to appear before proceeding.
+  if (!(await waitForCommand(GET_CERT_COMMAND))) {
+    log(
+      `Command ${GET_CERT_COMMAND} not available after waiting — UI extension may have failed to activate.`
+    );
+    vscode.window.showErrorMessage(
+      "Dev Certs: The host extension is installed but did not activate. " +
+        "Try reloading the window."
+    );
     return;
   }
 
@@ -109,6 +123,27 @@ async function injectCertificate(): Promise<void> {
         message
     );
   }
+}
+
+/**
+ * Poll `vscode.commands.getCommands()` until the given command appears
+ * or the timeout expires. Handles the activation race when the UI
+ * extension is installed but hasn't registered its command yet.
+ */
+async function waitForCommand(
+  commandId: string,
+  timeoutMs = 10_000,
+  intervalMs = 500
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const commands = await vscode.commands.getCommands(true);
+    if (commands.includes(commandId)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
 }
 
 async function promptInstallUiExtension(): Promise<void> {
