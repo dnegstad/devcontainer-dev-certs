@@ -17,6 +17,23 @@ export function getDotNetStorePath(): string {
 }
 
 /**
+ * .NET X509Store CurrentUser\Root path on Linux.
+ * The .NET runtime checks this store to determine whether a certificate is trusted.
+ * Writing the dev cert here (as a public-cert-only PFX) causes dotnet to report it
+ * as "trusted", matching the behavior of `dotnet dev-certs https --trust`.
+ */
+export function getDotNetRootStorePath(): string {
+  return path.join(
+    os.homedir(),
+    ".dotnet",
+    "corefx",
+    "cryptography",
+    "x509stores",
+    "root"
+  );
+}
+
+/**
  * OpenSSL trust directory for dev certs.
  * Honors DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY if set,
  * matching the behavior of .NET's UnixCertificateManager.

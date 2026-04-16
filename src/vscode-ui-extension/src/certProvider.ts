@@ -50,10 +50,12 @@ export class CertProvider {
     try {
       await this.certManager.exportCert("pfx", tmpDir);
       await this.certManager.exportCert("pem", tmpDir);
+      await this.certManager.exportCert("root-pfx", tmpDir);
 
       const pfxPath = path.join(tmpDir, "aspnetcore-dev.pfx");
       const pemCertPath = path.join(tmpDir, "aspnetcore-dev.pem");
       const pemKeyPath = path.join(tmpDir, "aspnetcore-dev.key");
+      const rootPfxPath = path.join(tmpDir, "aspnetcore-dev-root.pfx");
 
       const updatedStatus = await this.certManager.check();
 
@@ -62,6 +64,7 @@ export class CertProvider {
         pfxBase64: fs.readFileSync(pfxPath).toString("base64"),
         pemCertBase64: fs.readFileSync(pemCertPath).toString("base64"),
         pemKeyBase64: fs.readFileSync(pemKeyPath).toString("base64"),
+        rootPfxBase64: fs.readFileSync(rootPfxPath).toString("base64"),
       };
 
       this.cached = material;

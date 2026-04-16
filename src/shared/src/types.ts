@@ -7,4 +7,6 @@ export interface CertMaterial {
   pfxBase64: string;
   pemCertBase64: string;
   pemKeyBase64: string;
+  /** Public-cert-only PFX for the .NET Root store (no private key). */
+  rootPfxBase64: string;
 }

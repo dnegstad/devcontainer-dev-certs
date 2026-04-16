@@ -1,6 +1,6 @@
 import * as forge from "node-forge";
 import { generateCertificate, GeneratedCert } from "./generator";
-import { exportPfx, exportPem } from "./exporter";
+import { exportPfx, exportPem, exportRootPfx } from "./exporter";
 import { VALIDITY_DAYS } from "./properties";
 import {
   PlatformCertificateStore,
@@ -89,7 +89,7 @@ export class CertManager {
    * Export the current cert in the specified format.
    */
   async exportCert(
-    format: "pfx" | "pem",
+    format: "pfx" | "pem" | "root-pfx",
     outputDir: string,
     password?: string
   ): Promise<void> {
@@ -102,6 +102,8 @@ export class CertManager {
         outputDir,
         password
       );
+    } else if (format === "root-pfx") {
+      exportRootPfx(this.currentCert!.cert, outputDir);
     } else {
       exportPem(this.currentCert!.cert, this.currentCert!.key, outputDir);
     }
