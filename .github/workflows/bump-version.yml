@@ -29,6 +29,10 @@ jobs:
           echo "next=$NEXT" >> "$GITHUB_OUTPUT"
           echo "Released $TAG → next dev version: $NEXT"
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
       - name: Update version in all manifests
         run: |
           NEXT="${{ steps.version.outputs.next }}"
@@ -44,6 +48,9 @@ jobs:
           # Devcontainer feature JSON
           f="src/devcontainer-feature/src/devcontainer-dev-certs/devcontainer-feature.json"
           jq --arg v "$NEXT" '.version = $v' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+
+          # Sync package-lock.json with updated workspace versions
+          npm install --package-lock-only
 
       - name: Create pull request
         uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
