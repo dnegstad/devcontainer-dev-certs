@@ -8,6 +8,7 @@ import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToPem } from "../cert/exporter";
 import {
   getDotNetStorePath,
+  getDotNetRootStorePath,
   getOpenSslTrustDir,
   getPemFileName,
 } from "@devcontainer-dev-certs/shared";
@@ -24,9 +25,8 @@ import {
  * 2. Writing a PEM to the OpenSSL trust directory with hash symlinks (for OpenSSL/curl/etc.)
  */
 export class LinuxCertificateStore extends BaseCertificateStore {
-  /** .NET Root store is the sibling "root" directory next to "my" */
   private get dotNetRootStorePath(): string {
-    return path.resolve(getDotNetStorePath(), "..", "root");
+    return getDotNetRootStorePath();
   }
 
   async findExistingDevCert(): Promise<{

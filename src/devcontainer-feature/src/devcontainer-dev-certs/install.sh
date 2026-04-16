@@ -30,6 +30,11 @@ fi
 DOTNET_STORE_DIR="${REMOTE_USER_HOME}/.dotnet/corefx/cryptography/x509stores/my"
 mkdir -p "${DOTNET_STORE_DIR}"
 
+# Create .NET X509Store CurrentUser\Root directory
+# The .NET runtime checks this store to determine whether a certificate is trusted
+DOTNET_ROOT_STORE_DIR="${REMOTE_USER_HOME}/.dotnet/corefx/cryptography/x509stores/root"
+mkdir -p "${DOTNET_ROOT_STORE_DIR}"
+
 # Create OpenSSL trust directory
 # PEM certs + hash symlinks go here; SSL_CERT_DIR includes this path
 TRUST_DIR="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust"
@@ -51,5 +56,6 @@ if id "${REMOTE_USER}" &>/dev/null; then
 fi
 
 echo "Dev certificate infrastructure ready."
-echo "  .NET cert store: ${DOTNET_STORE_DIR}"
-echo "  OpenSSL trust:   ${TRUST_DIR}"
+echo "  .NET cert store:      ${DOTNET_STORE_DIR}"
+echo "  .NET root store:      ${DOTNET_ROOT_STORE_DIR}"
+echo "  OpenSSL trust:        ${TRUST_DIR}"

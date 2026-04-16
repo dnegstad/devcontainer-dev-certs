@@ -17,6 +17,7 @@ vi.mock("../src/platform/processUtil", () => ({
 
 // Mock shared paths to use temp directories
 let testStoreDir: string;
+let testRootStoreDir: string;
 let testTrustDir: string;
 
 vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
@@ -25,6 +26,7 @@ vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
   return {
     ...original,
     getDotNetStorePath: () => testStoreDir,
+    getDotNetRootStorePath: () => testRootStoreDir,
     getOpenSslTrustDir: () => testTrustDir,
   };
 });
@@ -50,6 +52,7 @@ describe("LinuxCertificateStore", () => {
     vi.clearAllMocks();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-test-"));
     testStoreDir = path.join(tmpDir, "x509stores", "my");
+    testRootStoreDir = path.join(tmpDir, "x509stores", "root");
     testTrustDir = path.join(tmpDir, "trust");
     store = new LinuxCertificateStore();
   });
@@ -88,7 +91,7 @@ describe("LinuxCertificateStore", () => {
       const { cert, thumbprint } = makeTestCert();
       await store.trustCertificate(cert);
 
-      const rootDir = path.resolve(testStoreDir, "..", "root");
+      const rootDir = testRootStoreDir;
       const pfxPath = path.join(rootDir, `${thumbprint}.pfx`);
       expect(fs.existsSync(pfxPath)).toBe(true);
     });
@@ -136,7 +139,7 @@ describe("LinuxCertificateStore", () => {
       const { cert, thumbprint } = makeTestCert();
       await store.trustCertificate(cert);
 
-      const rootDir = path.resolve(testStoreDir, "..", "root");
+      const rootDir = testRootStoreDir;
       const pfxPath = path.join(rootDir, `${thumbprint}.pfx`);
       const pfxBytes = fs.readFileSync(pfxPath);
       const p12Der = forge.util.createBuffer(pfxBytes.toString("binary"));
@@ -234,7 +237,7 @@ describe("LinuxCertificateStore", () => {
       await store.saveCertificate(cert, key, thumbprint);
       await store.trustCertificate(cert);
 
-      const rootDir = path.resolve(testStoreDir, "..", "root");
+      const rootDir = testRootStoreDir;
       const pfxPath = path.join(rootDir, `${thumbprint}.pfx`);
       expect(fs.existsSync(pfxPath)).toBe(true);
 

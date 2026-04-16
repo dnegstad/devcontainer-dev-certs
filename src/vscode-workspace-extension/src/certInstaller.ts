@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import {
   getDotNetStorePath,
+  getDotNetRootStorePath,
   getOpenSslTrustDir,
   getPfxFileName,
   getPemFileName,
@@ -17,15 +18,18 @@ export function installCert(material: {
   thumbprint: string;
   pfxBase64: string;
   pemCertBase64: string;
+  rootPfxBase64: string;
 }): void {
   const dotNetStoreDir = getDotNetStorePath();
+  const dotNetRootStoreDir = getDotNetRootStorePath();
   const trustDir = getOpenSslTrustDir();
 
   // Ensure directories exist
   fs.mkdirSync(dotNetStoreDir, { recursive: true });
+  fs.mkdirSync(dotNetRootStoreDir, { recursive: true });
   fs.mkdirSync(trustDir, { recursive: true });
 
-  // 1. Write PFX to .NET cert store
+  // 1. Write PFX to .NET cert store (CurrentUser\My)
   //    Kestrel discovers this via X509Store(StoreName.My, StoreLocation.CurrentUser)
   const pfxPath = path.join(dotNetStoreDir, getPfxFileName(material.thumbprint));
   fs.writeFileSync(pfxPath, Buffer.from(material.pfxBase64, "base64"));
@@ -35,7 +39,17 @@ export function installCert(material: {
     // chmod may not be supported on all platforms
   }
 
-  // 2. Write PEM cert to OpenSSL trust directory
+  // 2. Write public-cert-only PFX to .NET Root store (CurrentUser\Root)
+  //    The .NET runtime checks this store to determine trust status.
+  const rootPfxPath = path.join(dotNetRootStoreDir, getPfxFileName(material.thumbprint));
+  fs.writeFileSync(rootPfxPath, Buffer.from(material.rootPfxBase64, "base64"));
+  try {
+    fs.chmodSync(rootPfxPath, 0o644);
+  } catch {
+    // chmod may not be supported on all platforms
+  }
+
+  // 3. Write PEM cert to OpenSSL trust directory
   const pemFileName = getPemFileName(material.thumbprint);
   const pemPath = path.join(trustDir, pemFileName);
   const pemContent = Buffer.from(material.pemCertBase64, "base64").toString(
@@ -48,7 +62,7 @@ export function installCert(material: {
     // chmod may not be supported on all platforms
   }
 
-  // 3. Create hash symlink for OpenSSL discovery
+  // 4. Create hash symlink for OpenSSL discovery
   createHashSymlink(trustDir, pemFileName, pemContent);
 }
 
@@ -60,9 +74,13 @@ export function isCertInstalled(thumbprint: string): boolean {
     getDotNetStorePath(),
     getPfxFileName(thumbprint)
   );
+  const rootPfxPath = path.join(
+    getDotNetRootStorePath(),
+    getPfxFileName(thumbprint)
+  );
   const pemPath = path.join(
     getOpenSslTrustDir(),
     getPemFileName(thumbprint)
   );
-  return fs.existsSync(pfxPath) && fs.existsSync(pemPath);
+  return fs.existsSync(pfxPath) && fs.existsSync(rootPfxPath) && fs.existsSync(pemPath);
 }

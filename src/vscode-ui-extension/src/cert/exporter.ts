@@ -68,3 +68,26 @@ export function certToDer(cert: forge.pki.Certificate): Buffer {
   const derBytes = forge.asn1.toDer(forge.pki.certificateToAsn1(cert));
   return Buffer.from(derBytes.getBytes(), "binary");
 }
+
+/**
+ * Export a public-cert-only PFX for the .NET Root store.
+ * This matches what `dotnet dev-certs https --trust` writes to
+ * ~/.dotnet/corefx/cryptography/x509stores/root/ on Linux.
+ */
+export function exportRootPfx(
+  cert: forge.pki.Certificate,
+  outputDir: string
+): string {
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
+    null as unknown as forge.pki.rsa.PrivateKey,
+    [cert],
+    "",
+    { algorithm: "3des" }
+  );
+  const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
+  const outPath = path.join(outputDir, "aspnetcore-dev-root.pfx");
+  fs.writeFileSync(outPath, Buffer.from(p12Der, "binary"));
+  return outPath;
+}
