@@ -1,35 +1,43 @@
 {
-    "id": "devcontainer-dev-certs",
-    "version": "0.1.1",
-    "name": "Dev Container Development Certificates",
-    "description": "Enables trusted HTTPS in Dev Containers by preparing certificate trust infrastructure and installing companion VS Code extensions that automatically generate, trust, and transfer ASP.NET and Aspire compatible development certificates from the host machine. Add to your devcontainer.json: \"features\": { \"ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs\": {} }",
-    "documentationURL": "https://github.com/dnegstad/devcontainer-dev-certs",
-    "keywords": ["dotnet", "https", "certificates", "ssl", "tls", "devcontainer", "remote"],
-    "options": {
-        "trustNss": {
-            "type": "boolean",
-            "default": false,
-            "description": "Install NSS tools (certutil) for Chromium/Firefox certificate trust inside the container"
-        },
-        "sslCertDirs": {
-            "type": "string",
-            "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
-            "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Override this if your base image uses non-standard paths."
-        }
+  "id": "devcontainer-dev-certs",
+  "version": "0.1.2-pre",
+  "name": "Dev Container Development Certificates",
+  "description": "Enables trusted HTTPS in Dev Containers by preparing certificate trust infrastructure and installing companion VS Code extensions that automatically generate, trust, and transfer ASP.NET and Aspire compatible development certificates from the host machine. Add to your devcontainer.json: \"features\": { \"ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs\": {} }",
+  "documentationURL": "https://github.com/dnegstad/devcontainer-dev-certs",
+  "keywords": [
+    "dotnet",
+    "https",
+    "certificates",
+    "ssl",
+    "tls",
+    "devcontainer",
+    "remote"
+  ],
+  "options": {
+    "trustNss": {
+      "type": "boolean",
+      "default": false,
+      "description": "Install NSS tools (certutil) for Chromium/Firefox certificate trust inside the container"
     },
-    "customizations": {
-        "vscode": {
-            "extensions": [
-                "dnegstad.devcontainer-dev-certs-host",
-                "dnegstad.devcontainer-dev-certs-remote"
-            ]
-        }
-    },
-    "remoteEnv": {
-        "SSL_CERT_DIR": "${containerEnv:HOME}/.aspnet/dev-certs/trust:/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
-    },
-    "installsAfter": [
-        "ghcr.io/devcontainers/features/common-utils",
-        "ghcr.io/devcontainers/features/dotnet"
-    ]
+    "sslCertDirs": {
+      "type": "string",
+      "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
+      "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Override this if your base image uses non-standard paths."
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dnegstad.devcontainer-dev-certs-host",
+        "dnegstad.devcontainer-dev-certs-remote"
+      ]
+    }
+  },
+  "remoteEnv": {
+    "SSL_CERT_DIR": "${containerEnv:HOME}/.aspnet/dev-certs/trust:/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils",
+    "ghcr.io/devcontainers/features/dotnet"
+  ]
 }
