@@ -28,7 +28,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onCommand:devcontainer-dev-certs.getCertMaterial"
   ],
   "main": "./dist/extension.js",
   "contributes": {

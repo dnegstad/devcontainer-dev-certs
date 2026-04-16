@@ -58,19 +58,9 @@ async function injectCertificate(): Promise<void> {
     return;
   }
 
-  // Without extensionDependencies there is no cross-host activation
-  // ordering guarantee — the UI extension may still be activating.
-  // Wait for its command to appear before proceeding.
-  if (!(await waitForCommand(GET_CERT_COMMAND))) {
-    log(
-      `Command ${GET_CERT_COMMAND} not available after waiting — UI extension may have failed to activate.`
-    );
-    vscode.window.showErrorMessage(
-      "Dev Certs: The host extension is installed but did not activate. " +
-        "Try reloading the window."
-    );
-    return;
-  }
+  // The UI extension declares onCommand:devcontainer-dev-certs.getCertMaterial
+  // as an activation event, so executeCommand will trigger its activation and
+  // wait for the command handler to be registered before executing.
 
   // Retrieve certificate material from the host UI extension
   let material: CertMaterial | null;
@@ -123,27 +113,6 @@ async function injectCertificate(): Promise<void> {
         message
     );
   }
-}
-
-/**
- * Poll `vscode.commands.getCommands()` until the given command appears
- * or the timeout expires. Handles the activation race when the UI
- * extension is installed but hasn't registered its command yet.
- */
-async function waitForCommand(
-  commandId: string,
-  timeoutMs = 10_000,
-  intervalMs = 500
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const commands = await vscode.commands.getCommands(true);
-    if (commands.includes(commandId)) {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-  return false;
 }
 
 async function promptInstallUiExtension(): Promise<void> {
