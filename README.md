@@ -43,7 +43,7 @@ Add the dev container feature to your project's `devcontainer.json`:
 ```json
 {
     "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs": {}
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:latest": {}
     }
 }
 ```
