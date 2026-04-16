@@ -11,7 +11,7 @@ Add the devcontainer feature to your `devcontainer.json` and everything works au
 ```json
 {
     "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs": {}
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:latest": {}
     }
 }
 ```
