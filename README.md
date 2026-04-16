@@ -1,7 +1,5 @@
 # Devcontainer Dev Certificates
 
-> **Proof of concept** — this project is functional enough to validate the experience locally but has not been published to the VS Code Marketplace or any container registry. The devcontainer feature reference, marketplace links, and CI/CD workflows in this repo reflect an intended published state, but additional work is necessary before this can be made live.
-
 Automatic HTTPS development certificate management for .NET or Aspire projects in devcontainers and VS Code remote environments.
 
 ## What This Does
@@ -20,6 +18,43 @@ Add the devcontainer feature to your `devcontainer.json` and everything works au
 
 No `dotnet dev-certs` commands, no manual PFX exports, no environment variable configuration.
 
+## Getting Started
+
+### Prerequisites
+
+- VS Code 1.100 or later
+- The [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension
+- Docker or a compatible container runtime
+
+### Install the Host Extension
+
+The dev container feature requests installation of the host extension automatically, but you can also install it ahead of time:
+
+- **VS Code Marketplace:** [Dev Container Dev Certificates (Host)](https://marketplace.visualstudio.com/items?itemName=dnegstad.devcontainer-dev-certs-host)
+- **Extensions view:** search for `dnegstad.devcontainer-dev-certs-host`
+- **CLI:** `code --install-extension dnegstad.devcontainer-dev-certs-host`
+
+The remote extension (`dnegstad.devcontainer-dev-certs-remote`) is installed inside the container automatically by the feature and does not need manual installation.
+
+### Add the Feature
+
+Add the dev container feature to your project's `devcontainer.json`:
+
+```json
+{
+    "features": {
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs": {}
+    }
+}
+```
+
+Then rebuild or reopen your project in the dev container. On first use:
+
+1. The host extension shows a consent prompt, then generates a development certificate and trusts it in your OS certificate store. On Windows this triggers a system dialog; on macOS the keychain may prompt for a password. This only happens once.
+2. The remote extension receives the certificate and installs it in the container's .NET X509 store and OpenSSL trust directory.
+3. ASP.NET, Aspire, and CLI tools like `curl` and `wget` trust the certificate automatically — no environment variables or manual configuration needed.
+4. Your host browser trusts the certificate on forwarded ports.
+
 ## How It Works
 
 The solution has three components that work together:
@@ -32,7 +67,7 @@ The solution has three components that work together:
    - The .NET X509 store (`~/.dotnet/corefx/cryptography/x509stores/my/`) where Kestrel discovers it automatically via its `GetDevelopmentCertificateFromStore()` fallback
    - An OpenSSL trust directory (`~/.aspnet/dev-certs/trust/`) with hash symlinks (c_rehash, implemented in pure TypeScript) so `curl`, `wget`, and other OpenSSL-based tools trust it
 
-The two extensions communicate using VS Code's cross-host `executeCommand()` routing with `"api": "none"` and `extensionDependencies` for guaranteed activation ordering. This architecture is transport-agnostic — it works for devcontainers today and can support SSH remoting, WSL, or any future VS Code remote backend.
+The two extensions communicate using VS Code's cross-host `executeCommand()` routing. The remote extension detects whether the host extension is installed and prompts to install it if missing. This architecture is transport-agnostic — it works for devcontainers today and can support SSH remoting, WSL, or any future VS Code remote backend.
 
 ## Repository Layout
 
@@ -71,6 +106,16 @@ test/
 ```
 
 ## Feature Options
+
+```json
+{
+    "features": {
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs": {
+            "trustNss": true
+        }
+    }
+}
+```
 
 | Option | Default | Description |
 |--------|---------|-------------|

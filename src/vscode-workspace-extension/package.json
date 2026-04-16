@@ -16,9 +16,6 @@
   "extensionKind": [
     "workspace"
   ],
-  "extensionDependencies": [
-    "dnegstad.devcontainer-dev-certs-host"
-  ],
   "keywords": [
     "dotnet",
     "aspnet",

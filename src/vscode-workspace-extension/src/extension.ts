@@ -40,9 +40,6 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   // Auto-inject if configured.
-  // The UI extension is guaranteed to be activated before us because
-  // we declare it in extensionDependencies and it declares "api": "none",
-  // which gives VS Code a hard cross-host activation ordering guarantee.
   if (config.get<boolean>("autoInject", true)) {
     log("Auto-inject enabled, requesting certificate material...");
     injectCertificate();
@@ -50,13 +47,20 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 async function injectCertificate(): Promise<void> {
-  // Verify the command is available — if not, the UI extension isn't installed
-  const commands = await vscode.commands.getCommands(true);
-  if (!commands.includes(GET_CERT_COMMAND)) {
-    log(`Command ${GET_CERT_COMMAND} not found — UI extension not available.`);
+  // Check whether the UI extension is installed on the host.
+  // We intentionally do not use extensionDependencies because that
+  // prevents activation entirely when the host extension is missing,
+  // which blocks us from showing a helpful install prompt.
+  const uiExtension = vscode.extensions.getExtension(UI_EXTENSION_ID);
+  if (!uiExtension) {
+    log(`UI extension ${UI_EXTENSION_ID} not installed.`);
     await promptInstallUiExtension();
     return;
   }
+
+  // The UI extension declares onCommand:devcontainer-dev-certs.getCertMaterial
+  // as an activation event, so executeCommand will trigger its activation and
+  // wait for the command handler to be registered before executing.
 
   // Retrieve certificate material from the host UI extension
   let material: CertMaterial | null;
