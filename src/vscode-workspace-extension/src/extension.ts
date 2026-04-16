@@ -47,22 +47,17 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 async function injectCertificate(): Promise<void> {
-  // Check whether the UI extension is installed on the host.
-  // We intentionally do not use extensionDependencies because that
-  // prevents activation entirely when the host extension is missing,
-  // which blocks us from showing a helpful install prompt.
-  const uiExtension = vscode.extensions.getExtension(UI_EXTENSION_ID);
-  if (!uiExtension) {
-    log(`UI extension ${UI_EXTENSION_ID} not installed.`);
-    await promptInstallUiExtension();
-    return;
-  }
-
   // The UI extension declares onCommand:devcontainer-dev-certs.getCertMaterial
   // as an activation event, so executeCommand will trigger its activation and
   // wait for the command handler to be registered before executing.
+  //
+  // We do not use vscode.extensions.getExtension() to pre-check installation
+  // because getExtension() only sees extensions in the same extension host.
+  // The UI extension runs in the local/UI host while this extension runs in
+  // the remote host, so getExtension() would always return undefined.
+  // Instead we call executeCommand directly and distinguish "not installed"
+  // from other errors via the rejection message.
 
-  // Retrieve certificate material from the host UI extension
   let material: CertMaterial | null;
   try {
     log("Calling getCertMaterial on UI extension...");
@@ -72,10 +67,19 @@ async function injectCertificate(): Promise<void> {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log(`Error retrieving certificate from host: ${message}`);
-    vscode.window.showErrorMessage(
-      "Dev Certs: Failed to generate or trust the certificate on the host machine. " +
-        "Check the Dev Container Dev Certs output on the host for details."
-    );
+
+    if (message.includes("not found")) {
+      // VS Code rejects with "command '<id>' not found" when no handler is
+      // registered, which means the host UI extension is not installed.
+      log(`UI extension ${UI_EXTENSION_ID} not installed.`);
+      await promptInstallUiExtension();
+    } else {
+      // The UI extension is installed but threw an error during execution.
+      vscode.window.showErrorMessage(
+        "Dev Certs: Failed to generate or trust the certificate on the host machine. " +
+          "Check the Dev Container Dev Certs output on the host for details."
+      );
+    }
     return;
   }
 
