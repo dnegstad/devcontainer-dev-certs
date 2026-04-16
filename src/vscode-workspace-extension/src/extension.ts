@@ -68,7 +68,7 @@ async function injectCertificate(): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     log(`Error retrieving certificate from host: ${message}`);
 
-    if (message.includes("not found")) {
+    if (message.includes(`command '${GET_CERT_COMMAND}' not found`)) {
       // VS Code rejects with "command '<id>' not found" when no handler is
       // registered, which means the host UI extension is not installed.
       log(`UI extension ${UI_EXTENSION_ID} not installed.`);
