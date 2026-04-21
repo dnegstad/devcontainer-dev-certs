@@ -12,6 +12,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 jobs:
   extensions:
     name: Build & Test Extensions
