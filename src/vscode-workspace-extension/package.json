@@ -62,6 +62,7 @@
     "build": "node esbuild.mjs",
     "build:prod": "node esbuild.mjs --production",
     "watch": "node esbuild.mjs --watch",
+    "test": "vitest run",
     "lint": "eslint src --ext ts",
     "package": "vsce package --no-dependencies"
   },
@@ -73,6 +74,7 @@
     "@types/vscode": "^1.100.0",
     "@vscode/vsce": "^3.8.0",
     "esbuild": "^0.28.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.4"
   }
 }

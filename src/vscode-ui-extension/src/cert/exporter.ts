@@ -1,6 +1,7 @@
 import * as forge from "node-forge";
 import * as fs from "fs";
 import * as path from "path";
+import type { LoadedCert } from "./loader";
 import { ASPNET_HTTPS_OID_FRIENDLY_NAME } from "./properties";
 
 /**
@@ -90,4 +91,61 @@ export function exportRootPfx(
   const outPath = path.join(outputDir, "aspnetcore-dev-root.pfx");
   fs.writeFileSync(outPath, Buffer.from(p12Der, "binary"));
   return outPath;
+}
+
+export interface ExportedLoadedCert {
+  pemCertPath: string;
+  pemKeyPath: string | null;
+  pfxPath: string | null;
+  rootPfxPath: string | null;
+}
+
+/**
+ * Export a user-managed (or generically loaded) certificate to a directory
+ * under a stable `{name}.*` filename scheme. PFX artifacts are only produced
+ * when the cert has a private key attached; the root PFX is only produced
+ * when `includeRootPfx` is true.
+ */
+export function exportLoadedCert(
+  loaded: LoadedCert,
+  name: string,
+  outputDir: string,
+  options: { includeRootPfx?: boolean } = {}
+): ExportedLoadedCert {
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const pemCertPath = path.join(outputDir, `${name}.pem`);
+  fs.writeFileSync(pemCertPath, forge.pki.certificateToPem(loaded.cert));
+
+  let pemKeyPath: string | null = null;
+  let pfxPath: string | null = null;
+  if (loaded.key) {
+    pemKeyPath = path.join(outputDir, `${name}.key`);
+    fs.writeFileSync(pemKeyPath, forge.pki.privateKeyToPem(loaded.key));
+
+    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
+      loaded.key,
+      [loaded.cert],
+      "",
+      { algorithm: "3des" }
+    );
+    const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
+    pfxPath = path.join(outputDir, `${name}.pfx`);
+    fs.writeFileSync(pfxPath, Buffer.from(p12Der, "binary"));
+  }
+
+  let rootPfxPath: string | null = null;
+  if (options.includeRootPfx) {
+    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
+      null as unknown as forge.pki.rsa.PrivateKey,
+      [loaded.cert],
+      "",
+      { algorithm: "3des" }
+    );
+    const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
+    rootPfxPath = path.join(outputDir, `${name}-root.pfx`);
+    fs.writeFileSync(rootPfxPath, Buffer.from(p12Der, "binary"));
+  }
+
+  return { pemCertPath, pemKeyPath, pfxPath, rootPfxPath };
 }

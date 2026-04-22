@@ -121,6 +121,59 @@ test/
 |--------|---------|-------------|
 | `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container |
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override for non-standard base images. |
+| `generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert. Set to `false` to skip generation (useful when you only want to sync user-managed certs). |
+| `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` VS Code setting. |
+| `extraCertDestinations` | `""` | Comma-separated list of additional paths to write cert artifacts to. Each entry is `<abs-path>[=<format>]` where `format` is `pem`, `key`, `pem-bundle`, `pfx`, or `all` (default). Trailing `/` means a directory target; `${name}` may be used in the filename. Example: `/etc/nginx/certs/=pem,/var/myapp/`. |
+
+## User-managed certificates
+
+The host extension can sync arbitrary host-side certificates into your dev containers alongside (or instead of) the auto-generated dev cert. Configure them in your user or workspace VS Code settings:
+
+```json
+{
+    "devcontainerDevCerts.userCertificates": [
+        {
+            "name": "corp-ca",
+            "pemCertPath": "/Users/me/certs/corp-ca.pem"
+        },
+        {
+            "name": "staging",
+            "pfxPath": "/Users/me/certs/staging.pfx",
+            "pfxPassword": "hunter2",
+            "trustInContainer": true
+        }
+    ]
+}
+```
+
+Each entry supplies exactly one of `pfxPath` (+ optional `pfxPassword`) or `pemCertPath` (+ optional `pemKeyPath`). Omitting the key produces a CA-only entry — the cert is still planted in the container trust store, but no private key is synced and no PFX is written to the .NET store. Expired certificates are synced anyway but produce a one-time warning notification so you know why TLS clients are rejecting them.
+
+User-managed certs are **never** added to the host OS trust store; the assumption is you already trust them on the host if you're syncing them.
+
+## Extra destinations
+
+`extraCertDestinations` writes cert artifacts to additional paths inside the container — useful for non-.NET workloads (nginx, Java keystores, Python requests bundles, etc.). Formats:
+
+| Format | Writes |
+|--------|--------|
+| `pem` | `{name}.pem` (cert only) |
+| `key` | `{name}.key` (private key; skipped when no key is available) |
+| `pem-bundle` | `{name}-bundle.pem` (cert + key concatenated) |
+| `pfx` | `{name}.pfx` (skipped when no key is available) |
+| `all` *(default)* | all of the above |
+
+Directory targets (trailing `/`) rehash the directory once per write so OpenSSL can discover the PEMs.
+
+### Filename contract
+
+Every cert written to an extra destination uses a stable, documented `{name}` that downstream configuration (nginx `ssl_certificate`, Java `keystore` scripts, etc.) can rely on:
+
+| Cert | Filename stem |
+|------|---------------|
+| Auto-generated .NET dev cert | `aspnetcore-dev` |
+| User-managed cert | the `name` field of the matching `userCertificates` entry |
+
+So with `extraCertDestinations = /etc/nginx/certs/` and a user cert named `corp-ca`, the directory ends up containing `aspnetcore-dev.pem`, `aspnetcore-dev.key`, `aspnetcore-dev.pfx`, `aspnetcore-dev-bundle.pem`, `corp-ca.pem`, `corp-ca.key`, `corp-ca.pfx`, and `corp-ca-bundle.pem` (subject to the format filter). The thumbprint-keyed filenames (`{thumbprint}.pfx`, `aspnetcore-localhost-{thumbprint}.pem`) remain only in the canonical .NET directories where Kestrel requires them — they do not appear in extra destinations.
 
 ## Development
 
@@ -142,10 +195,9 @@ The Extension Development Host opens with the UI extension loaded on the host si
 
 ## Limitations
 
-- **Only .NET development certificates.** This project generates certificates that match the format produced by `dotnet dev-certs https` (specific OID marker, subject, SAN entries). It does not support injecting arbitrary CA certificates or custom certificates into devcontainers.
-- **VS Code only.** The companion extension pattern relies on VS Code's cross-host command routing. Other editors (JetBrains, Vim, etc.) are not supported, though the devcontainer feature includes a `setup-cert.sh` fallback script for manual use.
-- **Single certificate.** The tool manages one dev cert at a time. Running `trust` when a valid cert already exists reuses it; `clean` removes it entirely.
-- **Host trust requires user interaction.** On Windows, trusting the certificate triggers a system dialog. On macOS, the keychain may prompt for a password. This only happens once.
+- **Auto-generated dev cert matches .NET's format only.** The `generateDotNetCert` flow produces a cert identical to `dotnet dev-certs https` (specific OID marker, subject, SAN entries). To sync differently-shaped certs (corporate CAs, custom wildcard certs, etc.), add them via the `devcontainerDevCerts.userCertificates` VS Code setting — they're copied as-is.
+- **VS Code only.** The companion extension pattern relies on VS Code's cross-host command routing. Other editors (JetBrains, Vim, etc.) are not supported, though the devcontainer feature includes a `setup-cert.sh` fallback script (with a `--bundle-json` form for multi-cert bundles) for manual use.
+- **Host trust requires user interaction.** On Windows, trusting the auto-generated dev cert triggers a system dialog. On macOS, the keychain may prompt for a password. This only happens once and only for the .NET dev cert — user-managed certs are never added to the host OS trust store.
 
 ## Supported Platforms
 

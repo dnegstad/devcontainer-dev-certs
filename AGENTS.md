@@ -6,11 +6,18 @@ This is a monorepo containing three components that together provide automatic H
 
 The system uses the VS Code **companion extension pattern**: two extensions communicate via cross-host `executeCommand()` routing.
 
-- **UI extension** (`src/vscode-ui-extension/`) — `extensionKind: ["ui"]`, runs on the host machine. Uses `node-forge` for X.509 certificate generation and platform-specific mechanisms for OS trust store management. Registers a single internal command `devcontainer-dev-certs.getCertMaterial` that generates, trusts, and exports the certificate, returning PFX + PEM as base64. Platform trust is handled via PowerShell (Windows), the `security` CLI (macOS), and file-based stores with OpenSSL rehash (Linux).
+- **UI extension** (`src/vscode-ui-extension/`) — `extensionKind: ["ui"]`, runs on the host machine. Uses `node-forge` for X.509 certificate generation, loading, and platform-specific mechanisms for OS trust store management. Registers two cross-host commands:
+  - `devcontainer-dev-certs.getAllCertMaterial({ includeDotNetDev, includeUserCerts })` — v2 multi-cert entrypoint. Returns a `CertBundle` combining the optional auto-generated .NET dev cert with any user-managed certificates configured in `devcontainerDevCerts.userCertificates`.
+  - `devcontainer-dev-certs.getCertMaterial(autoProvision)` — legacy single-cert entrypoint, kept for backward compatibility with older pinned workspace extensions. Returns `null` when the host has disabled dotnet cert generation.
 
-- **Workspace extension** (`src/vscode-workspace-extension/`) — `extensionKind: ["workspace"]`, runs in the remote (container/SSH/WSL). Uses `vscode.extensions.getExtension()` to detect whether the UI extension is installed and prompts for installation if missing. The UI extension declares `onCommand:devcontainer-dev-certs.getCertMaterial` as an activation event, so `executeCommand` triggers its activation and waits for the handler — no polling or `extensionDependencies` needed. Calls `getCertMaterial`, writes PFX to the .NET X509 store path and PEM + hash symlinks to the OpenSSL trust directory.
+  Platform trust for the auto-generated cert is handled via PowerShell (Windows), the `security` CLI (macOS), and file-based stores with OpenSSL rehash (Linux). User-managed certs are never added to the host OS trust store.
 
-- **Devcontainer feature** (`src/devcontainer-feature/`) — sets `SSL_CERT_DIR` via `containerEnv`, creates `.dotnet/corefx/cryptography/x509stores/my/` and `.aspnet/dev-certs/trust/` directories, requests both extensions via `customizations.vscode.extensions`.
+- **Workspace extension** (`src/vscode-workspace-extension/`) — `extensionKind: ["workspace"]`, runs in the remote (container/SSH/WSL). Calls `getAllCertMaterial` first, falling back to `getCertMaterial` if the UI extension is on an older version. Parses `DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS` into an `ExtraDestination[]` via `src/util/destinations.ts`, then for each cert in the bundle:
+  1. Installs it to the canonical .NET + OpenSSL locations (`installDotNetDevCert` / `installUserCert` in `certInstaller.ts`).
+  2. Writes each cert to every configured extra destination via `writeExtraDestination`.
+  3. Runs a single rehash per directory destination after all writes.
+
+- **Devcontainer feature** (`src/devcontainer-feature/`) — sets `SSL_CERT_DIR` via `containerEnv`, creates `.dotnet/corefx/cryptography/x509stores/my/` and `.aspnet/dev-certs/trust/` directories, requests both extensions via `customizations.vscode.extensions`. `install.sh` also pre-creates any directories named in `extraCertDestinations` with `vscode` ownership so the remote extension can write without privileged escalation. Option values (`generateDotNetCert`, `syncUserCertificates`, `extraCertDestinations`) are surfaced to the runtime container via `/etc/environment`.
 
 ## Key Design Decisions
 
@@ -44,9 +51,12 @@ These decisions were made deliberately. Do not change them without discussion.
 
 | Path (in container) | Purpose |
 |---------------------|---------|
-| `~/.dotnet/corefx/cryptography/x509stores/my/{thumbprint}.pfx` | .NET X509Store — Kestrel reads from here |
-| `~/.aspnet/dev-certs/trust/aspnetcore-localhost-{thumbprint}.pem` | OpenSSL trust — PEM cert |
-| `~/.aspnet/dev-certs/trust/{hash}.0` | OpenSSL trust — hash symlink (c_rehash) |
+| `~/.dotnet/corefx/cryptography/x509stores/my/{thumbprint}.pfx` | .NET X509Store — Kestrel reads from here. One per cert (dotnet-dev or user) that has a private key. |
+| `~/.dotnet/corefx/cryptography/x509stores/root/{thumbprint}.pfx` | .NET Root store — public-cert-only PFX for trust reporting. |
+| `~/.aspnet/dev-certs/trust/aspnetcore-localhost-{thumbprint}.pem` | OpenSSL trust — PEM for the auto-generated dotnet dev cert. |
+| `~/.aspnet/dev-certs/trust/{userCert.name}.pem` | OpenSSL trust — PEM for a user-managed cert, keyed by the user-supplied `name` (stable, predictable filename). |
+| `~/.aspnet/dev-certs/trust/{hash}.0` | OpenSSL trust — hash symlink (c_rehash) pointing at either of the above. |
+| `{extraCertDestinations entry}/{certName}.{pem,key,pfx}` or `{certName}-bundle.pem` | Additional per-destination files. `certName` is `aspnetcore-dev` for the dotnet dev cert, or the `userCertificates[].name` for user certs. This is a stable contract; downstream configs may rely on it. |
 
 ## Certificate Properties
 
