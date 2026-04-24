@@ -158,18 +158,15 @@ async function tryGetBundle(
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes(`command '${GET_BUNDLE_COMMAND}' not found`)) {
+      // Either the UI extension isn't installed at all or it's pinned to an
+      // older version without v2. Let the legacy fallback sort out which —
+      // if the UI ext isn't installed, the legacy executeCommand will throw
+      // the same "not found" and its handler will prompt to install.
       log(
-        "UI extension does not support getAllCertMaterial; falling back to legacy single-cert command."
+        "getAllCertMaterial not available; falling back to legacy single-cert command."
       );
     } else {
       log(`Error retrieving cert bundle from host: ${message}`);
-      if (
-        err instanceof Error &&
-        message.includes(`command '${GET_CERT_COMMAND}' not found`)
-      ) {
-        await promptInstallUiExtension();
-        return null;
-      }
       vscode.window.showErrorMessage(
         "Dev Certs: Failed to obtain certificates from the host machine. " +
           "Check the Dev Container Dev Certs output on the host for details."
