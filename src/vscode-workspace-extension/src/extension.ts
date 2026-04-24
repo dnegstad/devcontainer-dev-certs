@@ -83,7 +83,9 @@ async function injectCertificate(): Promise<void> {
   }
 
   const rehashDirs = new Set<string>();
-  let successes = 0;
+  const newInstalls: string[] = [];
+  const alreadyInstalled: string[] = [];
+  const failures: string[] = [];
 
   for (const material of bundle.certs) {
     try {
@@ -91,14 +93,17 @@ async function injectCertificate(): Promise<void> {
         log(
           `Cert '${material.name}' (${material.thumbprint}) already installed, skipping canonical install.`
         );
+        alreadyInstalled.push(material.name);
       } else if (material.kind === "dotnet-dev") {
         log(`Installing dotnet dev cert (${material.thumbprint})...`);
         installDotNetDevCert(material);
+        newInstalls.push(material.name);
       } else {
         log(
           `Installing user cert '${material.name}' (${material.thumbprint})...`
         );
         installUserCert(material);
+        newInstalls.push(material.name);
       }
 
       for (const dest of parsed.destinations) {
@@ -106,9 +111,9 @@ async function injectCertificate(): Promise<void> {
         for (const err of result.errors) log(err);
         if (result.rehashDir) rehashDirs.add(result.rehashDir);
       }
-      successes++;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      failures.push(material.name);
       log(`Error installing cert '${material.name}': ${message}`);
       vscode.window.showErrorMessage(
         `Dev Certs: Failed to install certificate '${material.name}'. ${message}`
@@ -118,11 +123,21 @@ async function injectCertificate(): Promise<void> {
 
   rehashExtraDestinations(rehashDirs);
 
-  if (successes > 0) {
-    const names = bundle.certs.map((c) => c.name).join(", ");
-    log(`Installed ${successes} certificate(s): ${names}`);
+  const processed = newInstalls.length + alreadyInstalled.length;
+  if (processed > 0) {
+    log(
+      `Synced ${processed} certificate(s): ${newInstalls.length} new, ` +
+        `${alreadyInstalled.length} already present` +
+        (failures.length ? `, ${failures.length} failed` : "")
+    );
+  }
+
+  // Only surface a toast when we actually planted something new. Activation
+  // on every window reload shouldn't keep nagging the user about the same
+  // certs that are already in place.
+  if (newInstalls.length > 0) {
     vscode.window.showInformationMessage(
-      `Dev certificates installed (${successes}): ${names}`
+      `Dev certificates installed (${newInstalls.length}): ${newInstalls.join(", ")}`
     );
   }
 }
