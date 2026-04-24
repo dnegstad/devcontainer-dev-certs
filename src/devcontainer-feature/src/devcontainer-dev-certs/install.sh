@@ -80,22 +80,33 @@ if [ -n "${EXTRA_CERT_DESTINATIONS}" ]; then
     done
 fi
 
+# Append KEY="VALUE" to /etc/environment with proper escaping for the PAM
+# parser (pam_env): backslashes and double quotes inside the value must be
+# escaped. Always quote, even for values without special chars, so unquoted
+# spaces don't silently truncate the variable.
+append_env() {
+    local key="$1"
+    local value="$2"
+    local escaped="${value//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    echo "${key}=\"${escaped}\"" >> /etc/environment
+}
+
 # If the user overrode sslCertDirs, we need to override the containerEnv value
 # that was baked into the image with the default paths. containerEnv handles the
 # default case; this only fires on user override.
 if [ "${SSL_CERT_DIRS}" != "${DEFAULT_SSL_CERT_DIRS}" ]; then
     SSL_CERT_DIR_VALUE="\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
-    echo "SSL_CERT_DIR=${SSL_CERT_DIR_VALUE}" >> /etc/environment
+    append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_VALUE}"
     echo "Overriding SSL_CERT_DIR: ${SSL_CERT_DIR_VALUE}"
 fi
 
 # Surface the feature options to the running container so the remote extension
-# can read them via process.env.
-{
-    echo "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET=${GENERATE_DOTNET_CERT}"
-    echo "DEVCONTAINER_DEV_CERTS_SYNC_USER=${SYNC_USER_CERTIFICATES}"
-    echo "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS=${EXTRA_CERT_DESTINATIONS}"
-} >> /etc/environment
+# can read them via process.env. extraCertDestinations can contain spaces
+# (users routinely separate CSV entries with `, `), so unconditionally quote.
+append_env "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
+append_env "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
+append_env "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
 
 # Set ownership
 if id "${REMOTE_USER}" &>/dev/null; then
