@@ -123,7 +123,7 @@ test/
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override for non-standard base images. |
 | `generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert. Set to `false` to skip generation (useful when you only want to sync user-managed certs). |
 | `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` VS Code setting. |
-| `extraCertDestinations` | `""` | Comma-separated list of additional paths to write cert artifacts to. Each entry is `<abs-path>[=<format>]` where `format` is `pem`, `key`, `pem-bundle`, `pfx`, or `all` (default). Trailing `/` means a directory target; `${name}` may be used in the filename. Example: `/etc/nginx/certs/=pem,/var/myapp/`. |
+| `extraCertDestinations` | `""` | Comma-separated list of additional directories to write cert artifacts to. Each entry is `<abs-dir>[=<format>]` where `format` is `pem`, `key`, `pem-bundle`, `pfx`, or `all` (default). Every synced cert is written under the directory as `{name}.{pem,key,pfx}` (and/or `{name}-bundle.pem`). Example: `/etc/nginx/certs=pem,/var/myapp`. |
 
 ## User-managed certificates
 
@@ -152,17 +152,17 @@ User-managed certs are **never** added to the host OS trust store; the assumptio
 
 ## Extra destinations
 
-`extraCertDestinations` writes cert artifacts to additional paths inside the container — useful for non-.NET workloads (nginx, Java keystores, Python requests bundles, etc.). Formats:
+`extraCertDestinations` writes cert artifacts into additional directories inside the container — useful for non-.NET workloads (nginx, Java keystores, Python requests bundles, etc.). Each entry is a directory; every synced cert gets a set of files under it named after the cert. Formats:
 
-| Format | Writes |
-|--------|--------|
+| Format | Writes per cert |
+|--------|-----------------|
 | `pem` | `{name}.pem` (cert only) |
 | `key` | `{name}.key` (private key; skipped when no key is available) |
 | `pem-bundle` | `{name}-bundle.pem` (cert + key concatenated) |
 | `pfx` | `{name}.pfx` (skipped when no key is available) |
 | `all` *(default)* | all of the above |
 
-Directory targets (trailing `/`) rehash the directory once per write so OpenSSL can discover the PEMs.
+Directory-level rehash runs once per destination after all writes so OpenSSL can discover the PEMs.
 
 ### Filename contract
 
@@ -173,7 +173,7 @@ Every cert written to an extra destination uses a stable, documented `{name}` th
 | Auto-generated .NET dev cert | `aspnetcore-dev` |
 | User-managed cert | the `name` field of the matching `userCertificates` entry |
 
-So with `extraCertDestinations = /etc/nginx/certs/` and a user cert named `corp-ca`, the directory ends up containing `aspnetcore-dev.pem`, `aspnetcore-dev.key`, `aspnetcore-dev.pfx`, `aspnetcore-dev-bundle.pem`, `corp-ca.pem`, `corp-ca.key`, `corp-ca.pfx`, and `corp-ca-bundle.pem` (subject to the format filter). The thumbprint-keyed filenames (`{thumbprint}.pfx`, `aspnetcore-localhost-{thumbprint}.pem`) remain only in the canonical .NET directories where Kestrel requires them — they do not appear in extra destinations.
+So with `extraCertDestinations = /etc/nginx/certs` and a user cert named `corp-ca`, the directory ends up containing `aspnetcore-dev.pem`, `aspnetcore-dev.key`, `aspnetcore-dev.pfx`, `aspnetcore-dev-bundle.pem`, `corp-ca.pem`, `corp-ca.key`, `corp-ca.pfx`, and `corp-ca-bundle.pem` (subject to the format filter). The thumbprint-keyed filenames (`{thumbprint}.pfx`, `aspnetcore-localhost-{thumbprint}.pem`) remain only in the canonical .NET directories where Kestrel requires them — they do not appear in extra destinations.
 
 ## Development
 

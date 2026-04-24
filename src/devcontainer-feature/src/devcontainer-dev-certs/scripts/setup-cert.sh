@@ -20,8 +20,8 @@
 #       }
 #     ],
 #     "extraDestinations": [
-#       { "path": "/etc/nginx/certs/", "format": "pem" },
-#       { "path": "/var/app/bundle.pem", "format": "pem-bundle" }
+#       { "path": "/etc/nginx/certs", "format": "pem" },
+#       { "path": "/var/app", "format": "pem-bundle" }
 #     ]
 #   }
 #
@@ -109,8 +109,8 @@ install_cert_canonical() {
     fi
 }
 
-# Write cert artifacts to an extra destination per the format grammar.
-# Args: dest_path, dest_format, name, pem_path, pem_key_path, pfx_path, is_last (for rehash)
+# Write cert artifacts to an extra destination directory per the format grammar.
+# Args: dest_path, dest_format, name, pem_path, pem_key_path, pfx_path
 write_extra_destination() {
     local dest_path="$1"
     local dest_format="$2"
@@ -119,17 +119,8 @@ write_extra_destination() {
     local pem_key_path="$5"
     local pfx_path="$6"
 
-    local is_dir=false
-    if [[ "${dest_path}" == */ ]]; then
-        is_dir=true
-    fi
-
-    local target_dir
-    if [ "${is_dir}" = "true" ]; then
-        target_dir="${dest_path%/}"
-    else
-        target_dir="$(dirname "${dest_path}")"
-    fi
+    # Every destination is a directory.
+    local target_dir="${dest_path%/}"
     mkdir -p "${target_dir}"
 
     emit() {
@@ -137,50 +128,27 @@ write_extra_destination() {
         local src="$2"
         [ -z "${src}" ] && return 0
         [ ! -f "${src}" ] && return 0
+        cp "${src}" "${target_dir}/${name}.${ext}"
+    }
 
-        local out
-        if [ "${is_dir}" = "true" ]; then
-            out="${target_dir}/${name}.${ext}"
-        else
-            out="${dest_path//\$\{name\}/${name}}"
+    emit_bundle() {
+        local out="${target_dir}/${name}-bundle.pem"
+        cat "${pem_path}" > "${out}"
+        if [ -n "${pem_key_path}" ] && [ -f "${pem_key_path}" ]; then
+            cat "${pem_key_path}" >> "${out}"
         fi
-        cp "${src}" "${out}"
     }
 
     case "${dest_format}" in
-        pem)
-            emit "pem" "${pem_path}"
-            ;;
-        key)
-            emit "key" "${pem_key_path}"
-            ;;
-        pem-bundle)
-            # Bundle is cert + key concatenated (when key available).
-            local out
-            if [ "${is_dir}" = "true" ]; then
-                out="${target_dir}/${name}-bundle.pem"
-            else
-                out="${dest_path//\$\{name\}/${name}}"
-            fi
-            cat "${pem_path}" > "${out}"
-            if [ -n "${pem_key_path}" ] && [ -f "${pem_key_path}" ]; then
-                cat "${pem_key_path}" >> "${out}"
-            fi
-            ;;
-        pfx)
-            emit "pfx" "${pfx_path}"
-            ;;
+        pem)        emit "pem" "${pem_path}" ;;
+        key)        emit "key" "${pem_key_path}" ;;
+        pem-bundle) emit_bundle ;;
+        pfx)        emit "pfx" "${pfx_path}" ;;
         all)
             emit "pem" "${pem_path}"
             emit "key" "${pem_key_path}"
             emit "pfx" "${pfx_path}"
-            if [ "${is_dir}" = "true" ]; then
-                local out="${target_dir}/${name}-bundle.pem"
-                cat "${pem_path}" > "${out}"
-                if [ -n "${pem_key_path}" ] && [ -f "${pem_key_path}" ]; then
-                    cat "${pem_key_path}" >> "${out}"
-                fi
-            fi
+            emit_bundle
             ;;
         *)
             echo "Warning: unknown destination format '${dest_format}'; skipping." >&2
@@ -227,7 +195,7 @@ if [ "${1:-}" = "--bundle-json" ]; then
             dest_format=$(jq -r ".extraDestinations[${j}].format // \"all\"" "${BUNDLE}")
             write_extra_destination "${dest_path}" "${dest_format}" "${name}" \
                 "${pem_path}" "${pem_key_path}" "${pfx_path}"
-            if [[ "${dest_path}" == */ ]] && { [ "${dest_format}" = "pem" ] || [ "${dest_format}" = "all" ]; }; then
+            if [ "${dest_format}" = "pem" ] || [ "${dest_format}" = "all" ]; then
                 REHASH_DIRS+=("${dest_path%/}")
             fi
         done

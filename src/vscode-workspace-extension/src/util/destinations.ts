@@ -1,12 +1,9 @@
 import type { DestFormat } from "@devcontainer-dev-certs/shared";
 
-export type TargetKind = "directory" | "file-template" | "file-single";
-
 export interface ExtraDestination {
-  /** Original path as configured (normalized — trailing slash preserved for directory targets). */
+  /** Absolute directory path, with any trailing slash stripped. */
   path: string;
   format: DestFormat;
-  kind: TargetKind;
 }
 
 export interface ParsedDestinations {
@@ -24,16 +21,16 @@ const VALID_FORMATS: readonly DestFormat[] = [
 
 /**
  * Parse the extraCertDestinations grammar:
- *   <abs-path>[=<format>]        (comma-separated)
+ *   <abs-dir>[=<format>]        (comma-separated)
  *   format ∈ pem|key|pem-bundle|pfx|all   (default: all)
  *
- * Path rules:
- *   - Trailing `/` → directory target. Files are written as `${name}.${ext}`.
- *   - Else if basename contains `${name}` → per-cert file template.
- *   - Else → single-file target (valid only when the bundle has exactly one
- *     cert; the caller enforces that at write time).
+ * Every entry is a directory: each synced cert is written as
+ * `${cert.name}.${ext}` (or `${cert.name}-bundle.pem` for pem-bundle) under
+ * that directory. Trailing slashes are accepted but not required.
  */
-export function parseExtraCertDestinations(raw: string | undefined | null): ParsedDestinations {
+export function parseExtraCertDestinations(
+  raw: string | undefined | null
+): ParsedDestinations {
   const destinations: ExtraDestination[] = [];
   const errors: string[] = [];
 
@@ -66,17 +63,11 @@ export function parseExtraCertDestinations(raw: string | undefined | null): Pars
       );
       continue;
     }
-    const format = formatPart as DestFormat;
 
-    let kind: TargetKind;
-    if (pathPart.endsWith("/")) {
-      kind = "directory";
-    } else {
-      const basename = pathPart.slice(pathPart.lastIndexOf("/") + 1);
-      kind = basename.includes("${name}") ? "file-template" : "file-single";
-    }
-
-    destinations.push({ path: pathPart, format, kind });
+    destinations.push({
+      path: pathPart.replace(/\/+$/, "") || "/",
+      format: formatPart as DestFormat,
+    });
   }
 
   return { destinations, errors };

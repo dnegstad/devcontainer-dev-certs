@@ -37,7 +37,7 @@
     "extraCertDestinations": {
       "type": "string",
       "default": "",
-      "description": "Comma-separated additional destinations to write cert artifacts to. Each entry: <abs-path>[=<format>] where format is pem|key|pem-bundle|pfx|all (defaults to all). Trailing / means directory target; ${name} may be used in a filename. Example: /etc/nginx/certs/=pem,/var/myapp/."
+      "description": "Comma-separated additional directories to write cert artifacts to. Each entry: <abs-dir>[=<format>] where format is pem|key|pem-bundle|pfx|all (defaults to all). Every synced cert is written under the directory as {name}.{pem,key,pfx} (and/or {name}-bundle.pem). Example: /etc/nginx/certs=pem,/var/myapp."
     }
   },
   "customizations": {

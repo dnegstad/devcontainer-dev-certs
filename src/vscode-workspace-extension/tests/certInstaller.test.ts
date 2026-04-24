@@ -33,23 +33,18 @@ function fakeMaterial(name: string): CertMaterialV2 {
 }
 
 describe("writeExtraDestination", () => {
-  it("writes pem/key/pfx/bundle into a directory target when format=all", () => {
+  it("writes pem/key/pfx/bundle into a directory for format=all (default)", () => {
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    const { destinations } = parseExtraCertDestinations(`${dir}/`);
+    const { destinations } = parseExtraCertDestinations(dir);
     expect(destinations).toHaveLength(1);
     const result = writeExtraDestination(destinations[0], fakeMaterial("corp"));
     expect(result.errors).toEqual([]);
     expect(result.rehashDir).toBe(dir);
 
     expect(fs.readdirSync(dir).sort()).toEqual(
-      [
-        "corp-bundle.pem",
-        "corp.key",
-        "corp.pem",
-        "corp.pfx",
-      ].sort()
+      ["corp-bundle.pem", "corp.key", "corp.pem", "corp.pfx"].sort()
     );
   });
 
@@ -57,28 +52,17 @@ describe("writeExtraDestination", () => {
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    const { destinations } = parseExtraCertDestinations(`${dir}/=pem`);
+    const { destinations } = parseExtraCertDestinations(`${dir}=pem`);
     writeExtraDestination(destinations[0], fakeMaterial("corp"));
 
     expect(fs.readdirSync(dir)).toEqual(["corp.pem"]);
-  });
-
-  it("writes ${name}-substituted filename for file-template targets", () => {
-    const dir = tmpDir();
-    cleanupDirs.push(dir);
-
-    const destPath = path.join(dir, "${name}.pem");
-    const { destinations } = parseExtraCertDestinations(`${destPath}=pem`);
-    writeExtraDestination(destinations[0], fakeMaterial("corp"));
-
-    expect(fs.existsSync(path.join(dir, "corp.pem"))).toBe(true);
   });
 
   it("writes a pem-bundle containing cert + key", () => {
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    const { destinations } = parseExtraCertDestinations(`${dir}/=pem-bundle`);
+    const { destinations } = parseExtraCertDestinations(`${dir}=pem-bundle`);
     writeExtraDestination(destinations[0], fakeMaterial("corp"));
 
     const bundle = fs.readFileSync(path.join(dir, "corp-bundle.pem"), "utf-8");
@@ -86,7 +70,7 @@ describe("writeExtraDestination", () => {
     expect(bundle).toContain("BEGIN RSA PRIVATE KEY");
   });
 
-  it("skips key output when material has no private key", () => {
+  it("skips key + pfx output when material has no private key", () => {
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
@@ -95,12 +79,26 @@ describe("writeExtraDestination", () => {
       pemKeyBase64: undefined,
       pfxBase64: undefined,
     };
-    const { destinations } = parseExtraCertDestinations(`${dir}/`);
+    const { destinations } = parseExtraCertDestinations(dir);
     writeExtraDestination(destinations[0], material);
 
     const files = fs.readdirSync(dir).sort();
     expect(files).toContain("ca-only.pem");
+    expect(files).toContain("ca-only-bundle.pem");
     expect(files).not.toContain("ca-only.key");
     expect(files).not.toContain("ca-only.pfx");
+  });
+
+  it("tolerates a trailing slash on the destination path", () => {
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+
+    const { destinations } = parseExtraCertDestinations(`${dir}/=pem`);
+    const result = writeExtraDestination(
+      destinations[0],
+      fakeMaterial("corp")
+    );
+    expect(result.rehashDir).toBe(dir);
+    expect(fs.readdirSync(dir)).toEqual(["corp.pem"]);
   });
 });

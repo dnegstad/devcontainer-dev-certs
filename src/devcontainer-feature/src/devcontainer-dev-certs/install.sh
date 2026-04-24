@@ -61,22 +61,18 @@ if [ -n "${EXTRA_CERT_DESTINATIONS}" ]; then
         path_part="${path_part%"${path_part##*[![:space:]]}"}"
 
         case "${path_part}" in
-            /*)
-                # absolute path, ok
-                ;;
+            /*) ;;
             *)
                 echo "Warning: extraCertDestinations entry '${entry}' is not an absolute path; skipping."
                 continue
                 ;;
         esac
 
-        if [[ "${path_part}" == */ ]]; then
-            target_dir="${path_part%/}"
-        else
-            target_dir="$(dirname "${path_part}")"
-        fi
+        # Every destination is a directory. Strip any trailing slashes.
+        target_dir="${path_part%/}"
+        [ -z "${target_dir}" ] && target_dir="/"
 
-        if [ -n "${target_dir}" ] && [ "${target_dir}" != "/" ]; then
+        if [ "${target_dir}" != "/" ]; then
             mkdir -p "${target_dir}"
             EXTRA_DIRS_TO_CHOWN+=("${target_dir}")
             echo "  extra destination dir: ${target_dir}"

@@ -170,7 +170,7 @@ export function isCertInstalled(material: CertMaterialV2): boolean {
 
 /**
  * Write the cert's artifacts to an extra destination per its format. Returns
- * the set of directory paths that need a rehash after all writes are done.
+ * the rehash directory (if any) so the caller can rehash once at the end.
  */
 export function writeExtraDestination(
   dest: ExtraDestination,
@@ -187,58 +187,32 @@ export function writeExtraDestination(
     ? Buffer.from(material.pfxBase64, "base64")
     : null;
 
-  function resolvePerCert(ext: string, isBundle: boolean = false): string {
-    const bundleSuffix = isBundle ? "-bundle" : "";
-    if (dest.kind === "directory") {
-      const dir = dest.path.replace(/\/$/, "");
-      return path.join(dir, `${material.name}${bundleSuffix}.${ext}`);
-    }
-    if (dest.kind === "file-template") {
-      return dest.path.replace(/\$\{name\}/g, material.name);
-    }
-    return dest.path;
-  }
+  const dir = dest.path;
+  const pathFor = (suffix: string) => path.join(dir, `${material.name}${suffix}`);
 
-  function ensureParent(filePath: string): void {
+  const writeText = (filePath: string, content: string, mode: number) => {
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  }
-
-  const writeText = (filePath: string, content: string) => {
-    ensureParent(filePath);
     fs.writeFileSync(filePath, content);
-    chmodSafe(filePath, 0o644);
+    chmodSafe(filePath, mode);
   };
-  const writeKeyText = (filePath: string, content: string) => {
-    ensureParent(filePath);
-    fs.writeFileSync(filePath, content);
-    chmodSafe(filePath, 0o600);
-  };
-  const writeBinary = (filePath: string, buf: Buffer) => {
-    ensureParent(filePath);
+  const writeBinary = (filePath: string, buf: Buffer, mode: number) => {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, buf);
-    chmodSafe(filePath, 0o600);
+    chmodSafe(filePath, mode);
   };
 
-  const writePem = () => writeText(resolvePerCert("pem"), pemCert);
+  const writePem = () => writeText(pathFor(".pem"), pemCert, 0o644);
   const writeKey = () => {
     if (!pemKey) return;
-    writeKeyText(resolvePerCert("key"), pemKey);
+    writeText(pathFor(".key"), pemKey, 0o600);
   };
   const writePfx = () => {
     if (!pfx) return;
-    writeBinary(resolvePerCert("pfx"), pfx);
+    writeBinary(pathFor(".pfx"), pfx, 0o600);
   };
   const writeBundle = () => {
     const content = pemKey ? `${pemCert}${pemKey}` : pemCert;
-    // When pem-bundle is requested, a directory target still uses a "-bundle"
-    // suffix; file targets take the path as-is.
-    const target =
-      dest.kind === "directory"
-        ? path.join(dest.path.replace(/\/$/, ""), `${material.name}-bundle.pem`)
-        : dest.kind === "file-template"
-          ? dest.path.replace(/\$\{name\}/g, material.name)
-          : dest.path;
-    writeKeyText(target, content);
+    writeText(pathFor("-bundle.pem"), content, 0o600);
   };
 
   try {
@@ -270,11 +244,7 @@ export function writeExtraDestination(
   }
 
   const isPemCapable = dest.format === "pem" || dest.format === "all";
-  const rehashDir =
-    dest.kind === "directory" && isPemCapable
-      ? dest.path.replace(/\/$/, "")
-      : null;
-  return { rehashDir, errors };
+  return { rehashDir: isPemCapable ? dir : null, errors };
 }
 
 /**

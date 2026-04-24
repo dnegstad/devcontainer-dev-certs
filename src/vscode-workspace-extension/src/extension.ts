@@ -82,21 +82,6 @@ async function injectCertificate(): Promise<void> {
     return;
   }
 
-  if (
-    parsed.destinations.some((d) => d.kind === "file-single") &&
-    bundle.certs.length > 1
-  ) {
-    vscode.window.showErrorMessage(
-      "Dev Certs: extraCertDestinations contains a single-file path but the " +
-        "bundle has multiple certs. Use a directory target (trailing /) or " +
-        "a ${name} template to disambiguate."
-    );
-    log(
-      "Aborting install: ambiguous single-file destination with multi-cert bundle."
-    );
-    return;
-  }
-
   const rehashDirs = new Set<string>();
   let successes = 0;
 
