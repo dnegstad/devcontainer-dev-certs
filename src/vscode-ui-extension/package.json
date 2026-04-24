@@ -63,7 +63,11 @@
             "properties": {
               "name": {
                 "type": "string",
-                "description": "Stable basename used for files inside the container (e.g. '${name}.pem')."
+                "pattern": "^(?!\\.)[A-Za-z0-9._-]{1,64}$",
+                "patternErrorMessage": "Must be 1-64 characters from [A-Za-z0-9._-], with no leading dot (rejects '.', '..', and hidden-file names).",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "Stable basename used for files inside the container (e.g. '${name}.pem'). Must be 1-64 chars from [A-Za-z0-9._-] with no leading dot."
               },
               "pfxPath": {
                 "type": "string",
