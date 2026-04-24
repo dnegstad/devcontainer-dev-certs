@@ -23,6 +23,21 @@
       "type": "string",
       "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
       "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Override this if your base image uses non-standard paths."
+    },
+    "generateDotNetCert": {
+      "type": "boolean",
+      "default": true,
+      "description": "Auto-generate the ASP.NET Core / Aspire compatible HTTPS development certificate. Set to false to skip generation (for example when only syncing user-provided certificates)."
+    },
+    "syncUserCertificates": {
+      "type": "boolean",
+      "default": true,
+      "description": "Allow the host extension to sync user-provided certificates (configured via the devcontainerDevCerts.userCertificates VS Code setting) into this container."
+    },
+    "extraCertDestinations": {
+      "type": "string",
+      "default": "",
+      "description": "Comma-separated additional directories to write cert artifacts to. Each entry: <abs-dir>[=<format>] where format is pem|key|pem-bundle|pfx|all (defaults to all). Every synced cert is written under the directory as {name}.{pem,key,pfx} (and/or {name}-bundle.pem). Example: /etc/nginx/certs=pem,/var/myapp."
     }
   },
   "customizations": {

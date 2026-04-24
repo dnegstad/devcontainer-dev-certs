@@ -29,7 +29,8 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:devcontainer-dev-certs.getCertMaterial"
+    "onCommand:devcontainer-dev-certs.getCertMaterial",
+    "onCommand:devcontainer-dev-certs.getAllCertMaterial"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -46,6 +47,51 @@
           "type": "boolean",
           "default": true,
           "description": "Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to false to disable provisioning entirely."
+        },
+        "devcontainerDevCerts.generateDotNetCert": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-generate the ASP.NET Core / Aspire compatible HTTPS development certificate and trust it in the host OS store. When false, user-managed certificates (if any) are still synced but no dev cert is generated."
+        },
+        "devcontainerDevCerts.userCertificates": {
+          "type": "array",
+          "default": [],
+          "description": "User-managed certificates to sync from the host into dev containers. Each entry supplies exactly one of pfxPath (+ optional pfxPassword) or pemCertPath (+ optional pemKeyPath). Container-side filenames derive from the entry's 'name'. User-managed certs are never added to the host OS trust store.",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "pattern": "^(?!\\.)[A-Za-z0-9._-]{1,64}$",
+                "patternErrorMessage": "Must be 1-64 characters from [A-Za-z0-9._-], with no leading dot (rejects '.', '..', and hidden-file names).",
+                "minLength": 1,
+                "maxLength": 64,
+                "description": "Stable basename used for files inside the container (e.g. '${name}.pem'). Must be 1-64 chars from [A-Za-z0-9._-] with no leading dot."
+              },
+              "pfxPath": {
+                "type": "string",
+                "description": "Absolute path on the host to a PFX/PKCS#12 file."
+              },
+              "pfxPassword": {
+                "type": "string",
+                "description": "Password for the PFX, if any. Leave unset for an empty password."
+              },
+              "pemCertPath": {
+                "type": "string",
+                "description": "Absolute path on the host to a PEM-encoded certificate."
+              },
+              "pemKeyPath": {
+                "type": "string",
+                "description": "Absolute path on the host to a PEM-encoded private key. Omit for CA-only certs — the cert will still be trusted in the container but no private key will be synced."
+              },
+              "trustInContainer": {
+                "type": "boolean",
+                "default": true,
+                "description": "When true (default), plant the cert in the OpenSSL trust directory and the .NET Root store inside the container."
+              }
+            }
+          }
         }
       }
     }

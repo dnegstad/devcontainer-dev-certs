@@ -60,3 +60,12 @@ export function getPfxFileName(thumbprint: string): string {
 export function getPemFileName(thumbprint: string): string {
   return `aspnetcore-localhost-${thumbprint}.pem`;
 }
+
+/**
+ * PEM filename for a user-managed certificate in the OpenSSL trust directory.
+ * Uses the user-provided name instead of the thumbprint so downstream
+ * tooling can reference the file by a stable path.
+ */
+export function getPemFileNameForUser(name: string): string {
+  return `${name}.pem`;
+}

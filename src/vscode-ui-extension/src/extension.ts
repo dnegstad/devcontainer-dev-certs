@@ -3,6 +3,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { CertManager } from "./cert/manager";
 import { CertProvider } from "./certProvider";
+import type { GetAllCertMaterialArgs } from "./certProvider";
 import { trustInNss } from "./platform/nssTrust";
 import {
   initLogger,
@@ -10,6 +11,7 @@ import {
   getOpenSslTrustDir,
   getPemFileName,
 } from "@devcontainer-dev-certs/shared";
+import type { CertBundle } from "@devcontainer-dev-certs/shared";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs"));
@@ -19,7 +21,8 @@ export function activate(context: vscode.ExtensionContext): void {
 
   log("UI extension activated (managed certificate provider).");
 
-  // Serve certificate material to the workspace extension
+  // Legacy single-cert command. Kept for backward-compatibility with older
+  // pinned workspace extensions.
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.getCertMaterial",
@@ -28,14 +31,17 @@ export function activate(context: vscode.ExtensionContext): void {
           const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
           const autoProvision = config.get<boolean>("autoProvision", true);
 
-          if (!autoProvision) {
+          // Consent check only applies when auto-provisioning is enabled AND
+          // the host has not disabled dotnet cert generation.
+          const hostCfg = vscode.workspace.getConfiguration("devcontainerDevCerts");
+          const hostWantsDotNet = hostCfg.get<boolean>("generateDotNetCert", true);
+
+          if (!autoProvision || !hostWantsDotNet) {
             return await certProvider.getCertMaterial(false);
           }
 
-          // Check if provisioning is actually needed
           const status = await certManager.check();
           if (!status.exists || !status.isTrusted) {
-            // Consent required before first-time generation/trust
             const consented = context.globalState.get<boolean>("certProvisionConsented");
             if (!consented) {
               const userConsented = await promptForCertConsent();
@@ -58,6 +64,72 @@ export function activate(context: vscode.ExtensionContext): void {
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           log(`Error providing certificate material: ${message}`);
+          throw err;
+        }
+      }
+    )
+  );
+
+  // Multi-cert command: supports dotnet-dev opt-out and user-managed certs.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "devcontainer-dev-certs.getAllCertMaterial",
+      async (args: GetAllCertMaterialArgs | undefined): Promise<CertBundle> => {
+        try {
+          const effectiveArgs: GetAllCertMaterialArgs = {
+            includeDotNetDev: args?.includeDotNetDev !== false,
+            includeUserCerts: args?.includeUserCerts !== false,
+          };
+
+          const autoProvisionCfg = vscode.workspace
+            .getConfiguration("devcontainer-dev-certs")
+            .get<boolean>("autoProvision", true);
+          const hostWantsDotNet = vscode.workspace
+            .getConfiguration("devcontainerDevCerts")
+            .get<boolean>("generateDotNetCert", true);
+
+          const dotnetWillGenerate =
+            effectiveArgs.includeDotNetDev && hostWantsDotNet && autoProvisionCfg;
+
+          if (dotnetWillGenerate) {
+            const status = await certManager.check();
+            if (!status.exists || !status.isTrusted) {
+              const consented = context.globalState.get<boolean>(
+                "certProvisionConsented"
+              );
+              if (!consented) {
+                const userConsented = await promptForCertConsent();
+                if (!userConsented) {
+                  log(
+                    "User declined dotnet dev cert provisioning; returning bundle without it."
+                  );
+                  return await certProvider.getAllCertMaterial({
+                    ...effectiveArgs,
+                    includeDotNetDev: false,
+                  });
+                }
+                await context.globalState.update(
+                  "certProvisionConsented",
+                  true
+                );
+              }
+            }
+          }
+
+          const bundle = await certProvider.getAllCertMaterial({
+            includeDotNetDev: dotnetWillGenerate,
+            includeUserCerts: effectiveArgs.includeUserCerts,
+          });
+
+          if (bundle.certs.some((c) => c.kind === "dotnet-dev")) {
+            ensureTerminalSslCertDir(context);
+            showLinuxTrustGuidance(context);
+          }
+
+          return bundle;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          log(`Error providing certificate bundle: ${message}`);
           throw err;
         }
       }
@@ -102,8 +174,8 @@ export function activate(context: vscode.ExtensionContext): void {
           const copyPath = "Copy Certificate Path";
           const choice = await vscode.window.showWarningMessage(
             `Dev Certs: Could not automatically trust in browsers (${result.message}). ` +
-              "To trust manually in Firefox: Settings \u2192 Privacy & Security \u2192 Certificates \u2192 " +
-              "View Certificates \u2192 Authorities \u2192 Import, then select the certificate file.",
+              "To trust manually in Firefox: Settings → Privacy & Security → Certificates → " +
+              "View Certificates → Authorities → Import, then select the certificate file.",
             copyPath
           );
           if (choice === copyPath) {
