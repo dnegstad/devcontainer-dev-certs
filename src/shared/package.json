@@ -6,6 +6,6 @@
   "types": "./src/index.ts",
   "devDependencies": {
     "@types/vscode": "^1.100.0",
-    "typescript": "^5.9.0"
+    "typescript": "^6.0.3"
   }
 }
