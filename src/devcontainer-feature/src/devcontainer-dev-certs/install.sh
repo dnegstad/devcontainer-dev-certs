@@ -73,12 +73,7 @@ if [ -n "${EXTRA_CERT_DESTINATIONS}" ]; then
         if [[ "${path_part}" == */ ]]; then
             target_dir="${path_part%/}"
         else
-            base="$(basename "${path_part}")"
-            if [[ "${base}" == *"\${name}"* ]] || [[ "${base}" == *'${name}'* ]]; then
-                target_dir="$(dirname "${path_part}")"
-            else
-                target_dir="$(dirname "${path_part}")"
-            fi
+            target_dir="$(dirname "${path_part}")"
         fi
 
         if [ -n "${target_dir}" ] && [ "${target_dir}" != "/" ]; then
