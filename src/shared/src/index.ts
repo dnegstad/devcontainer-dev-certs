@@ -15,3 +15,4 @@ export {
   getPemFileName,
   getPemFileNameForUser,
 } from "./paths";
+export { isValidCertName, assertValidCertName } from "./certName";

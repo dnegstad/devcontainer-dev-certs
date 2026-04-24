@@ -148,6 +148,8 @@ The host extension can sync arbitrary host-side certificates into your dev conta
 
 Each entry supplies exactly one of `pfxPath` (+ optional `pfxPassword`) or `pemCertPath` (+ optional `pemKeyPath`). Omitting the key produces a CA-only entry — the cert is still planted in the container trust store, but no private key is synced and no PFX is written to the .NET store. Expired certificates are synced anyway but produce a one-time warning notification so you know why TLS clients are rejecting them.
 
+`name` is used verbatim as a filename stem both on the host (temp export directory) and inside the container (trust PEM and extra-destination files), so it's constrained to `[A-Za-z0-9._-]` (1–64 chars, no leading dot, no `.` / `..`). Entries with an invalid name are rejected with an error notification and skipped.
+
 User-managed certs are **never** added to the host OS trust store; the assumption is you already trust them on the host if you're syncing them.
 
 ## Extra destinations

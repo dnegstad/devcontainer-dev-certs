@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import {
+  assertValidCertName,
   getDotNetStorePath,
   getDotNetRootStorePath,
   getOpenSslTrustDir,
@@ -81,6 +82,10 @@ export function installUserCert(material: CertMaterialV2): void {
       `installUserCert called with non-user cert (kind=${material.kind})`
     );
   }
+  // Re-validate on the receive side too: the v2 IPC payload crosses a trust
+  // boundary, and the UI-side check could be bypassed by a downgraded or
+  // modified host extension.
+  assertValidCertName(material.name);
 
   const dotNetStoreDir = getDotNetStorePath();
   const dotNetRootStoreDir = getDotNetRootStorePath();
@@ -176,6 +181,8 @@ export function writeExtraDestination(
   dest: ExtraDestination,
   material: CertMaterialV2
 ): { rehashDir: string | null; errors: string[] } {
+  // The name is used verbatim as a filename stem under the destination dir.
+  assertValidCertName(material.name);
   const errors: string[] = [];
   const pemCert = Buffer.from(material.pemCertBase64, "base64").toString(
     "utf-8"

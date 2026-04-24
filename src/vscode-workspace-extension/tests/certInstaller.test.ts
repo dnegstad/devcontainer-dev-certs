@@ -89,6 +89,22 @@ describe("writeExtraDestination", () => {
     expect(files).not.toContain("ca-only.pfx");
   });
 
+  it("refuses to write a cert whose name would escape the destination", () => {
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+
+    const material: CertMaterialV2 = {
+      ...fakeMaterial("../evil"),
+    };
+    const { destinations } = parseExtraCertDestinations(dir);
+
+    expect(() =>
+      writeExtraDestination(destinations[0], material)
+    ).toThrowError(/Invalid certificate name/);
+    // And nothing should have been written to the dir.
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+
   it("tolerates a trailing slash on the destination path", () => {
     const dir = tmpDir();
     cleanupDirs.push(dir);

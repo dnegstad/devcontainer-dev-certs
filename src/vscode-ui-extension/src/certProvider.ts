@@ -6,7 +6,7 @@ import { CertManager } from "./cert/manager";
 import { exportLoadedCert } from "./cert/exporter";
 import { loadPemPair, loadPfx } from "./cert/loader";
 import type { LoadedCert } from "./cert/loader";
-import { log } from "@devcontainer-dev-certs/shared";
+import { assertValidCertName, log } from "@devcontainer-dev-certs/shared";
 import type {
   CertBundle,
   CertMaterial,
@@ -182,9 +182,10 @@ export class CertProvider {
   private async loadUserCert(
     config: UserCertificateConfig
   ): Promise<CertMaterialV2 | null> {
-    if (!config.name) {
-      throw new Error("userCertificates entry is missing a 'name'.");
-    }
+    // Enforced before any filesystem operation — the name is used directly
+    // as a filename stem in the temp export dir, the container trust PEM,
+    // and each extra destination. Reject anything that could path-traverse.
+    assertValidCertName(config.name);
 
     const hasPfx = Boolean(config.pfxPath);
     const hasPem = Boolean(config.pemCertPath);

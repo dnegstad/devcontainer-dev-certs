@@ -12,6 +12,7 @@ import type { CertManager } from "../src/cert/manager";
 import {
   __resetConfig,
   __setConfig,
+  errorMessages,
   warningMessages,
 } from "./__mocks__/vscode";
 
@@ -222,6 +223,33 @@ describe("CertProvider.getAllCertMaterial", () => {
     expect(expiryWarnings[0]).toContain("'expired'");
     // The fresh cert should not have generated a warning
     expect(warningMessages.some((m) => m.includes("'fresh'"))).toBe(false);
+  });
+
+  it("rejects userCertificates entries with traversal-capable names", async () => {
+    const { cert, key } = makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    __setConfig("devcontainerDevCerts", {
+      userCertificates: [
+        {
+          name: "../evil",
+          pemCertPath: tmp.certPath,
+          pemKeyPath: tmp.keyPath,
+        },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    expect(bundle.certs).toHaveLength(0);
+    expect(
+      errorMessages.some((m) => m.includes("Invalid certificate name"))
+    ).toBe(true);
   });
 
   it("caches user certs across calls", async () => {
