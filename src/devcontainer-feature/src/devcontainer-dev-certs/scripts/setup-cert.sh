@@ -169,37 +169,42 @@ if [ "${1:-}" = "--bundle-json" ]; then
     declare -a REHASH_DIRS=()
 
     cert_count=$(jq '.certs | length' "${BUNDLE}")
-    for i in $(seq 0 $((cert_count - 1))); do
-        name=$(jq -r ".certs[${i}].name" "${BUNDLE}")
-        thumbprint=$(jq -r ".certs[${i}].thumbprint" "${BUNDLE}")
-        pfx_path=$(jq -r ".certs[${i}].pfxPath // \"\"" "${BUNDLE}")
-        pem_path=$(jq -r ".certs[${i}].pemPath" "${BUNDLE}")
-        pem_key_path=$(jq -r ".certs[${i}].pemKeyPath // \"\"" "${BUNDLE}")
-        root_pfx_path=$(jq -r ".certs[${i}].rootPfxPath // \"\"" "${BUNDLE}")
-        trust_in_container=$(jq -r ".certs[${i}].trustInContainer // true" "${BUNDLE}")
-        kind=$(jq -r ".certs[${i}].kind // \"user\"" "${BUNDLE}")
+    if [ "${cert_count}" -gt 0 ]; then
+        for i in $(seq 0 $((cert_count - 1))); do
+            name=$(jq -r ".certs[${i}].name" "${BUNDLE}")
+            thumbprint=$(jq -r ".certs[${i}].thumbprint" "${BUNDLE}")
+            pfx_path=$(jq -r ".certs[${i}].pfxPath // \"\"" "${BUNDLE}")
+            pem_path=$(jq -r ".certs[${i}].pemPath" "${BUNDLE}")
+            pem_key_path=$(jq -r ".certs[${i}].pemKeyPath // \"\"" "${BUNDLE}")
+            root_pfx_path=$(jq -r ".certs[${i}].rootPfxPath // \"\"" "${BUNDLE}")
+            trust_in_container=$(jq -r ".certs[${i}].trustInContainer // true" "${BUNDLE}")
+            kind=$(jq -r ".certs[${i}].kind // \"user\"" "${BUNDLE}")
 
-        is_user_cert="true"
-        if [ "${kind}" = "dotnet-dev" ]; then
-            is_user_cert="false"
-        fi
+            is_user_cert="true"
+            if [ "${kind}" = "dotnet-dev" ]; then
+                is_user_cert="false"
+            fi
 
-        install_cert_canonical "${name}" "${thumbprint}" "${pfx_path}" "${pem_path}" \
-            "${pem_key_path}" "${root_pfx_path}" "${trust_in_container}" "${is_user_cert}"
+            install_cert_canonical "${name}" "${thumbprint}" "${pfx_path}" "${pem_path}" \
+                "${pem_key_path}" "${root_pfx_path}" "${trust_in_container}" "${is_user_cert}"
 
-        # Extra destinations
-        dest_count=$(jq '.extraDestinations | length // 0' "${BUNDLE}")
-        for j in $(seq 0 $((dest_count - 1))); do
-            [ "${dest_count}" -eq 0 ] && break
-            dest_path=$(jq -r ".extraDestinations[${j}].path" "${BUNDLE}")
-            dest_format=$(jq -r ".extraDestinations[${j}].format // \"all\"" "${BUNDLE}")
-            write_extra_destination "${dest_path}" "${dest_format}" "${name}" \
-                "${pem_path}" "${pem_key_path}" "${pfx_path}"
-            if [ "${dest_format}" = "pem" ] || [ "${dest_format}" = "all" ]; then
-                REHASH_DIRS+=("${dest_path%/}")
+            # Extra destinations. Guard both the outer cert loop and this
+            # inner loop against seq-on-empty (some seq builds treat
+            # `seq 0 -1` as an error under set -e).
+            dest_count=$(jq '.extraDestinations | length // 0' "${BUNDLE}")
+            if [ "${dest_count}" -gt 0 ]; then
+                for j in $(seq 0 $((dest_count - 1))); do
+                    dest_path=$(jq -r ".extraDestinations[${j}].path" "${BUNDLE}")
+                    dest_format=$(jq -r ".extraDestinations[${j}].format // \"all\"" "${BUNDLE}")
+                    write_extra_destination "${dest_path}" "${dest_format}" "${name}" \
+                        "${pem_path}" "${pem_key_path}" "${pfx_path}"
+                    if [ "${dest_format}" = "pem" ] || [ "${dest_format}" = "all" ]; then
+                        REHASH_DIRS+=("${dest_path%/}")
+                    fi
+                done
             fi
         done
-    done
+    fi
 
     # Rehash any directory pem destinations so OpenSSL can find the certs.
     for d in "${REHASH_DIRS[@]}"; do
