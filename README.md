@@ -162,7 +162,7 @@ User-managed certs are **never** added to the host OS trust store; the assumptio
 | `pfx` | `{name}.pfx` (skipped when no key is available) |
 | `all` *(default)* | all of the above |
 
-Directory-level rehash runs once per destination after all writes so OpenSSL can discover the PEMs.
+After every cert has been written, OpenSSL's `c_rehash` runs once per unique destination directory (not once per cert and not once per write), so adding more synced certs doesn't multiply the rehash cost.
 
 ### Filename contract
 
