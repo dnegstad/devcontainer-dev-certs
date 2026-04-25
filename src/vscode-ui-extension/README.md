@@ -31,8 +31,6 @@ A Dev Container feature + two companion VS Code extensions that handle everythin
 
 ## Quick Start
 
-> **You usually don't install this extension manually.** Add the Dev Container feature described below to your project's `devcontainer.json` — the feature declares this extension, so VS Code will install it on your local machine when you open the container. If it doesn't, the remote companion extension prompts you with an **Install Host Extension** button on first use. Installing it manually from the Marketplace ahead of time is also fine.
-
 Add the Dev Container feature to your project's `devcontainer.json` (not to any extension settings):
 
 ```json
