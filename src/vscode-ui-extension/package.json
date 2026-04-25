@@ -3,7 +3,7 @@
   "displayName": "Dev Container Dev Certificates (Host)",
   "description": "Generates and trusts ASP.NET and Aspire compatible HTTPS development certificates on the host machine for use in Dev Containers and remote environments.",
   "icon": "images/dn_ui_extension_icon_256.png",
-  "version": "0.1.5",
+  "version": "0.1.6-pre",
   "publisher": "dnegstad",
   "license": "MIT",
   "repository": {
@@ -59,7 +59,9 @@
           "description": "User-managed certificates to sync from the host into dev containers. Each entry supplies exactly one of pfxPath (+ optional pfxPassword) or pemCertPath (+ optional pemKeyPath). Container-side filenames derive from the entry's 'name'. User-managed certs are never added to the host OS trust store.",
           "items": {
             "type": "object",
-            "required": ["name"],
+            "required": [
+              "name"
+            ],
             "properties": {
               "name": {
                 "type": "string",
