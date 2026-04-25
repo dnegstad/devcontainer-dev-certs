@@ -26,16 +26,6 @@ No `dotnet dev-certs` commands, no manual PFX exports, no environment variable c
 - The [Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) extension
 - Docker or a compatible container runtime
 
-### Install the Host Extension
-
-The dev container feature requests installation of the host extension automatically, but you can also install it ahead of time:
-
-- **VS Code Marketplace:** [Dev Container Dev Certificates (Host)](https://marketplace.visualstudio.com/items?itemName=dnegstad.devcontainer-dev-certs-host)
-- **Extensions view:** search for `dnegstad.devcontainer-dev-certs-host`
-- **CLI:** `code --install-extension dnegstad.devcontainer-dev-certs-host`
-
-The remote extension (`dnegstad.devcontainer-dev-certs-remote`) is installed inside the container automatically by the feature and does not need manual installation.
-
 ### Add the Feature
 
 Add the dev container feature to your project's `devcontainer.json`:
@@ -48,12 +38,24 @@ Add the dev container feature to your project's `devcontainer.json`:
 }
 ```
 
-Then rebuild or reopen your project in the dev container. On first use:
+Then rebuild or reopen your project in the dev container. The feature declares both companion extensions, so VS Code installs the remote extension inside the container automatically. The host extension is installed on your local VS Code automatically as well; if it isn't, the remote extension prompts you with an **Install Host Extension** button on first use.
 
-1. The host extension shows a consent prompt, then generates a development certificate and trusts it in your OS certificate store. On Windows this triggers a system dialog; on macOS the keychain may prompt for a password. This only happens once.
+On first use:
+
+1. The host extension shows a one-time consent prompt, then generates a development certificate and trusts it in your OS certificate store. On Windows this triggers a system dialog; on macOS the keychain may prompt for a password.
 2. The remote extension receives the certificate and installs it in the container's .NET X509 store and OpenSSL trust directory.
 3. ASP.NET, Aspire, and CLI tools like `curl` and `wget` trust the certificate automatically — no environment variables or manual configuration needed.
 4. Your host browser trusts the certificate on forwarded ports.
+
+### Installing the Host Extension Manually (Optional)
+
+You normally don't need to do this — the feature handles it. If you'd rather install the host extension (`dnegstad.devcontainer-dev-certs-host`) ahead of time:
+
+- **VS Code Marketplace:** [Dev Container Dev Certificates (Host)](https://marketplace.visualstudio.com/items?itemName=dnegstad.devcontainer-dev-certs-host)
+- **Extensions view:** search for `dnegstad.devcontainer-dev-certs-host`
+- **CLI:** `code --install-extension dnegstad.devcontainer-dev-certs-host`
+
+The remote extension (`dnegstad.devcontainer-dev-certs-remote`) runs inside the container and is installed by the feature. Don't install it on your local VS Code — it has no effect there.
 
 ## How It Works
 

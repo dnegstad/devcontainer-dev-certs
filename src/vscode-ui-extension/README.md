@@ -31,7 +31,7 @@ A Dev Container feature + two companion VS Code extensions that handle everythin
 
 ## Quick Start
 
-Add the Dev Container feature to your `devcontainer.json`:
+Add the Dev Container feature to your project's `devcontainer.json` (not to any extension settings):
 
 ```json
 {
@@ -41,9 +41,9 @@ Add the Dev Container feature to your `devcontainer.json`:
 }
 ```
 
-That's it. The feature installs both extensions and configures the container's trust infrastructure. When you open the Dev Container in VS Code:
+The feature declares both companion extensions and configures the container's trust infrastructure. When you open the Dev Container in VS Code:
 
-1. This extension generates a dev cert on your host (if one doesn't exist) and trusts it in your OS certificate store
+1. This extension shows a one-time consent prompt, generates a dev cert on your host (if one doesn't exist), and trusts it in your OS certificate store
 2. The remote companion extension requests the cert material via VS Code's cross-host command routing
 3. The cert is installed in the container's .NET X509 store and OpenSSL trust directory
 4. ASP.NET, Aspire, and other services discover the cert automatically — no environment variables or manual configuration needed

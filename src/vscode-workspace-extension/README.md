@@ -31,7 +31,9 @@ A Dev Container feature + two companion VS Code extensions that handle everythin
 
 ## Quick Start
 
-Add the Dev Container feature to your `devcontainer.json`:
+> **Don't install this extension manually on your local VS Code — it has no effect there.** This extension runs inside a Dev Container (or other remote) and is installed automatically by the Dev Container feature described below. The only thing you need to do on your local machine is install the [host companion extension](https://marketplace.visualstudio.com/items?itemName=dnegstad.devcontainer-dev-certs-host), and even that is usually handled for you by the feature.
+
+Add the Dev Container feature to your project's `devcontainer.json` (not to any extension settings):
 
 ```json
 {
@@ -41,13 +43,15 @@ Add the Dev Container feature to your `devcontainer.json`:
 }
 ```
 
-That's it. The feature installs both extensions and configures the container's trust infrastructure. When you open the Dev Container in VS Code:
+The feature declares both companion extensions and configures the container's trust infrastructure. When you open the Dev Container in VS Code:
 
-1. The host extension generates a dev cert and trusts it in the host OS certificate store
+1. The host companion extension generates a dev cert and trusts it in the host OS certificate store
 2. This extension requests the cert material via VS Code's cross-host command routing
 3. The cert is installed in the container's .NET X509 store and OpenSSL trust directory
 4. ASP.NET, Aspire, and other services discover the cert automatically — no environment variables or manual configuration needed
 5. Your host browser trusts the cert on forwarded ports
+
+If the host companion extension is missing when this extension activates, you'll see an **Install Host Extension** prompt that installs it with one click.
 
 ## What This Extension Does
 
@@ -111,4 +115,4 @@ This extension honors the following environment variables, matching the behavior
 - VS Code 1.100 or later
 - [Dev Container Dev Certificates (Host)](https://marketplace.visualstudio.com/items?itemName=dnegstad.devcontainer-dev-certs-host) installed on the local machine
 
-This extension is self-contained and does not require on any additional dependencies on your host or in the container.
+This extension is self-contained and does not require any additional dependencies on your host or in the container.
