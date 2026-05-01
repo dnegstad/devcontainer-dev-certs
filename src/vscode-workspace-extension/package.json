@@ -63,7 +63,7 @@
     "build:prod": "node esbuild.mjs --production",
     "watch": "node esbuild.mjs --watch",
     "test": "vitest run",
-    "lint": "eslint src --ext ts",
+    "lint": "eslint src tests",
     "package": "vsce package --no-dependencies"
   },
   "dependencies": {

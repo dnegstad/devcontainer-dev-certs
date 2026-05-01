@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { LoadedCert } from "./loader";
-import { DevCert, DevKey } from "./types";
+import { type DevCert, type DevKey } from "./types";
 import { ASPNET_HTTPS_OID_FRIENDLY_NAME } from "./properties";
 import { buildPfx } from "./pfx";
 

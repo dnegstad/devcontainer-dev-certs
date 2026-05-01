@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
-import { DevCert, DevKey } from "../cert/types";
+import { type DevCert, type DevKey } from "../cert/types";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { buildPfx } from "../cert/pfx";
 import {
@@ -81,12 +81,12 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     }
   }
 
-  protected async isTrusted(
+  protected isTrusted(
     _cert: DevCert,
     thumbprint: string
   ): Promise<boolean> {
     const pemPath = path.join(getOpenSslTrustDir(), getPemFileName(thumbprint));
-    return fs.existsSync(pemPath);
+    return Promise.resolve(fs.existsSync(pemPath));
   }
 
   // --- Linux-specific trust helpers ---

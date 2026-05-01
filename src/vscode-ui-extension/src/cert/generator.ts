@@ -174,7 +174,10 @@ export function computeThumbprint(pemCert: string): string {
 
 async function generateKeyPair(
   algorithm: GenerateAlgorithm
-): Promise<{ keyPair: CryptoKeyPair; signingAlgorithm: Algorithm }> {
+): Promise<{
+  keyPair: CryptoKeyPair;
+  signingAlgorithm: Algorithm | RsaHashedKeyGenParams | EcdsaParams;
+}> {
   const subtle = webcrypto.subtle;
 
   if (algorithm.kind === "rsa") {
@@ -188,10 +191,13 @@ async function generateKeyPair(
     const keyPair = (await subtle.generateKey(params, true, [
       "sign",
       "verify",
-    ])) as CryptoKeyPair;
+    ]));
     return {
       keyPair,
-      signingAlgorithm: { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      signingAlgorithm: {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: "SHA-256",
+      } as RsaHashedKeyGenParams,
     };
   }
 
@@ -203,37 +209,37 @@ async function generateKeyPair(
     const keyPair = (await subtle.generateKey(params, true, [
       "sign",
       "verify",
-    ])) as CryptoKeyPair;
+    ]));
     return {
       keyPair,
       signingAlgorithm: {
         name: "ECDSA",
         hash: defaultEcHash(algorithm.namedCurve),
-      } as Algorithm,
+      } as EcdsaParams,
     };
   }
 
   if (algorithm.kind === "ed25519") {
     const keyPair = (await subtle.generateKey(
-      { name: "Ed25519" } as unknown as Algorithm,
+      "Ed25519",
       true,
       ["sign", "verify"]
     )) as CryptoKeyPair;
     return {
       keyPair,
-      signingAlgorithm: { name: "Ed25519" } as Algorithm,
+      signingAlgorithm: { name: "Ed25519" },
     };
   }
 
   if (algorithm.kind === "ed448") {
     const keyPair = (await subtle.generateKey(
-      { name: "Ed448" } as unknown as Algorithm,
+      { name: "Ed448" },
       true,
       ["sign", "verify"]
     )) as CryptoKeyPair;
     return {
       keyPair,
-      signingAlgorithm: { name: "Ed448" } as Algorithm,
+      signingAlgorithm: { name: "Ed448" },
     };
   }
 

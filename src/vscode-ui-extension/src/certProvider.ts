@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { CertManager } from "./cert/manager";
+import { type CertManager } from "./cert/manager";
 import { exportLoadedCert } from "./cert/exporter";
 import { loadPemPair, loadPfx } from "./cert/loader";
 import type { LoadedCert } from "./cert/loader";

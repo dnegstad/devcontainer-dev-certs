@@ -6,7 +6,7 @@ import { runProcess } from "./processUtil";
 import { isValidDevCert } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
-import { DevCert, DevKey } from "../cert/types";
+import { type DevCert, type DevKey } from "../cert/types";
 
 /** Cached PowerShell executable name — prefers pwsh (PowerShell 7+) over powershell (5.1). */
 let resolvedPwsh: string | null = null;

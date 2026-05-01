@@ -8,7 +8,7 @@ import { exportPem } from "../src/cert/exporter";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 import type { CertManager } from "../src/cert/manager";
-import { DevCert, DevKey } from "../src/cert/types";
+import { type DevCert, type DevKey } from "../src/cert/types";
 import {
   __resetConfig,
   __setConfig,

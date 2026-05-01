@@ -5,7 +5,7 @@ import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
 import { isValidDevCert } from "../cert/generator";
 import { certToDer } from "../cert/exporter";
-import { DevCert, DevKey } from "../cert/types";
+import { type DevCert, type DevKey } from "../cert/types";
 
 /**
  * macOS certificate store implementation.

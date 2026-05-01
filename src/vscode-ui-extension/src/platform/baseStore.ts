@@ -1,7 +1,7 @@
 import * as fs from "fs";
-import { PlatformCertificateStore, CertificateStatus } from "./types";
+import { type PlatformCertificateStore, type CertificateStatus } from "./types";
 import { isValidDevCert, getCertificateVersion } from "../cert/generator";
-import { DevCert, DevKey } from "../cert/types";
+import { type DevCert, type DevKey } from "../cert/types";
 import { buildPfx, parsePfx } from "../cert/pfx";
 
 /**

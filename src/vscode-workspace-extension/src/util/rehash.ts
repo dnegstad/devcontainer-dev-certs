@@ -126,7 +126,7 @@ function pemToDer(pem: string): Buffer | null {
  *   }
  */
 function extractSubjectDer(certDer: Buffer): Buffer | null {
-  let offset = 0;
+  const offset = 0;
 
   // Certificate SEQUENCE
   const cert = readTag(certDer, offset);

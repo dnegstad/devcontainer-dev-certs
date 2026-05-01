@@ -10,7 +10,7 @@
 import {
   createHash,
   createPrivateKey,
-  KeyObject,
+  type KeyObject,
   webcrypto,
 } from "node:crypto";
 import { X509Certificate as PeculiarX509 } from "@peculiar/x509";
@@ -32,8 +32,13 @@ export class DevCert {
   constructor(input: PeculiarX509 | Buffer | Uint8Array | ArrayBuffer | string) {
     if (input instanceof PeculiarX509) {
       this.inner = input;
+    } else if (Buffer.isBuffer(input)) {
+      // Node `Buffer<ArrayBufferLike>` isn't structurally assignable to the
+      // strict ArrayBuffer-backed view that @peculiar/x509 expects under
+      // newer TS lib types; copy into a fresh ArrayBuffer to satisfy it.
+      this.inner = new PeculiarX509(toArrayBuffer(input));
     } else if (input instanceof Uint8Array) {
-      this.inner = new PeculiarX509(input);
+      this.inner = new PeculiarX509(toArrayBuffer(input));
     } else if (input instanceof ArrayBuffer) {
       this.inner = new PeculiarX509(input);
     } else {
@@ -43,17 +48,13 @@ export class DevCert {
 
   /** DER-encoded certificate bytes. */
   get der(): Buffer {
-    if (!this._der) {
-      this._der = Buffer.from(this.inner.rawData);
-    }
+    this._der ??= Buffer.from(this.inner.rawData);
     return this._der;
   }
 
   /** PEM-encoded certificate (BEGIN/END CERTIFICATE). */
   get pem(): string {
-    if (!this._pem) {
-      this._pem = this.inner.toString("pem");
-    }
+    this._pem ??= this.inner.toString("pem");
     return this._pem;
   }
 
@@ -146,23 +147,16 @@ export class DevKey {
 
   /** PKCS#8 PEM (unencrypted). */
   get pem(): string {
-    if (!this._pem) {
-      this._pem = this.keyObject.export({
-        type: "pkcs8",
-        format: "pem",
-      }) as string;
-    }
+    this._pem ??= this.keyObject.export({
+      type: "pkcs8",
+      format: "pem",
+    }) as string;
     return this._pem;
   }
 
   /** PKCS#8 DER (unencrypted). */
   get der(): Buffer {
-    if (!this._der) {
-      this._der = this.keyObject.export({
-        type: "pkcs8",
-        format: "der",
-      }) as Buffer;
-    }
+    this._der ??= this.keyObject.export({ type: "pkcs8", format: "der" });
     return this._der;
   }
 
@@ -233,7 +227,9 @@ async function importPrivateKey(key: DevKey): Promise<CryptoKey> {
     );
   }
 
-  throw new Error(`Unsupported algorithm for CryptoKey import: ${algorithm}`);
+  throw new Error(
+    `Unsupported algorithm for CryptoKey import: ${String(algorithm)}`
+  );
 }
 
 function inferEcCurve(keyObject: KeyObject): string {
@@ -260,7 +256,11 @@ function inferEcCurve(keyObject: KeyObject): string {
 }
 
 function bufferToArrayBuffer(buf: Buffer): ArrayBuffer {
-  const ab = new ArrayBuffer(buf.byteLength);
-  new Uint8Array(ab).set(buf);
+  return toArrayBuffer(buf);
+}
+
+function toArrayBuffer(view: Buffer | Uint8Array): ArrayBuffer {
+  const ab = new ArrayBuffer(view.byteLength);
+  new Uint8Array(ab).set(view);
   return ab;
 }

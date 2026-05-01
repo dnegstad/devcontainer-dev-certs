@@ -1,9 +1,9 @@
-import { generateCertificate, GeneratedCert } from "./generator";
+import { generateCertificate, type GeneratedCert } from "./generator";
 import { exportPfx, exportPem, exportRootPfx } from "./exporter";
 import { VALIDITY_DAYS } from "./properties";
 import {
-  PlatformCertificateStore,
-  CertificateStatus,
+  type PlatformCertificateStore,
+  type CertificateStatus,
   createPlatformStore,
 } from "../platform/types";
 import { log } from "@devcontainer-dev-certs/shared";
@@ -17,9 +17,7 @@ export class CertManager {
   private currentCert: GeneratedCert | null = null;
 
   private async getStore(): Promise<PlatformCertificateStore> {
-    if (!this.store) {
-      this.store = await createPlatformStore();
-    }
+    this.store ??= await createPlatformStore();
     return this.store;
   }
 

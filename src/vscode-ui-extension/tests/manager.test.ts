@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type * as PlatformTypes from "../src/platform/types";
 import {
-  PlatformCertificateStore,
-  CertificateStatus,
+  type PlatformCertificateStore,
+  type CertificateStatus,
 } from "../src/platform/types";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 
 // Mock createPlatformStore so the CertManager uses our fake store.
 vi.mock("../src/platform/types", async (importOriginal) => {
-  const original =
-    (await importOriginal()) as typeof import("../src/platform/types");
+  const original = await importOriginal<typeof PlatformTypes>();
   return {
     ...original,
     createPlatformStore: vi.fn(),

@@ -21,11 +21,13 @@ function ensureEngine(): void {
     name: "node-webcrypto",
     crypto: webcrypto as unknown as Crypto,
   });
-  pkijs.setEngine(engine.name, engine);
+  pkijs.setEngine(
+    engine.name,
+    engine as unknown as Parameters<typeof pkijs.setEngine>[1]
+  );
   engineConfigured = true;
 }
 
-const OID_DATA = "1.2.840.113549.1.7.1";
 const OID_BAG_CERT = "1.2.840.113549.1.12.10.1.3";
 const OID_BAG_PKCS8_SHROUDED = "1.2.840.113549.1.12.10.1.2";
 const OID_X509 = "1.2.840.113549.1.9.22.1";
@@ -87,7 +89,7 @@ export async function buildPfx(opts: BuildPfxOptions): Promise<Buffer> {
     sc.privacyMode === 1
       ? {
           password: passwordBuf,
-          contentEncryptionAlgorithm: { name: "AES-CBC", length: 256 },
+          contentEncryptionAlgorithm: aesCbc256(),
           hmacHashAlgorithm: "SHA-256",
           iterationCount: PBKDF2_ITERATIONS,
         }
@@ -159,7 +161,7 @@ export async function parsePfx(
       const certBag = bag.bagValue as pkijs.CertBag;
       const certParsed = certBag.parsedValue as pkijs.Certificate;
       const der = certParsed.toSchema(true).toBER(false);
-      if (!cert) cert = new DevCert(Buffer.from(der));
+      cert ??= new DevCert(Buffer.from(der));
     } else if (bag.bagId === OID_BAG_PKCS8_SHROUDED) {
       const keyBag = bag.bagValue as pkijs.PKCS8ShroudedKeyBag;
       // Decrypt the shrouded key bag.
@@ -214,7 +216,7 @@ async function buildKeySafeBag(
 
   await shroudedBag.makeInternalValues({
     password,
-    contentEncryptionAlgorithm: { name: "AES-CBC", length: 256 },
+    contentEncryptionAlgorithm: aesCbc256(),
     hmacHashAlgorithm: "SHA-256",
     iterationCount: PBKDF2_ITERATIONS,
   });
@@ -260,6 +262,24 @@ function computeLocalKeyId(cert: DevCert): ArrayBuffer {
     out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
   }
   return out.buffer;
+}
+
+/**
+ * pkijs's `ContentEncryptionAlgorithm` type unions AES-CBC and AES-GCM
+ * variants, both of which require an `iv` field in their declared shape.
+ * In practice pkijs generates a random IV inside `EncryptedData.encrypt`
+ * and the runtime only consumes `name` + `length`; the cast tells the
+ * typechecker what the function actually accepts.
+ */
+function aesCbc256(): NonNullable<
+  Parameters<pkijs.PKCS8ShroudedKeyBag["makeInternalValues"]>[0]
+>["contentEncryptionAlgorithm"] {
+  return {
+    name: "AES-CBC",
+    length: 256,
+  } as unknown as NonNullable<
+    Parameters<pkijs.PKCS8ShroudedKeyBag["makeInternalValues"]>[0]
+  >["contentEncryptionAlgorithm"];
 }
 
 function passwordToArrayBuffer(password: string): ArrayBuffer {

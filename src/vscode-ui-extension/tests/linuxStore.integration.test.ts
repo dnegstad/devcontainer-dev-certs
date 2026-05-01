@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execFileSync } from "child_process";
+import type * as LinuxStoreModule from "../src/platform/linuxStore";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 import { buildPfx } from "../src/cert/pfx";
@@ -31,7 +32,7 @@ async function makeTestCert(): ReturnType<typeof generateCertificate> {
 describe.skipIf(!opensslAvailable)(
   "LinuxCertificateStore (integration)",
   () => {
-    let LinuxCertificateStore: typeof import("../src/platform/linuxStore").LinuxCertificateStore;
+    let LinuxCertificateStore: typeof LinuxStoreModule.LinuxCertificateStore;
 
     beforeEach(async () => {
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-integ-"));
@@ -41,7 +42,7 @@ describe.skipIf(!opensslAvailable)(
       process.env["DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY"] =
         testTrustDir;
 
-      const mod = await import("../src/platform/linuxStore");
+      const mod = await import("../src/platform/linuxStore.js");
       LinuxCertificateStore = mod.LinuxCertificateStore;
     });
 

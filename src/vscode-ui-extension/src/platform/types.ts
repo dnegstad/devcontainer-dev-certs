@@ -1,4 +1,4 @@
-import { DevCert, DevKey } from "../cert/types";
+import { type DevCert, type DevKey } from "../cert/types";
 
 export interface CertificateStatus {
   exists: boolean;
@@ -55,15 +55,15 @@ export interface PlatformCertificateStore {
 export async function createPlatformStore(): Promise<PlatformCertificateStore> {
   switch (process.platform) {
     case "win32": {
-      const { WindowsCertificateStore } = await import("./windowsStore");
+      const { WindowsCertificateStore } = await import("./windowsStore.js");
       return new WindowsCertificateStore();
     }
     case "darwin": {
-      const { MacCertificateStore } = await import("./macStore");
+      const { MacCertificateStore } = await import("./macStore.js");
       return new MacCertificateStore();
     }
     case "linux": {
-      const { LinuxCertificateStore } = await import("./linuxStore");
+      const { LinuxCertificateStore } = await import("./linuxStore.js");
       return new LinuxCertificateStore();
     }
     default:

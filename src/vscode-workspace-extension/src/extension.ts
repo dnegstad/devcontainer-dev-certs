@@ -53,7 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   if (config.get<boolean>("autoInject", true)) {
     log("Auto-inject enabled, requesting certificate material...");
-    injectCertificate();
+    void injectCertificate();
   }
 }
 
@@ -149,10 +149,10 @@ async function tryGetBundle(
   // Prefer the v2 multi-cert command.
   try {
     log("Calling getAllCertMaterial on UI extension...");
-    const bundle = (await vscode.commands.executeCommand(GET_BUNDLE_COMMAND, {
-      includeDotNetDev,
-      includeUserCerts,
-    })) as CertBundle | undefined;
+    const bundle = await vscode.commands.executeCommand<CertBundle>(
+      GET_BUNDLE_COMMAND,
+      { includeDotNetDev, includeUserCerts }
+    );
     if (bundle) return bundle;
     log("getAllCertMaterial returned no bundle; falling back to legacy command.");
   } catch (err: unknown) {
@@ -185,9 +185,9 @@ async function tryGetBundle(
 
   let legacy: CertMaterial | null;
   try {
-    legacy = (await vscode.commands.executeCommand(
+    legacy = await vscode.commands.executeCommand<CertMaterial>(
       GET_CERT_COMMAND
-    )) as CertMaterial | null;
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     log(`Error retrieving certificate from host: ${message}`);

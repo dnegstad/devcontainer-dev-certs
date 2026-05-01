@@ -272,7 +272,7 @@ async function buildBareCert(subject: string, extensions: Extension[]): Promise<
     },
     true,
     ["sign", "verify"]
-  )) as CryptoKeyPair;
+  ));
 
   const cert = await X509CertificateGenerator.create({
     serialNumber: "01",
