@@ -3,6 +3,7 @@ import { type DevCert, type DevKey } from "../cert/types";
 export interface CertificateStatus {
   exists: boolean;
   isTrusted: boolean;
+  /** SHA-1 thumbprint, uppercase hex (matches `X509Certificate2.Thumbprint`). */
   thumbprint: string | null;
   notBefore: string | null;
   notAfter: string | null;
@@ -11,12 +12,16 @@ export interface CertificateStatus {
 
 /**
  * Platform-specific certificate store interface.
- * Each platform implements this to handle finding, saving, trusting, and removing dev certs.
+ *
+ * Throughout this interface, `thumbprint` is the SHA-1 thumbprint
+ * (`DevCert.thumbprintSha1`). This is what .NET, OpenSSL trust dirs, and
+ * the Windows / macOS stores use to identify and name cert files. The
+ * stronger `DevCert.thumbprint` (SHA-256) is for in-process identity only.
  */
 export interface PlatformCertificateStore {
   /**
    * Find an existing valid ASP.NET dev cert in the platform store.
-   * Returns the cert, key, and thumbprint if found.
+   * Returns the cert, key, and SHA-1 thumbprint if found.
    */
   findExistingDevCert(): Promise<{
     cert: DevCert;
@@ -26,6 +31,8 @@ export interface PlatformCertificateStore {
 
   /**
    * Save a certificate with its private key to the platform store.
+   * `thumbprint` is the SHA-1 thumbprint and becomes the .NET X509Store
+   * filename stem (`{thumbprint}.pfx`).
    */
   saveCertificate(
     cert: DevCert,

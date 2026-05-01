@@ -41,7 +41,11 @@ describe("loadPfx", () => {
 
     await exportPfx(cert, key, dir);
     const loaded = await loadPfx(path.join(dir, "aspnetcore-dev.pfx"));
+    // LoadedCert.thumbprint is the SHA-1 (.NET-compatible) form; both that
+    // and the SHA-256 `cert.thumbprint` should round-trip through the PFX.
     expect(loaded.thumbprint).toBe(thumbprint);
+    expect(loaded.cert.thumbprintSha1).toBe(thumbprint);
+    expect(loaded.cert.thumbprint).toBe(cert.thumbprint);
     expect(loaded.key).not.toBeNull();
     expect(loaded.isExpired).toBe(false);
     expect(loaded.cert.subjectCN).toBe("localhost");

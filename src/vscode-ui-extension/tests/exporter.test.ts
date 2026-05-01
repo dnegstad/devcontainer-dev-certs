@@ -54,7 +54,10 @@ describe("exportPfx", () => {
     const pfxBytes = fs.readFileSync(path.join(dir, "aspnetcore-dev.pfx"));
     const parsed = await parsePfx(pfxBytes);
     expect(parsed.cert.subjectCN).toBe("localhost");
-    expect(parsed.cert.thumbprint).toBe(thumbprint);
+    // GeneratedCert.thumbprint is the SHA-1 (.NET-compatible) form;
+    // verify both that and the SHA-256 form round-trip.
+    expect(parsed.cert.thumbprintSha1).toBe(thumbprint);
+    expect(parsed.cert.thumbprint).toBe(cert.thumbprint);
     expect(parsed.key).not.toBeNull();
   });
 

@@ -71,7 +71,8 @@ describe("LinuxCertificateStore", () => {
 
       const pfxBytes = fs.readFileSync(pfxPath);
       const parsed = await parsePfx(pfxBytes);
-      expect(parsed.cert.thumbprint).toBe(thumbprint);
+      // .NET store filename is keyed by the SHA-1 thumbprint.
+      expect(parsed.cert.thumbprintSha1).toBe(thumbprint);
       expect(parsed.key).not.toBeNull();
     });
 
@@ -138,7 +139,8 @@ describe("LinuxCertificateStore", () => {
       const pfxPath = path.join(testRootStoreDir, `${thumbprint}.pfx`);
       const pfxBytes = fs.readFileSync(pfxPath);
       const parsed = await parsePfx(pfxBytes);
-      expect(parsed.cert.thumbprint).toBe(thumbprint);
+      // Root store filename is keyed by the SHA-1 thumbprint.
+      expect(parsed.cert.thumbprintSha1).toBe(thumbprint);
       expect(parsed.key).toBeNull();
     });
   });

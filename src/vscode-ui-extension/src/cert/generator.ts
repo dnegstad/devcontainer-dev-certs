@@ -33,6 +33,12 @@ function ensureCryptoProvider(): void {
 export interface GeneratedCert {
   cert: DevCert;
   key: DevKey;
+  /**
+   * SHA-1 thumbprint, uppercase hex. This is the .NET-compatible
+   * `X509Certificate2.Thumbprint` value used as the X509Store filename
+   * (`{thumbprint}.pfx`). For a stronger cert identifier, use
+   * `cert.thumbprint` (SHA-256).
+   */
   thumbprint: string;
 }
 
@@ -113,7 +119,7 @@ export async function generateCertificate(
   return {
     cert: devCert,
     key: devKey,
-    thumbprint: devCert.thumbprint,
+    thumbprint: devCert.thumbprintSha1,
   };
 }
 
@@ -166,10 +172,17 @@ export function getCertificateVersion(cert: DevCert): number {
 
 /**
  * Compute the SHA-1 thumbprint of a PEM-encoded certificate string.
- * Uppercase hex, matching .NET's `X509Certificate2.Thumbprint`.
+ * Uppercase hex, matching .NET's `X509Certificate2.Thumbprint` and the
+ * filename convention used by Kestrel's X509Store fallback.
+ *
+ * Note: this is intentionally SHA-1 because it has to round-trip through
+ * tooling that defines "thumbprint" as SHA-1 (`dotnet dev-certs`, the
+ * .NET X509Store filename layout, and Windows cert MMC). For a stronger
+ * cert identifier inside this extension, use `DevCert.thumbprint`
+ * (SHA-256) directly.
  */
 export function computeThumbprint(pemCert: string): string {
-  return new DevCert(pemCert).thumbprint;
+  return new DevCert(pemCert).thumbprintSha1;
 }
 
 async function generateKeyPair(

@@ -94,7 +94,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
   private async trustInDotNetRootStore(cert: DevCert): Promise<void> {
     fs.mkdirSync(this.dotNetRootStorePath, { recursive: true });
 
-    const thumbprint = cert.thumbprint;
+    const thumbprint = cert.thumbprintSha1;
     const certPath = path.join(this.dotNetRootStorePath, `${thumbprint}.pfx`);
 
     // .NET's X509Store on Linux stores certs as individual PFX files.
@@ -107,7 +107,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     const trustDir = getOpenSslTrustDir();
     fs.mkdirSync(trustDir, { recursive: true });
 
-    const thumbprint = cert.thumbprint;
+    const thumbprint = cert.thumbprintSha1;
     const pemFileName = getPemFileName(thumbprint);
     const pemPath = path.join(trustDir, pemFileName);
 

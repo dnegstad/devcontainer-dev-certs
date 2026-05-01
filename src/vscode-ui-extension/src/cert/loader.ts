@@ -5,6 +5,12 @@ import { parsePfx } from "./pfx";
 export interface LoadedCert {
   cert: DevCert;
   key: DevKey | null;
+  /**
+   * SHA-1 thumbprint, uppercase hex (matches .NET's
+   * `X509Certificate2.Thumbprint`). Used as the .NET X509Store filename
+   * stem and as the OpenSSL trust dir filename. For a stronger cert
+   * identifier inside the UI extension, use `cert.thumbprint` (SHA-256).
+   */
   thumbprint: string;
   isExpired: boolean;
 }
@@ -13,7 +19,7 @@ function buildLoadedCert(cert: DevCert, key: DevKey | null): LoadedCert {
   return {
     cert,
     key,
-    thumbprint: cert.thumbprint,
+    thumbprint: cert.thumbprintSha1,
     isExpired: cert.notAfter.getTime() < Date.now(),
   };
 }

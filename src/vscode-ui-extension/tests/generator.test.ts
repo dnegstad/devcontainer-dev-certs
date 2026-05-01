@@ -99,14 +99,35 @@ describe("generateCertificate", () => {
     expect(firstNibble).toBeLessThanOrEqual(7);
   });
 
-  it("produces an uppercase hex thumbprint", async () => {
+  it("produces an uppercase hex SHA-1 thumbprint on GeneratedCert", async () => {
+    // The GeneratedCert.thumbprint field is the SHA-1 thumbprint that
+    // matches .NET's `X509Certificate2.Thumbprint` and is used as the
+    // X509Store filename stem.
     const { thumbprint } = await makeTestCert();
     expect(thumbprint).toMatch(/^[0-9A-F]{40}$/);
   });
 
-  it("produces consistent thumbprint via computeThumbprint", async () => {
+  it("DevCert.thumbprint is SHA-256 by default", async () => {
+    const { cert } = await makeTestCert();
+    expect(cert.thumbprint).toMatch(/^[0-9A-F]{64}$/);
+  });
+
+  it("DevCert.thumbprintSha1 matches GeneratedCert.thumbprint", async () => {
+    const { cert, thumbprint } = await makeTestCert();
+    expect(cert.thumbprintSha1).toMatch(/^[0-9A-F]{40}$/);
+    expect(cert.thumbprintSha1).toBe(thumbprint);
+  });
+
+  it("DevCert.thumbprint and thumbprintSha1 differ", async () => {
+    const { cert } = await makeTestCert();
+    expect(cert.thumbprint).not.toBe(cert.thumbprintSha1);
+  });
+
+  it("computeThumbprint returns the SHA-1 thumbprint (matching .NET's convention)", async () => {
     const { cert, thumbprint } = await makeTestCert();
     expect(computeThumbprint(cert.pem)).toBe(thumbprint);
+    expect(computeThumbprint(cert.pem)).toBe(cert.thumbprintSha1);
+    expect(computeThumbprint(cert.pem)).toMatch(/^[0-9A-F]{40}$/);
   });
 
   describe("extensions", () => {

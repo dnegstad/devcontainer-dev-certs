@@ -81,7 +81,9 @@ export abstract class BaseCertificateStore implements PlatformCertificateStore {
       const pfxBytes = fs.readFileSync(pfxPath);
       const { cert, key } = await parsePfx(pfxBytes, password);
       if (!key) return null;
-      return { cert, key, thumbprint: cert.thumbprint };
+      // .NET X509Store keys files by SHA-1, so the thumbprint we hand
+      // back here (which becomes the {thumbprint}.pfx filename) is SHA-1.
+      return { cert, key, thumbprint: cert.thumbprintSha1 };
     } catch {
       return null;
     }
