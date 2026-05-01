@@ -1,12 +1,12 @@
-import * as forge from "node-forge";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
-import { isValidDevCert, computeThumbprint } from "../cert/generator";
+import { isValidDevCert } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
+import { DevCert, DevKey } from "../cert/types";
 
 /** Cached PowerShell executable name — prefers pwsh (PowerShell 7+) over powershell (5.1). */
 let resolvedPwsh: string | null = null;
@@ -34,8 +34,8 @@ async function getPowerShell(): Promise<string> {
  */
 export class WindowsCertificateStore extends BaseCertificateStore {
   async findExistingDevCert(): Promise<{
-    cert: forge.pki.Certificate;
-    key: forge.pki.rsa.PrivateKey;
+    cert: DevCert;
+    key: DevKey;
     thumbprint: string;
   } | null> {
     // Use PowerShell to find dev certs in CurrentUser\My and export the best one as PFX
@@ -65,7 +65,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     const pfxPath = result.stdout.trim();
     try {
-      const loaded = this.loadPfx(pfxPath, "export");
+      const loaded = await this.loadPfx(pfxPath, "export");
       if (!loaded || !isValidDevCert(loaded.cert)) return null;
       return loaded;
     } finally {
@@ -78,16 +78,13 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   }
 
   async saveCertificate(
-    cert: forge.pki.Certificate,
-    key: forge.pki.rsa.PrivateKey,
+    cert: DevCert,
+    key: DevKey,
     _thumbprint: string
   ): Promise<void> {
     // Export to temp PFX, then import via X509Store API (more reliable than Import-PfxCertificate)
-    const tmpPfx = path.join(
-      os.tmpdir(),
-      `devcert-save-${Date.now()}.pfx`
-    );
-    this.writePfx(cert, key, tmpPfx, "import");
+    const tmpPfx = path.join(os.tmpdir(), `devcert-save-${Date.now()}.pfx`);
+    await this.writePfx(cert, key, tmpPfx, "import");
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
@@ -110,17 +107,20 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     if (result.exitCode !== 0) {
       // Clean up temp file if PowerShell didn't
-      try { fs.unlinkSync(tmpPfx); } catch { /* ignore */ }
-      throw new Error(`Failed to save certificate to Windows store: ${result.stderr}`);
+      try {
+        fs.unlinkSync(tmpPfx);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(
+        `Failed to save certificate to Windows store: ${result.stderr}`
+      );
     }
   }
 
-  async trustCertificate(cert: forge.pki.Certificate): Promise<void> {
+  async trustCertificate(cert: DevCert): Promise<void> {
     // Export public cert as DER, import to CurrentUser\Root via X509Store API
-    const tmpCert = path.join(
-      os.tmpdir(),
-      `devcert-trust-${Date.now()}.cer`
-    );
+    const tmpCert = path.join(os.tmpdir(), `devcert-trust-${Date.now()}.cer`);
     fs.writeFileSync(tmpCert, certToDer(cert));
 
     const script =
@@ -141,8 +141,14 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     ]);
 
     if (result.exitCode !== 0) {
-      try { fs.unlinkSync(tmpCert); } catch { /* ignore */ }
-      throw new Error(`Failed to trust certificate on Windows: ${result.stderr}`);
+      try {
+        fs.unlinkSync(tmpCert);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(
+        `Failed to trust certificate on Windows: ${result.stderr}`
+      );
     }
   }
 
@@ -173,7 +179,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   }
 
   protected async isTrusted(
-    _cert: forge.pki.Certificate,
+    _cert: DevCert,
     thumbprint: string
   ): Promise<boolean> {
     const script = `

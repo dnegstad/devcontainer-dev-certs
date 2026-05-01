@@ -1,4 +1,4 @@
-import * as forge from "node-forge";
+import { DevCert, DevKey } from "../cert/types";
 
 export interface CertificateStatus {
   exists: boolean;
@@ -19,8 +19,8 @@ export interface PlatformCertificateStore {
    * Returns the cert, key, and thumbprint if found.
    */
   findExistingDevCert(): Promise<{
-    cert: forge.pki.Certificate;
-    key: forge.pki.rsa.PrivateKey;
+    cert: DevCert;
+    key: DevKey;
     thumbprint: string;
   } | null>;
 
@@ -28,15 +28,15 @@ export interface PlatformCertificateStore {
    * Save a certificate with its private key to the platform store.
    */
   saveCertificate(
-    cert: forge.pki.Certificate,
-    key: forge.pki.rsa.PrivateKey,
+    cert: DevCert,
+    key: DevKey,
     thumbprint: string
   ): Promise<void>;
 
   /**
    * Trust a certificate so the OS/browser accepts it.
    */
-  trustCertificate(cert: forge.pki.Certificate): Promise<void>;
+  trustCertificate(cert: DevCert): Promise<void>;
 
   /**
    * Remove dev certificates from all stores.

@@ -1,11 +1,10 @@
-import * as forge from "node-forge";
 import * as fs from "fs";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
-import { computeThumbprint } from "../cert/generator";
+import { DevCert, DevKey } from "../cert/types";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
-import { certToPem } from "../cert/exporter";
+import { buildPfx } from "../cert/pfx";
 import {
   getDotNetStorePath,
   getDotNetRootStorePath,
@@ -30,31 +29,37 @@ export class LinuxCertificateStore extends BaseCertificateStore {
   }
 
   async findExistingDevCert(): Promise<{
-    cert: forge.pki.Certificate;
-    key: forge.pki.rsa.PrivateKey;
+    cert: DevCert;
+    key: DevKey;
     thumbprint: string;
   } | null> {
     return this.findBestDevCertInDir(getDotNetStorePath());
   }
 
   async saveCertificate(
-    cert: forge.pki.Certificate,
-    key: forge.pki.rsa.PrivateKey,
+    cert: DevCert,
+    key: DevKey,
     thumbprint: string
   ): Promise<void> {
     const storeDir = getDotNetStorePath();
     fs.mkdirSync(storeDir, { recursive: true });
-    this.writePfx(cert, key, path.join(storeDir, `${thumbprint}.pfx`), "", 0o600);
+    await this.writePfx(
+      cert,
+      key,
+      path.join(storeDir, `${thumbprint}.pfx`),
+      "",
+      0o600
+    );
   }
 
-  async trustCertificate(cert: forge.pki.Certificate): Promise<void> {
+  async trustCertificate(cert: DevCert): Promise<void> {
     await this.trustInDotNetRootStore(cert);
     await this.trustViaOpenSsl(cert);
   }
 
   async removeCertificates(): Promise<void> {
-    this.removeDevCertsFromDir(getDotNetStorePath());
-    this.removeDevCertsFromDir(this.dotNetRootStorePath);
+    await this.removeDevCertsFromDir(getDotNetStorePath());
+    await this.removeDevCertsFromDir(this.dotNetRootStorePath);
 
     const trustDir = getOpenSslTrustDir();
     if (fs.existsSync(trustDir)) {
@@ -77,7 +82,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
   }
 
   protected async isTrusted(
-    _cert: forge.pki.Certificate,
+    _cert: DevCert,
     thumbprint: string
   ): Promise<boolean> {
     const pemPath = path.join(getOpenSslTrustDir(), getPemFileName(thumbprint));
@@ -86,35 +91,27 @@ export class LinuxCertificateStore extends BaseCertificateStore {
 
   // --- Linux-specific trust helpers ---
 
-  private async trustInDotNetRootStore(
-    cert: forge.pki.Certificate
-  ): Promise<void> {
+  private async trustInDotNetRootStore(cert: DevCert): Promise<void> {
     fs.mkdirSync(this.dotNetRootStorePath, { recursive: true });
 
-    const thumbprint = computeThumbprint(forge.pki.certificateToPem(cert));
+    const thumbprint = cert.thumbprint;
     const certPath = path.join(this.dotNetRootStorePath, `${thumbprint}.pfx`);
 
     // .NET's X509Store on Linux stores certs as individual PFX files.
     // For the Root store, we need a PFX containing only the public cert (no private key).
-    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
-      null as unknown as forge.pki.rsa.PrivateKey,
-      [cert],
-      "",
-      { algorithm: "3des" }
-    );
-    const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
-    fs.writeFileSync(certPath, Buffer.from(p12Der, "binary"), { mode: 0o644 });
+    const pfxBytes = await buildPfx({ cert });
+    fs.writeFileSync(certPath, pfxBytes, { mode: 0o644 });
   }
 
-  private async trustViaOpenSsl(cert: forge.pki.Certificate): Promise<void> {
+  private async trustViaOpenSsl(cert: DevCert): Promise<void> {
     const trustDir = getOpenSslTrustDir();
     fs.mkdirSync(trustDir, { recursive: true });
 
-    const thumbprint = computeThumbprint(forge.pki.certificateToPem(cert));
+    const thumbprint = cert.thumbprint;
     const pemFileName = getPemFileName(thumbprint);
     const pemPath = path.join(trustDir, pemFileName);
 
-    fs.writeFileSync(pemPath, certToPem(cert), { mode: 0o644 });
+    fs.writeFileSync(pemPath, cert.pem, { mode: 0o644 });
     await this.rehashDirectory(trustDir);
   }
 
@@ -175,16 +172,15 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     return result.stdout.trim() || null;
   }
 
-  private removeDevCertsFromDir(dir: string): void {
+  private async removeDevCertsFromDir(dir: string): Promise<void> {
     if (!fs.existsSync(dir)) return;
 
     const files = fs.readdirSync(dir).filter((f) => f.endsWith(".pfx"));
     for (const file of files) {
       const pfxPath = path.join(dir, file);
       try {
-        const result = this.loadPfx(pfxPath);
-        // node-forge types incorrectly declare id as number, but it's correct to pass the OID string directly
-        if (result && result.cert.getExtension({ id: ASPNET_HTTPS_OID as unknown as number })) {
+        const result = await this.loadPfx(pfxPath);
+        if (result && result.cert.hasExtension(ASPNET_HTTPS_OID)) {
           fs.unlinkSync(pfxPath);
         }
       } catch {

@@ -1,27 +1,28 @@
-import * as forge from "node-forge";
 import * as fs from "fs";
 import * as path from "path";
 import type { LoadedCert } from "./loader";
+import { DevCert, DevKey } from "./types";
 import { ASPNET_HTTPS_OID_FRIENDLY_NAME } from "./properties";
+import { buildPfx } from "./pfx";
 
 /**
  * Export a certificate with its private key as a PFX/PKCS12 file.
  */
-export function exportPfx(
-  cert: forge.pki.Certificate,
-  key: forge.pki.rsa.PrivateKey,
+export async function exportPfx(
+  cert: DevCert,
+  key: DevKey,
   outputDir: string,
   password?: string
-): string {
+): Promise<string> {
   fs.mkdirSync(outputDir, { recursive: true });
-
-  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(key, [cert], password ?? "", {
-    algorithm: "3des",
+  const der = await buildPfx({
+    cert,
+    key,
+    password,
     friendlyName: ASPNET_HTTPS_OID_FRIENDLY_NAME,
   });
-  const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
   const outPath = path.join(outputDir, "aspnetcore-dev.pfx");
-  fs.writeFileSync(outPath, Buffer.from(p12Der, "binary"));
+  fs.writeFileSync(outPath, der);
   return outPath;
 }
 
@@ -30,20 +31,17 @@ export function exportPfx(
  * Returns { certPath, keyPath }.
  */
 export function exportPem(
-  cert: forge.pki.Certificate,
-  key: forge.pki.rsa.PrivateKey,
+  cert: DevCert,
+  key: DevKey,
   outputDir: string
 ): { certPath: string; keyPath: string } {
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const certPem = forge.pki.certificateToPem(cert);
-  const keyPem = forge.pki.privateKeyToPem(key);
-
   const certPath = path.join(outputDir, "aspnetcore-dev.pem");
   const keyPath = path.join(outputDir, "aspnetcore-dev.key");
 
-  fs.writeFileSync(certPath, certPem);
-  fs.writeFileSync(keyPath, keyPem);
+  fs.writeFileSync(certPath, cert.pem);
+  fs.writeFileSync(keyPath, key.pem);
 
   return { certPath, keyPath };
 }
@@ -51,23 +49,22 @@ export function exportPem(
 /**
  * Convert a certificate to PEM format string.
  */
-export function certToPem(cert: forge.pki.Certificate): string {
-  return forge.pki.certificateToPem(cert);
+export function certToPem(cert: DevCert): string {
+  return cert.pem;
 }
 
 /**
  * Convert a private key to PEM format string (PKCS#8 unencrypted).
  */
-export function keyToPem(key: forge.pki.rsa.PrivateKey): string {
-  return forge.pki.privateKeyToPem(key);
+export function keyToPem(key: DevKey): string {
+  return key.pem;
 }
 
 /**
  * Export certificate as DER-encoded bytes (public cert only, no private key).
  */
-export function certToDer(cert: forge.pki.Certificate): Buffer {
-  const derBytes = forge.asn1.toDer(forge.pki.certificateToAsn1(cert));
-  return Buffer.from(derBytes.getBytes(), "binary");
+export function certToDer(cert: DevCert): Buffer {
+  return cert.der;
 }
 
 /**
@@ -75,21 +72,14 @@ export function certToDer(cert: forge.pki.Certificate): Buffer {
  * This matches what `dotnet dev-certs https --trust` writes to
  * ~/.dotnet/corefx/cryptography/x509stores/root/ on Linux.
  */
-export function exportRootPfx(
-  cert: forge.pki.Certificate,
+export async function exportRootPfx(
+  cert: DevCert,
   outputDir: string
-): string {
+): Promise<string> {
   fs.mkdirSync(outputDir, { recursive: true });
-
-  const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
-    null as unknown as forge.pki.rsa.PrivateKey,
-    [cert],
-    "",
-    { algorithm: "3des" }
-  );
-  const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
+  const der = await buildPfx({ cert });
   const outPath = path.join(outputDir, "aspnetcore-dev-root.pfx");
-  fs.writeFileSync(outPath, Buffer.from(p12Der, "binary"));
+  fs.writeFileSync(outPath, der);
   return outPath;
 }
 
@@ -106,45 +96,36 @@ export interface ExportedLoadedCert {
  * when the cert has a private key attached; the root PFX is only produced
  * when `includeRootPfx` is true.
  */
-export function exportLoadedCert(
+export async function exportLoadedCert(
   loaded: LoadedCert,
   name: string,
   outputDir: string,
   options: { includeRootPfx?: boolean } = {}
-): ExportedLoadedCert {
+): Promise<ExportedLoadedCert> {
   fs.mkdirSync(outputDir, { recursive: true });
 
   const pemCertPath = path.join(outputDir, `${name}.pem`);
-  fs.writeFileSync(pemCertPath, forge.pki.certificateToPem(loaded.cert));
+  fs.writeFileSync(pemCertPath, loaded.cert.pem);
 
   let pemKeyPath: string | null = null;
   let pfxPath: string | null = null;
   if (loaded.key) {
     pemKeyPath = path.join(outputDir, `${name}.key`);
-    fs.writeFileSync(pemKeyPath, forge.pki.privateKeyToPem(loaded.key));
+    fs.writeFileSync(pemKeyPath, loaded.key.pem);
 
-    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
-      loaded.key,
-      [loaded.cert],
-      "",
-      { algorithm: "3des" }
-    );
-    const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
+    const pfxBytes = await buildPfx({
+      cert: loaded.cert,
+      key: loaded.key,
+    });
     pfxPath = path.join(outputDir, `${name}.pfx`);
-    fs.writeFileSync(pfxPath, Buffer.from(p12Der, "binary"));
+    fs.writeFileSync(pfxPath, pfxBytes);
   }
 
   let rootPfxPath: string | null = null;
   if (options.includeRootPfx) {
-    const p12Asn1 = forge.pkcs12.toPkcs12Asn1(
-      null as unknown as forge.pki.rsa.PrivateKey,
-      [loaded.cert],
-      "",
-      { algorithm: "3des" }
-    );
-    const p12Der = forge.asn1.toDer(p12Asn1).getBytes();
+    const rootBytes = await buildPfx({ cert: loaded.cert });
     rootPfxPath = path.join(outputDir, `${name}-root.pfx`);
-    fs.writeFileSync(rootPfxPath, Buffer.from(p12Der, "binary"));
+    fs.writeFileSync(rootPfxPath, rootBytes);
   }
 
   return { pemCertPath, pemKeyPath, pfxPath, rootPfxPath };

@@ -1,5 +1,4 @@
 import { describe, it, expect, afterEach } from "vitest";
-import * as forge from "node-forge";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -8,7 +7,7 @@ import { exportPfx, exportPem } from "../src/cert/exporter";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 
-function makeTestCert() {
+async function makeTestCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();
   const expiry = new Date(
     now.getTime() + VALIDITY_DAYS * 24 * 60 * 60 * 1000
@@ -16,7 +15,7 @@ function makeTestCert() {
   return generateCertificate(now, expiry);
 }
 
-function makeExpiredCert() {
+async function makeExpiredCert(): ReturnType<typeof generateCertificate> {
   const notBefore = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const notAfter = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000);
   return generateCertificate(notBefore, notAfter);
@@ -35,33 +34,69 @@ afterEach(() => {
 });
 
 describe("loadPfx", () => {
-  it("round-trips a PFX written by exportPfx and recovers the thumbprint", () => {
-    const { cert, key, thumbprint } = makeTestCert();
+  it("round-trips a PFX written by exportPfx and recovers the thumbprint", async () => {
+    const { cert, key, thumbprint } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    exportPfx(cert, key, dir);
-    const loaded = loadPfx(path.join(dir, "aspnetcore-dev.pfx"));
+    await exportPfx(cert, key, dir);
+    const loaded = await loadPfx(path.join(dir, "aspnetcore-dev.pfx"));
     expect(loaded.thumbprint).toBe(thumbprint);
     expect(loaded.key).not.toBeNull();
     expect(loaded.isExpired).toBe(false);
-    expect(loaded.cert.subject.getField("CN")!.value).toBe("localhost");
+    expect(loaded.cert.subjectCN).toBe("localhost");
   });
 
-  it("accepts a password-protected PFX", () => {
-    const { cert, key, thumbprint } = makeTestCert();
+  it("accepts a password-protected PFX", async () => {
+    const { cert, key, thumbprint } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    exportPfx(cert, key, dir, "hunter2");
-    const loaded = loadPfx(path.join(dir, "aspnetcore-dev.pfx"), "hunter2");
+    await exportPfx(cert, key, dir, "hunter2");
+    const loaded = await loadPfx(
+      path.join(dir, "aspnetcore-dev.pfx"),
+      "hunter2"
+    );
     expect(loaded.thumbprint).toBe(thumbprint);
+  });
+
+  it("round-trips an ECDSA P-256 cert+key", async () => {
+    const now = new Date();
+    const expiry = new Date(now.getTime() + VALIDITY_DAYS * 86400 * 1000);
+    const { cert, key, thumbprint } = await generateCertificate(now, expiry, {
+      kind: "ec",
+      namedCurve: "P-256",
+    });
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+
+    await exportPfx(cert, key, dir);
+    const loaded = await loadPfx(path.join(dir, "aspnetcore-dev.pfx"));
+    expect(loaded.thumbprint).toBe(thumbprint);
+    expect(loaded.key).not.toBeNull();
+    expect(loaded.key!.algorithm).toBe("ec");
+  });
+
+  it("round-trips an Ed25519 cert+key", async () => {
+    const now = new Date();
+    const expiry = new Date(now.getTime() + VALIDITY_DAYS * 86400 * 1000);
+    const { cert, key, thumbprint } = await generateCertificate(now, expiry, {
+      kind: "ed25519",
+    });
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+
+    await exportPfx(cert, key, dir);
+    const loaded = await loadPfx(path.join(dir, "aspnetcore-dev.pfx"));
+    expect(loaded.thumbprint).toBe(thumbprint);
+    expect(loaded.key).not.toBeNull();
+    expect(loaded.key!.algorithm).toBe("ed25519");
   });
 });
 
 describe("loadPemPair", () => {
-  it("loads a cert + key pair", () => {
-    const { cert, key, thumbprint } = makeTestCert();
+  it("loads a cert + key pair", async () => {
+    const { cert, key, thumbprint } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
@@ -72,27 +107,42 @@ describe("loadPemPair", () => {
     expect(loaded.isExpired).toBe(false);
   });
 
-  it("loads a CA-only PEM (no key path supplied)", () => {
-    const { cert, key } = makeTestCert();
+  it("loads an EC cert + key pair", async () => {
+    const now = new Date();
+    const expiry = new Date(now.getTime() + VALIDITY_DAYS * 86400 * 1000);
+    const { cert, key } = await generateCertificate(now, expiry, {
+      kind: "ec",
+      namedCurve: "P-256",
+    });
+    const dir = tmpDir();
+    cleanupDirs.push(dir);
+    const { certPath, keyPath } = exportPem(cert, key, dir);
+
+    const loaded = loadPemPair(certPath, keyPath);
+    expect(loaded.key).not.toBeNull();
+    expect(loaded.key!.algorithm).toBe("ec");
+  });
+
+  it("loads a CA-only PEM (no key path supplied)", async () => {
+    const { cert, key } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
     const { certPath } = exportPem(cert, key, dir);
     const loaded = loadPemPair(certPath);
     expect(loaded.key).toBeNull();
-    expect(loaded.cert.subject.getField("CN")!.value).toBe("localhost");
+    expect(loaded.cert.subjectCN).toBe("localhost");
   });
 
-  it("flags expired certificates via isExpired", () => {
-    const { cert, key } = makeExpiredCert();
+  it("flags expired certificates via isExpired", async () => {
+    const { cert, key } = await makeExpiredCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    // exportPem's round-trip is fine even for expired certs.
     const certPath = path.join(dir, "expired.pem");
     const keyPath = path.join(dir, "expired.key");
-    fs.writeFileSync(certPath, forge.pki.certificateToPem(cert));
-    fs.writeFileSync(keyPath, forge.pki.privateKeyToPem(key));
+    fs.writeFileSync(certPath, cert.pem);
+    fs.writeFileSync(keyPath, key.pem);
 
     const loaded = loadPemPair(certPath, keyPath);
     expect(loaded.isExpired).toBe(true);

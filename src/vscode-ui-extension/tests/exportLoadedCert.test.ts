@@ -2,13 +2,12 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { exportLoadedCert } from "../src/cert/exporter";
+import { exportLoadedCert, exportPem } from "../src/cert/exporter";
 import { loadPemPair } from "../src/cert/loader";
-import { exportPem } from "../src/cert/exporter";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 
-function makeTestCert() {
+async function makeTestCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();
   const expiry = new Date(
     now.getTime() + VALIDITY_DAYS * 24 * 60 * 60 * 1000
@@ -29,8 +28,8 @@ afterEach(() => {
 });
 
 describe("exportLoadedCert", () => {
-  it("writes pem, key, pfx, and root pfx when includeRootPfx is true", () => {
-    const { cert, key } = makeTestCert();
+  it("writes pem, key, pfx, and root pfx when includeRootPfx is true", async () => {
+    const { cert, key } = await makeTestCert();
     const exportDir = tmpDir();
     cleanupDirs.push(exportDir);
     const { certPath, keyPath } = exportPem(cert, key, exportDir);
@@ -38,7 +37,7 @@ describe("exportLoadedCert", () => {
 
     const outDir = tmpDir();
     cleanupDirs.push(outDir);
-    const result = exportLoadedCert(loaded, "corp-ca", outDir, {
+    const result = await exportLoadedCert(loaded, "corp-ca", outDir, {
       includeRootPfx: true,
     });
 
@@ -52,8 +51,8 @@ describe("exportLoadedCert", () => {
     expect(fs.existsSync(result.rootPfxPath!)).toBe(true);
   });
 
-  it("skips PFX artifacts when the loaded cert has no private key", () => {
-    const { cert, key } = makeTestCert();
+  it("skips PFX artifacts when the loaded cert has no private key", async () => {
+    const { cert, key } = await makeTestCert();
     const exportDir = tmpDir();
     cleanupDirs.push(exportDir);
     const { certPath } = exportPem(cert, key, exportDir);
@@ -61,12 +60,32 @@ describe("exportLoadedCert", () => {
 
     const outDir = tmpDir();
     cleanupDirs.push(outDir);
-    const result = exportLoadedCert(loaded, "ca-only", outDir);
+    const result = await exportLoadedCert(loaded, "ca-only", outDir);
 
     expect(result.pemCertPath).toBe(path.join(outDir, "ca-only.pem"));
     expect(result.pemKeyPath).toBeNull();
     expect(result.pfxPath).toBeNull();
     expect(result.rootPfxPath).toBeNull();
     expect(fs.existsSync(result.pemCertPath)).toBe(true);
+  });
+
+  it("round-trips an EC-keyed user cert", async () => {
+    const now = new Date();
+    const expiry = new Date(now.getTime() + VALIDITY_DAYS * 86400 * 1000);
+    const { cert, key } = await generateCertificate(now, expiry, {
+      kind: "ec",
+      namedCurve: "P-256",
+    });
+
+    const exportDir = tmpDir();
+    cleanupDirs.push(exportDir);
+    const { certPath, keyPath } = exportPem(cert, key, exportDir);
+    const loaded = loadPemPair(certPath, keyPath);
+
+    const outDir = tmpDir();
+    cleanupDirs.push(outDir);
+    const result = await exportLoadedCert(loaded, "ec-cert", outDir);
+
+    expect(fs.existsSync(result.pfxPath!)).toBe(true);
   });
 });

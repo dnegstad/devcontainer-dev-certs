@@ -1,4 +1,3 @@
-import * as forge from "node-forge";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -6,6 +5,7 @@ import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
 import { isValidDevCert } from "../cert/generator";
 import { certToDer } from "../cert/exporter";
+import { DevCert, DevKey } from "../cert/types";
 
 /**
  * macOS certificate store implementation.
@@ -26,8 +26,8 @@ export class MacCertificateStore extends BaseCertificateStore {
   }
 
   async findExistingDevCert(): Promise<{
-    cert: forge.pki.Certificate;
-    key: forge.pki.rsa.PrivateKey;
+    cert: DevCert;
+    key: DevKey;
     thumbprint: string;
   } | null> {
     if (!fs.existsSync(this.devCertsDir)) return null;
@@ -41,7 +41,7 @@ export class MacCertificateStore extends BaseCertificateStore {
     for (const pfxFile of pfxFiles) {
       try {
         const pfxPath = path.join(this.devCertsDir, pfxFile);
-        const result = this.loadPfx(pfxPath);
+        const result = await this.loadPfx(pfxPath);
         if (result && isValidDevCert(result.cert)) {
           return result;
         }
@@ -54,8 +54,8 @@ export class MacCertificateStore extends BaseCertificateStore {
   }
 
   async saveCertificate(
-    cert: forge.pki.Certificate,
-    key: forge.pki.rsa.PrivateKey,
+    cert: DevCert,
+    key: DevKey,
     thumbprint: string
   ): Promise<void> {
     fs.mkdirSync(this.devCertsDir, { recursive: true });
@@ -63,28 +63,34 @@ export class MacCertificateStore extends BaseCertificateStore {
       this.devCertsDir,
       `aspnetcore-localhost-${thumbprint}.pfx`
     );
-    this.writePfx(cert, key, pfxPath);
+    await this.writePfx(cert, key, pfxPath);
   }
 
-  async trustCertificate(cert: forge.pki.Certificate): Promise<void> {
-    const tmpCert = path.join(
-      os.tmpdir(),
-      `devcert-trust-${Date.now()}.cer`
-    );
+  async trustCertificate(cert: DevCert): Promise<void> {
+    const tmpCert = path.join(os.tmpdir(), `devcert-trust-${Date.now()}.cer`);
     fs.writeFileSync(tmpCert, certToDer(cert));
 
     const result = await runProcess("security", [
       "add-trusted-cert",
-      "-p", "basic",
-      "-p", "ssl",
-      "-k", this.keychainPath,
+      "-p",
+      "basic",
+      "-p",
+      "ssl",
+      "-k",
+      this.keychainPath,
       tmpCert,
     ]);
 
-    try { fs.unlinkSync(tmpCert); } catch { /* ignore */ }
+    try {
+      fs.unlinkSync(tmpCert);
+    } catch {
+      /* ignore */
+    }
 
     if (result.exitCode !== 0) {
-      throw new Error(`Failed to trust certificate in keychain: ${result.stderr}`);
+      throw new Error(
+        `Failed to trust certificate in keychain: ${result.stderr}`
+      );
     }
   }
 
@@ -121,13 +127,10 @@ export class MacCertificateStore extends BaseCertificateStore {
   }
 
   protected async isTrusted(
-    cert: forge.pki.Certificate,
+    cert: DevCert,
     _thumbprint: string
   ): Promise<boolean> {
-    const tmpCert = path.join(
-      os.tmpdir(),
-      `devcert-verify-${Date.now()}.cer`
-    );
+    const tmpCert = path.join(os.tmpdir(), `devcert-verify-${Date.now()}.cer`);
     try {
       fs.writeFileSync(tmpCert, certToDer(cert));
 

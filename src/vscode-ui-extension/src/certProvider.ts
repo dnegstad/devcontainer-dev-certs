@@ -197,7 +197,7 @@ export class CertProvider {
 
     let loaded: LoadedCert;
     if (hasPfx) {
-      loaded = loadPfx(config.pfxPath!, config.pfxPassword);
+      loaded = await loadPfx(config.pfxPath!, config.pfxPassword);
     } else {
       loaded = loadPemPair(config.pemCertPath!, config.pemKeyPath ?? null);
     }
@@ -207,7 +207,7 @@ export class CertProvider {
     if (cached) return cached;
 
     if (loaded.isExpired) {
-      this.warnExpired(config.name, loaded.cert.validity.notAfter);
+      this.warnExpired(config.name, loaded.cert.notAfter);
     }
 
     const trustInContainer = config.trustInContainer !== false;
@@ -219,7 +219,7 @@ export class CertProvider {
     fs.mkdirSync(tmpDir, { recursive: true });
 
     try {
-      const exported = exportLoadedCert(loaded, config.name, tmpDir, {
+      const exported = await exportLoadedCert(loaded, config.name, tmpDir, {
         includeRootPfx: trustInContainer,
       });
 

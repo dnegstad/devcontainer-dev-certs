@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import * as forge from "node-forge";
 import {
   PlatformCertificateStore,
   CertificateStatus,
@@ -7,8 +6,7 @@ import {
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 
-// We need to mock createPlatformStore so the CertManager uses our fake store.
-// Import the module under test after mocking.
+// Mock createPlatformStore so the CertManager uses our fake store.
 vi.mock("../src/platform/types", async (importOriginal) => {
   const original =
     (await importOriginal()) as typeof import("../src/platform/types");
@@ -23,7 +21,7 @@ import { createPlatformStore } from "../src/platform/types";
 
 const mockedCreateStore = vi.mocked(createPlatformStore);
 
-function makeTestCert() {
+async function makeTestCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();
   const expiry = new Date(
     now.getTime() + VALIDITY_DAYS * 24 * 60 * 60 * 1000
@@ -83,8 +81,8 @@ describe("CertManager", () => {
 
   describe("trust", () => {
     it("generates and trusts if no cert exists", async () => {
-      const checkStatus = vi.fn()
-        // First call: nothing exists
+      const checkStatus = vi
+        .fn()
         .mockResolvedValueOnce({
           exists: false,
           isTrusted: false,
@@ -93,7 +91,6 @@ describe("CertManager", () => {
           notAfter: null,
           version: -1,
         })
-        // After generate, exists but not trusted
         .mockResolvedValueOnce({
           exists: true,
           isTrusted: false,
@@ -114,9 +111,9 @@ describe("CertManager", () => {
     });
 
     it("skips generation if cert already exists but trusts it", async () => {
-      const existing = makeTestCert();
-      const checkStatus = vi.fn()
-        // First call: exists but not trusted
+      const existing = await makeTestCert();
+      const checkStatus = vi
+        .fn()
         .mockResolvedValueOnce({
           exists: true,
           isTrusted: false,
@@ -125,7 +122,6 @@ describe("CertManager", () => {
           notAfter: new Date().toISOString(),
           version: 6,
         })
-        // Recheck: still not trusted
         .mockResolvedValueOnce({
           exists: true,
           isTrusted: false,
@@ -149,7 +145,7 @@ describe("CertManager", () => {
     });
 
     it("skips both generation and trust if cert exists and is already trusted", async () => {
-      const existing = makeTestCert();
+      const existing = await makeTestCert();
       const checkStatus = vi.fn().mockResolvedValue({
         exists: true,
         isTrusted: true,
@@ -205,17 +201,15 @@ describe("CertManager", () => {
   describe("exportCert", () => {
     it("throws if no cert is loaded and none in store", async () => {
       const manager = new CertManager();
-      await expect(
-        manager.exportCert("pfx", "/tmp/out")
-      ).rejects.toThrow("No dev certificate found");
+      await expect(manager.exportCert("pfx", "/tmp/out")).rejects.toThrow(
+        "No dev certificate found"
+      );
     });
 
     it("exports after generate without extra store lookup", async () => {
       const manager = new CertManager();
       await manager.generate();
 
-      // exportCert shouldn't need to call findExistingDevCert since
-      // we just generated a cert
       const dir = `/tmp/devcerts-test-export-${Date.now()}`;
       try {
         await manager.exportCert("pfx", dir);
