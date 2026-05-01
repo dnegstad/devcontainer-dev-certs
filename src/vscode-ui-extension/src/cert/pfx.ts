@@ -256,7 +256,7 @@ function buildBagAttributes(
  * dev-certs` produces.
  */
 function computeLocalKeyId(cert: DevCert): ArrayBuffer {
-  const hex = cert.thumbprint;
+  const hex = cert.thumbprintSha1;
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i++) {
     out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);

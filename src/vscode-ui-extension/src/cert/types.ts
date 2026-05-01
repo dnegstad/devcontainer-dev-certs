@@ -83,8 +83,13 @@ export class DevCert {
     return this.inner.notAfter;
   }
 
-  /** SHA-1 thumbprint, uppercase hex (matches .NET's `Thumbprint`). */
+  /** SHA-256 thumbprint, uppercase hex. */
   get thumbprint(): string {
+    return createHash("sha256").update(this.der).digest("hex").toUpperCase();
+  }
+
+  /** SHA-1 thumbprint, uppercase hex (compatibility only). */
+  get thumbprintSha1(): string {
     return createHash("sha1").update(this.der).digest("hex").toUpperCase();
   }
 
