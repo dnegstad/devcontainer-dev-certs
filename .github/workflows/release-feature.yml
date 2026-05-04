@@ -55,13 +55,14 @@ jobs:
     uses: ./.github/workflows/build-extensions.yml
     with:
       production: true
+      upload-vsix: true
 
   publish-feature:
     name: Publish feature to GHCR
     needs: [validate-release, build]
     runs-on: ubuntu-latest
     environment:
-      name: ghcr-release
+      name: release
       url: https://github.com/${{ github.repository }}/pkgs/container/${{ github.event.repository.name }}%2Fdevcontainer-dev-certs
     permissions:
       contents: read
@@ -108,3 +109,52 @@ jobs:
           subject-name: ${{ steps.digest.outputs.image }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
+
+  attest-vsix:
+    name: Attest and attach VSIX artifacts
+    needs: [validate-release, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: ${{ github.event.release.html_url }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download VSIX artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vsix
+          path: vsix
+
+      - name: List VSIX files
+        id: list
+        run: |
+          set -euo pipefail
+          mapfile -t FILES < <(find vsix -type f -name '*.vsix' | sort)
+          if [[ ${#FILES[@]} -eq 0 ]]; then
+            echo "::error::No VSIX files found in downloaded artifact"
+            exit 1
+          fi
+          printf '%s\n' "${FILES[@]}"
+          {
+            echo 'files<<EOF'
+            printf '%s\n' "${FILES[@]}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest VSIX provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: vsix/**/*.vsix
+
+      - name: Attach VSIX files to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          FILES: ${{ steps.list.outputs.files }}
+        run: |
+          set -euo pipefail
+          mapfile -t ARGS <<< "$FILES"
+          gh release upload "$TAG" "${ARGS[@]}" --repo "${{ github.repository }}"
