@@ -59,7 +59,7 @@ The remote extension (`dnegstad.devcontainer-dev-certs-remote`) runs inside the 
 
 ## Verifying Release Provenance
 
-Each release publishes [SLSA build provenance](https://slsa.dev/spec/v1.0/provenance) attestations that bind the artifact back to the GitHub Actions workflow run that produced it. Attestations are minted from short-lived OpenID Connect tokens — no long-lived publishing credentials are stored in the repository — and the publishing workflow runs in a protected `release` environment scoped to release tags.
+Starting with **v1.0.0**, each release publishes [SLSA build provenance](https://slsa.dev/spec/v1.0/provenance) attestations that bind the artifact back to the GitHub Actions workflow run that produced it. Attestations are minted from short-lived OpenID Connect tokens — no long-lived publishing credentials are stored in the repository — and the publishing workflow runs in a protected `release` environment scoped to release tags. Earlier (`0.x`) releases predate this pipeline and are not attested.
 
 You can verify any release artifact with the [`gh attestation verify`](https://cli.github.com/manual/gh_attestation_verify) command:
 
