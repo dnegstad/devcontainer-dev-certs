@@ -57,6 +57,25 @@ You normally don't need to do this — the feature handles it. If you'd rather i
 
 The remote extension (`dnegstad.devcontainer-dev-certs-remote`) runs inside the container and is installed by the feature. Don't install it on your local VS Code — it has no effect there.
 
+## Verifying Release Provenance
+
+Each release publishes [SLSA build provenance](https://slsa.dev/spec/v1.0/provenance) attestations that bind the artifact back to the GitHub Actions workflow run that produced it. Attestations are minted from short-lived OpenID Connect tokens — no long-lived publishing credentials are stored in the repository — and the publishing workflow runs in a protected `release` environment scoped to release tags.
+
+You can verify any release artifact with the [`gh attestation verify`](https://cli.github.com/manual/gh_attestation_verify) command:
+
+- **Devcontainer feature.** The provenance attestation is pushed to GHCR alongside the OCI artifact:
+  ```bash
+  gh attestation verify \
+      oci://ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:<version> \
+      --repo dnegstad/devcontainer-dev-certs
+  ```
+- **Extension VSIXes.** Both `dnegstad.devcontainer-dev-certs-host` and `dnegstad.devcontainer-dev-certs-remote` VSIXes are attached as assets to each [GitHub Release](https://github.com/dnegstad/devcontainer-dev-certs/releases) with attestations stored on GitHub:
+  ```bash
+  gh attestation verify <path-to>.vsix --repo dnegstad/devcontainer-dev-certs
+  ```
+
+Verification confirms that the artifact was built from this repository, on the workflow run referenced in the attestation, and has not been modified since.
+
 ## How It Works
 
 The solution has three components that work together:
