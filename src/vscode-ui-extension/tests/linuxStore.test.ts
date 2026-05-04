@@ -178,6 +178,22 @@ describe("LinuxCertificateStore", () => {
       const found = await store.findExistingDevCert();
       expect(found).toBeNull();
     });
+
+    it("silently skips an unparseable file rather than throwing", async () => {
+      // A user upgrading from a node-forge-era build of this extension can
+      // have a legacy-PBE PFX (3DES / RC2-encoded) sitting in the store
+      // dir. parsePfx rejects those; findExistingDevCert needs to swallow
+      // that error so manager.trust() can fall through to regenerating
+      // a fresh cert instead of surfacing a parse failure to the user.
+      fs.mkdirSync(testStoreDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(testStoreDir, "garbage.pfx"),
+        Buffer.from("this is not a valid PKCS#12 file")
+      );
+
+      const found = await store.findExistingDevCert();
+      expect(found).toBeNull();
+    });
   });
 
   describe("removeCertificates", () => {
