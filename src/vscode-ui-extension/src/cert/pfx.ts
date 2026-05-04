@@ -13,6 +13,7 @@ import * as pkijs from "pkijs";
 import { webcrypto } from "node:crypto";
 import { DevCert } from "./types";
 import { DevKey } from "./types";
+import { decryptLegacyPbe, isLegacyPbeOid } from "./legacyPbe";
 
 let engineConfigured = false;
 function ensureEngine(): void {
@@ -28,11 +29,15 @@ function ensureEngine(): void {
   engineConfigured = true;
 }
 
-const OID_BAG_CERT = "1.2.840.113549.1.12.10.1.3";
+const OID_CONTENT_DATA = "1.2.840.113549.1.7.1";
+const OID_CONTENT_ENCRYPTED_DATA = "1.2.840.113549.1.7.6";
+const OID_BAG_KEY = "1.2.840.113549.1.12.10.1.1";
 const OID_BAG_PKCS8_SHROUDED = "1.2.840.113549.1.12.10.1.2";
+const OID_BAG_CERT = "1.2.840.113549.1.12.10.1.3";
 const OID_X509 = "1.2.840.113549.1.9.22.1";
 const OID_FRIENDLY_NAME = "1.2.840.113549.1.9.20";
 const OID_LOCAL_KEY_ID = "1.2.840.113549.1.9.21";
+const OID_PBES2 = "1.2.840.113549.1.5.13";
 
 const PBKDF2_ITERATIONS = 2048;
 
@@ -136,44 +141,47 @@ export async function parsePfx(
   const ab = bufferToArrayBuffer(pfxBytes);
   const pfx = pkijs.PFX.fromBER(ab);
 
+  // Outer integrity check uses the PKCS#12 B.2 KDF, which pkijs supports
+  // for both modern (SHA-2) and legacy (SHA-1) MACs, so this part works
+  // regardless of how the inner SafeContents were encrypted.
   await pfx.parseInternalValues({ password: passwordBuf, checkIntegrity: true });
 
   const authSafe = pfx.parsedValue?.authenticatedSafe;
   if (!authSafe) throw new Error("PFX has no authenticated safe");
 
-  // We need to decrypt the inner SafeContents. pkijs expects a parameter
-  // shape per content type; we pass password for any encrypted contents.
-  const innerParams = authSafe.safeContents.map(() => ({ password: passwordBuf }));
-  await authSafe.parseInternalValues({ safeContents: innerParams });
-
-  const allBags: pkijs.SafeBag[] = [];
-  for (const inner of authSafe.parsedValue.safeContents) {
-    const safeContents = inner.value as pkijs.SafeContents;
-    for (const bag of safeContents.safeBags) {
-      allBags.push(bag);
-    }
+  // Walk the inner ContentInfos ourselves instead of letting pkijs's
+  // `parseInternalValues` do it — pkijs only decrypts PBES2, and we want
+  // to fall through to a small shim for the legacy `pbeWithSHAAnd*-CBC`
+  // family that older tooling (node-forge, openssl pre-3 / `-legacy`)
+  // emits.
+  const safeContentsList: pkijs.SafeContents[] = [];
+  for (const contentInfo of authSafe.safeContents) {
+    safeContentsList.push(
+      await decryptSafeContents(contentInfo, password ?? "", passwordBuf)
+    );
   }
 
   let cert: DevCert | null = null;
   let key: DevKey | null = null;
-  for (const bag of allBags) {
-    if (bag.bagId === OID_BAG_CERT) {
-      const certBag = bag.bagValue as pkijs.CertBag;
-      const certParsed = certBag.parsedValue as pkijs.Certificate;
-      const der = certParsed.toSchema(true).toBER(false);
-      cert ??= new DevCert(Buffer.from(der));
-    } else if (bag.bagId === OID_BAG_PKCS8_SHROUDED) {
-      const keyBag = bag.bagValue as pkijs.PKCS8ShroudedKeyBag;
-      // Decrypt the shrouded key bag.
-      await (keyBag as unknown as {
-        parseInternalValues: (
-          p: { password: ArrayBuffer }
-        ) => Promise<void>;
-      }).parseInternalValues({ password: passwordBuf });
-      const pki = keyBag.parsedValue;
-      if (!pki) throw new Error("PKCS#8 shrouded key bag has no key");
-      const der = pki.toSchema().toBER(false);
-      key = DevKey.fromPkcs8Der(Buffer.from(der));
+  for (const safeContents of safeContentsList) {
+    for (const bag of safeContents.safeBags) {
+      if (bag.bagId === OID_BAG_CERT) {
+        const certBag = bag.bagValue as pkijs.CertBag;
+        const certParsed = certBag.parsedValue as pkijs.Certificate;
+        const der = certParsed.toSchema(true).toBER(false);
+        cert ??= new DevCert(Buffer.from(der));
+      } else if (bag.bagId === OID_BAG_PKCS8_SHROUDED) {
+        key ??= await decryptShroudedKeyBag(
+          bag.bagValue as pkijs.PKCS8ShroudedKeyBag,
+          password ?? "",
+          passwordBuf
+        );
+      } else if (bag.bagId === OID_BAG_KEY) {
+        // Cleartext PKCS#8 key bag — rare in practice but spec-allowed.
+        const keyBag = bag.bagValue as pkijs.PrivateKeyInfo;
+        const der = keyBag.toSchema().toBER(false);
+        key ??= DevKey.fromPkcs8Der(Buffer.from(der));
+      }
     }
   }
 
@@ -182,6 +190,130 @@ export async function parsePfx(
   }
 
   return { cert, key };
+}
+
+async function decryptSafeContents(
+  contentInfo: pkijs.ContentInfo,
+  password: string,
+  passwordBuf: ArrayBuffer
+): Promise<pkijs.SafeContents> {
+  if (contentInfo.contentType === OID_CONTENT_DATA) {
+    // Cleartext SafeContents wrapped in an OCTET STRING.
+    const octet = contentInfo.content as asn1js.OctetString;
+    return pkijs.SafeContents.fromBER(octet.getValue());
+  }
+
+  if (contentInfo.contentType === OID_CONTENT_ENCRYPTED_DATA) {
+    const encryptedData = new pkijs.EncryptedData({
+      schema: contentInfo.content,
+    });
+    const algoOid =
+      encryptedData.encryptedContentInfo.contentEncryptionAlgorithm
+        .algorithmId;
+
+    if (algoOid === OID_PBES2) {
+      // Modern path — pkijs handles the PBKDF2 + AES-CBC for us.
+      const decrypted = await encryptedData.decrypt({ password: passwordBuf });
+      return pkijs.SafeContents.fromBER(decrypted);
+    }
+
+    if (isLegacyPbeOid(algoOid)) {
+      const cleartext = decryptLegacyEncryptedData(
+        encryptedData,
+        algoOid,
+        password
+      );
+      return pkijs.SafeContents.fromBER(bufferToArrayBuffer(cleartext));
+    }
+
+    throw new Error(
+      `PFX uses an unsupported content encryption algorithm: ${algoOid}`
+    );
+  }
+
+  throw new Error(
+    `PFX contains an unsupported AuthenticatedSafe content type: ${contentInfo.contentType}`
+  );
+}
+
+async function decryptShroudedKeyBag(
+  bag: pkijs.PKCS8ShroudedKeyBag,
+  password: string,
+  passwordBuf: ArrayBuffer
+): Promise<DevKey> {
+  const algoOid = bag.encryptionAlgorithm.algorithmId;
+
+  if (algoOid === OID_PBES2) {
+    await (
+      bag as unknown as {
+        parseInternalValues: (p: { password: ArrayBuffer }) => Promise<void>;
+      }
+    ).parseInternalValues({ password: passwordBuf });
+    const pki = bag.parsedValue;
+    if (!pki) throw new Error("PKCS#8 shrouded key bag has no key.");
+    const der = pki.toSchema().toBER(false);
+    return DevKey.fromPkcs8Der(Buffer.from(der));
+  }
+
+  if (isLegacyPbeOid(algoOid)) {
+    const cleartext = decryptLegacyShroudedKeyBag(bag, algoOid, password);
+    return DevKey.fromPkcs8Der(cleartext);
+  }
+
+  throw new Error(
+    `PFX uses an unsupported key encryption algorithm: ${algoOid}`
+  );
+}
+
+/**
+ * Pull (salt, iterations) out of an `AlgorithmIdentifier`'s `algorithmParams`
+ * for one of the legacy `pbeWithSHAAndN-CBC` algorithms — which carry their
+ * params as a plain `SEQUENCE { OCTET STRING, INTEGER }` instead of the
+ * PBES2 nested structure.
+ */
+function readLegacyPbeParams(
+  algorithmParams: unknown
+): { salt: Buffer; iterations: number } {
+  // pkijs hands us the raw asn1js parsed object via algorithmParams.
+  const seq = algorithmParams as asn1js.Sequence | undefined;
+  if (!seq || !Array.isArray(seq.valueBlock.value)) {
+    throw new Error("Legacy PBE parameters: missing or malformed SEQUENCE.");
+  }
+  const [saltAsn, iterAsn] = seq.valueBlock.value as [
+    asn1js.OctetString,
+    asn1js.Integer,
+  ];
+  const saltBytes = new Uint8Array(saltAsn.valueBlock.valueHexView);
+  const iterations = Number(iterAsn.valueBlock.valueDec);
+  if (!Number.isFinite(iterations) || iterations <= 0) {
+    throw new Error("Legacy PBE parameters: invalid iteration count.");
+  }
+  return { salt: Buffer.from(saltBytes), iterations };
+}
+
+function decryptLegacyEncryptedData(
+  encryptedData: pkijs.EncryptedData,
+  algoOid: string,
+  password: string
+): Buffer {
+  const params = readLegacyPbeParams(
+    encryptedData.encryptedContentInfo.contentEncryptionAlgorithm
+      .algorithmParams
+  );
+  const ciphertext = Buffer.from(
+    encryptedData.encryptedContentInfo.getEncryptedContent()
+  );
+  return decryptLegacyPbe(algoOid, { ...params, password }, ciphertext);
+}
+
+function decryptLegacyShroudedKeyBag(
+  bag: pkijs.PKCS8ShroudedKeyBag,
+  algoOid: string,
+  password: string
+): Buffer {
+  const params = readLegacyPbeParams(bag.encryptionAlgorithm.algorithmParams);
+  const ciphertext = Buffer.from(bag.encryptedData.valueBlock.valueHexView);
+  return decryptLegacyPbe(algoOid, { ...params, password }, ciphertext);
 }
 
 function buildCertSafeBag(
