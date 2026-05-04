@@ -1,31 +1,29 @@
 /**
  * Read-only legacy-PBE shim for round-tripping PKCS#12 PFXes that older
- * tooling (pre-OpenSSL 3.0 defaults, `openssl pkcs12 -legacy`, node-forge
- * with `algorithm: "3des"`, and earlier versions of this extension) wrote
- * with the RFC 7292 PBE-with-SHA-and-* algorithms.
+ * tooling (pre-OpenSSL 3.0 defaults, `openssl pkcs12 -legacy`) wrote with
+ * the RFC 7292 PBE-with-SHA-and-RC2 algorithms.
  *
- * Scope is intentionally narrow:
- *   - 3-key Triple-DES-CBC      (1.2.840.113549.1.12.1.3)
- *   - 2-key Triple-DES-CBC      (1.2.840.113549.1.12.1.4)
+ * Scope is intentionally narrow — we deliberately do NOT support the
+ * `pbeWithSHAAnd{2,3}-KeyTripleDES-CBC` variants. Most legacy PFXes that
+ * carry a private key encrypt the key bag with 3DES, so in practice this
+ * shim covers cert-bag decryption only (CA-only PFX migration). PFXes
+ * with 3DES-encrypted key bags raise a clear error so the user can
+ * re-export with a modern cipher.
+ *
  *   - 128-bit RC2-CBC           (1.2.840.113549.1.12.1.5)
  *   - 40-bit RC2-CBC            (1.2.840.113549.1.12.1.6)
  *
- * 3DES uses Node's `crypto.createDecipheriv("des-ede3-cbc"|"des-ede-cbc")`.
  * RC2 isn't compiled into OpenSSL 3.x by default, so we ship a pure-JS
  * implementation per RFC 2268. We only ever decrypt — these algorithms
  * are never used by `buildPfx`.
  */
 
-import { createDecipheriv, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 
-export const LEGACY_PBE_OID_SHA_3KEY_3DES = "1.2.840.113549.1.12.1.3";
-export const LEGACY_PBE_OID_SHA_2KEY_3DES = "1.2.840.113549.1.12.1.4";
 export const LEGACY_PBE_OID_SHA_128_RC2 = "1.2.840.113549.1.12.1.5";
 export const LEGACY_PBE_OID_SHA_40_RC2 = "1.2.840.113549.1.12.1.6";
 
 const LEGACY_OIDS = new Set<string>([
-  LEGACY_PBE_OID_SHA_3KEY_3DES,
-  LEGACY_PBE_OID_SHA_2KEY_3DES,
   LEGACY_PBE_OID_SHA_128_RC2,
   LEGACY_PBE_OID_SHA_40_RC2,
 ]);
@@ -56,59 +54,24 @@ export function decryptLegacyPbe(
   const config = pickConfig(oid);
   const key = pkcs12B2Kdf(params, config.keyBytes, /* purpose */ 1);
   const iv = pkcs12B2Kdf(params, 8, /* purpose */ 2);
-
-  let raw: Buffer;
-  switch (config.cipher) {
-    case "3des-3key":
-      raw = nodeCbc("des-ede3-cbc", key, iv, ciphertext);
-      break;
-    case "3des-2key": {
-      // 2-key 3DES expands to a 24-byte 3DES key by repeating K1 at K3.
-      const expanded = Buffer.concat([key, key.subarray(0, 8)]);
-      raw = nodeCbc("des-ede3-cbc", expanded, iv, ciphertext);
-      break;
-    }
-    case "rc2":
-      raw = rc2CbcDecrypt(key, iv, ciphertext, config.effectiveKeyBits);
-      break;
-  }
-
+  const raw = rc2CbcDecrypt(key, iv, ciphertext, config.effectiveKeyBits);
   return stripPkcs7(raw, /* blockSize */ 8);
 }
 
 interface CipherConfig {
-  cipher: "3des-3key" | "3des-2key" | "rc2";
   keyBytes: number;
-  /** Only meaningful for RC2. */
   effectiveKeyBits: number;
 }
 
 function pickConfig(oid: string): CipherConfig {
   switch (oid) {
-    case LEGACY_PBE_OID_SHA_3KEY_3DES:
-      return { cipher: "3des-3key", keyBytes: 24, effectiveKeyBits: 0 };
-    case LEGACY_PBE_OID_SHA_2KEY_3DES:
-      return { cipher: "3des-2key", keyBytes: 16, effectiveKeyBits: 0 };
     case LEGACY_PBE_OID_SHA_128_RC2:
-      return { cipher: "rc2", keyBytes: 16, effectiveKeyBits: 128 };
+      return { keyBytes: 16, effectiveKeyBits: 128 };
     case LEGACY_PBE_OID_SHA_40_RC2:
-      return { cipher: "rc2", keyBytes: 5, effectiveKeyBits: 40 };
+      return { keyBytes: 5, effectiveKeyBits: 40 };
     default:
       throw new Error(`Not a supported legacy PBE OID: ${oid}`);
   }
-}
-
-function nodeCbc(
-  cipher: string,
-  key: Buffer,
-  iv: Buffer,
-  ciphertext: Buffer
-): Buffer {
-  // We strip PKCS#7 padding ourselves so the underlying decipher works in
-  // raw mode and we can give a clearer error if the padding is wrong.
-  const decipher = createDecipheriv(cipher, key, iv);
-  decipher.setAutoPadding(false);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
 
 function stripPkcs7(buf: Buffer, blockSize: number): Buffer {
