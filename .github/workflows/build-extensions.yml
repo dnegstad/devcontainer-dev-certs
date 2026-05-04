@@ -24,6 +24,14 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: "22"
+      - name: Set up .NET 10 SDK
+        # Required by tests/dotnetPfx.integration.test.ts: builds a tiny
+        # console harness that loads our generated PFX via .NET's modern
+        # PKCS#12 path (X509CertificateLoader.LoadPkcs12). Without this
+        # step the test self-skips and we get no .NET interop coverage.
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
 
       - name: Install system dependencies for integration tests
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends libnss3-tools
