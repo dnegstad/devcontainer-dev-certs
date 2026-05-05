@@ -1,0 +1,160 @@
+name: Release Feature
+
+on:
+  release:
+    types: [released]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-release:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify release tag matches package metadata
+        id: check
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag '$TAG' is not vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          EXPECTED="${TAG#v}"
+
+          TAG_COMMIT=$(git rev-parse "refs/tags/$TAG")
+          HEAD_COMMIT=$(git rev-parse HEAD)
+          if [[ "$TAG_COMMIT" != "$HEAD_COMMIT" ]]; then
+            echo "::error::Tag $TAG points at $TAG_COMMIT but checked-out commit is $HEAD_COMMIT"
+            exit 1
+          fi
+
+          fail=0
+          for f in \
+            src/devcontainer-feature/src/devcontainer-dev-certs/devcontainer-feature.json \
+            src/vscode-ui-extension/package.json \
+            src/vscode-workspace-extension/package.json \
+            src/shared/package.json; do
+            v=$(jq -r '.version' "$f")
+            if [[ "$v" != "$EXPECTED" ]]; then
+              echo "::error file=$f::version '$v' does not match release tag '$EXPECTED'"
+              fail=1
+            fi
+          done
+          [[ "$fail" == "0" ]] || exit 1
+
+          echo "version=$EXPECTED" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate-release
+    uses: ./.github/workflows/build-extensions.yml
+    with:
+      production: true
+      upload-vsix: true
+
+  publish-feature:
+    name: Publish feature to GHCR
+    needs: [validate-release, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/pkgs/container/${{ github.event.repository.name }}%2Fdevcontainer-dev-certs
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Login to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish feature to GHCR
+        uses: devcontainers/action@1082abd5d2bf3a11abccba70eef98df068277772 # v1.4.3
+        with:
+          publish-features: "true"
+          base-path-to-features: src/devcontainer-feature/src
+          oci-registry: ghcr.io
+          features-namespace: ${{ github.repository }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve published manifest digest
+        id: digest
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${{ github.repository }}/devcontainer-dev-certs"
+          VERSION="${{ needs.validate-release.outputs.version }}"
+          DIGEST=$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest}}' | jq -r '.digest')
+          if [[ -z "$DIGEST" || "$DIGEST" == "null" ]]; then
+            echo "::error::Failed to resolve digest for ${IMAGE}:${VERSION}"
+            exit 1
+          fi
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ steps.digest.outputs.image }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
+  attest-vsix:
+    name: Attest and attach VSIX artifacts
+    needs: [validate-release, build]
+    runs-on: ubuntu-latest
+    environment:
+      name: release
+      url: ${{ github.event.release.html_url }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download VSIX artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vsix
+          path: vsix
+
+      - name: List VSIX files
+        id: list
+        run: |
+          set -euo pipefail
+          mapfile -t FILES < <(find vsix -type f -name '*.vsix' | sort)
+          if [[ ${#FILES[@]} -eq 0 ]]; then
+            echo "::error::No VSIX files found in downloaded artifact"
+            exit 1
+          fi
+          printf '%s\n' "${FILES[@]}"
+          {
+            echo 'files<<EOF'
+            printf '%s\n' "${FILES[@]}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest VSIX provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: vsix/**/*.vsix
+
+      - name: Attach VSIX files to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          FILES: ${{ steps.list.outputs.files }}
+        run: |
+          set -euo pipefail
+          mapfile -t ARGS <<< "$FILES"
+          gh release upload "$TAG" "${ARGS[@]}" --repo "${{ github.repository }}"
