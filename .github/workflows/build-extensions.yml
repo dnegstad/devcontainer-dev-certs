@@ -29,7 +29,7 @@ jobs:
         # console harness that loads our generated PFX via .NET's modern
         # PKCS#12 path (X509CertificateLoader.LoadPkcs12). Without this
         # step the test self-skips and we get no .NET interop coverage.
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "10.0.x"
 
@@ -88,7 +88,7 @@ jobs:
       - name: Set up .NET 10 SDK
         # Required only by tests/dotnetPfx.integration.test.ts, which validates
         # .NET's managed PKCS#12 loader and private-key attachment.
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "10.0.x"
 
