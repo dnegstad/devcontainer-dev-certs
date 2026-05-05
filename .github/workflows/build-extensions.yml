@@ -48,6 +48,9 @@ jobs:
       - name: Build Workspace Extension
         run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/vscode-workspace-extension
 
+      - name: Test Workspace Extension
+        run: npm test -w src/vscode-workspace-extension
+
       - name: Package UI Extension VSIX
         run: npm run package -w src/vscode-ui-extension
 
