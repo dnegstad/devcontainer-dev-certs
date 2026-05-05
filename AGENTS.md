@@ -6,7 +6,7 @@ This is a monorepo containing three components that together provide automatic H
 
 The system uses the VS Code **companion extension pattern**: two extensions communicate via cross-host `executeCommand()` routing.
 
-- **UI extension** (`src/vscode-ui-extension/`) — `extensionKind: ["ui"]`, runs on the host machine. Uses `node-forge` for X.509 certificate generation, loading, and platform-specific mechanisms for OS trust store management. Registers two cross-host commands:
+- **UI extension** (`src/vscode-ui-extension/`) — `extensionKind: ["ui"]`, runs on the host machine. Uses Node's built-in `crypto` plus `@peculiar/x509` (X.509) and `pkijs` (PKCS#12) for certificate generation, loading, and PFX I/O — supporting RSA, ECDSA, and Ed25519 keys for user-managed certs. Trust store management is handled by platform-specific mechanisms. Registers two cross-host commands:
   - `devcontainer-dev-certs.getAllCertMaterial({ includeDotNetDev, includeUserCerts })` — v2 multi-cert entrypoint. Returns a `CertBundle` combining the optional auto-generated .NET dev cert with any user-managed certificates configured in `devcontainerDevCerts.userCertificates`.
   - `devcontainer-dev-certs.getCertMaterial(autoProvision)` — legacy single-cert entrypoint, kept for backward compatibility with older pinned workspace extensions. Returns `null` when the host has disabled dotnet cert generation.
 
@@ -39,7 +39,7 @@ These decisions were made deliberately. Do not change them without discussion.
 
 ## Build System
 
-- **Extensions**: TypeScript, esbuild bundler, `@types/vscode ^1.100.0`. The UI extension bundles `node-forge` as its only runtime dependency (bundled by esbuild into the output).
+- **Extensions**: TypeScript, esbuild bundler, `@types/vscode ^1.100.0`. The UI extension bundles `@peculiar/x509`, `pkijs`, and `asn1js` as runtime dependencies (all bundled by esbuild into the output).
 - **CI**: GitHub Actions. The UI extension is packaged as a single universal VSIX (no per-platform binaries). The workspace extension is also a single universal VSIX.
 
 ## Testing
@@ -60,8 +60,10 @@ These decisions were made deliberately. Do not change them without discussion.
 
 ## Certificate Properties
 
-Must match ASP.NET's `CertificateManager` exactly:
+Must match ASP.NET's `CertificateManager` exactly for the auto-generated dev cert:
 - Subject: `CN=localhost`
-- RSA 2048-bit, SHA-256, PKCS1 padding
+- RSA 2048-bit, SHA-256, PKCS1 padding (default; `generateCertificate` also accepts ECDSA / Ed25519 algorithm overrides for non-dotnet flows)
 - 365-day validity
 - Extensions: Basic Constraints (critical, not CA), Key Usage (critical, KeyEncipherment|DigitalSignature), EKU (critical, Server Auth), SAN (critical, 7 entries), custom OID `1.3.6.1.4.1.311.84.1.1` with version byte `0x06`, SKI, AKI
+
+User-managed certificates (`devcontainerDevCerts.userCertificates`) are loaded as-is from PEM or PKCS#12 inputs and may use any algorithm Node's `crypto.createPrivateKey` understands (RSA, EC P-256/P-384/P-521, Ed25519, Ed448).

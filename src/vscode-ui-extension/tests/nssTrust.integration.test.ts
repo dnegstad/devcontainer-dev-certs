@@ -21,7 +21,7 @@ try {
   }
 }
 
-function makeTestCert() {
+async function makeTestCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();
   const expiry = new Date(
     now.getTime() + VALIDITY_DAYS * 24 * 60 * 60 * 1000
@@ -34,7 +34,7 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
   let nssDbDir: string;
   let pemPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-nss-integ-"));
     nssDbDir = path.join(tmpDir, "nssdb");
     fs.mkdirSync(nssDbDir, { recursive: true });
@@ -45,7 +45,7 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
     ]);
 
     // Generate a real cert and write PEM
-    const { cert } = makeTestCert();
+    const { cert } = await makeTestCert();
     pemPath = path.join(tmpDir, "dev-cert.pem");
     fs.writeFileSync(pemPath, certToPem(cert));
   });

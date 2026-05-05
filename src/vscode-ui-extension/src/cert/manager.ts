@@ -1,10 +1,9 @@
-import * as forge from "node-forge";
-import { generateCertificate, GeneratedCert } from "./generator";
+import { generateCertificate, type GeneratedCert } from "./generator";
 import { exportPfx, exportPem, exportRootPfx } from "./exporter";
 import { VALIDITY_DAYS } from "./properties";
 import {
-  PlatformCertificateStore,
-  CertificateStatus,
+  type PlatformCertificateStore,
+  type CertificateStatus,
   createPlatformStore,
 } from "../platform/types";
 import { log } from "@devcontainer-dev-certs/shared";
@@ -12,17 +11,13 @@ import { log } from "@devcontainer-dev-certs/shared";
 /**
  * Certificate manager that orchestrates generation, trust, export, and status
  * checking using platform-specific stores.
- *
- * Replaces the AOT binary ToolRunner with pure TypeScript.
  */
 export class CertManager {
   private store: PlatformCertificateStore | null = null;
   private currentCert: GeneratedCert | null = null;
 
   private async getStore(): Promise<PlatformCertificateStore> {
-    if (!this.store) {
-      this.store = await createPlatformStore();
-    }
+    this.store ??= await createPlatformStore();
     return this.store;
   }
 
@@ -43,7 +38,7 @@ export class CertManager {
     const expiry = new Date(
       now.getTime() + VALIDITY_DAYS * 24 * 60 * 60 * 1000
     );
-    const generated = generateCertificate(now, expiry);
+    const generated = await generateCertificate(now, expiry);
     this.currentCert = generated;
 
     log(`Certificate generated. Thumbprint: ${generated.thumbprint}`);
@@ -70,9 +65,7 @@ export class CertManager {
     if (!this.currentCert) {
       const found = await store.findExistingDevCert();
       if (!found) {
-        throw new Error(
-          "Failed to find certificate after generation."
-        );
+        throw new Error("Failed to find certificate after generation.");
       }
       this.currentCert = found;
     }
@@ -96,14 +89,14 @@ export class CertManager {
     await this.ensureLoaded();
 
     if (format === "pfx") {
-      exportPfx(
+      await exportPfx(
         this.currentCert!.cert,
         this.currentCert!.key,
         outputDir,
         password
       );
     } else if (format === "root-pfx") {
-      exportRootPfx(this.currentCert!.cert, outputDir);
+      await exportRootPfx(this.currentCert!.cert, outputDir);
     } else {
       exportPem(this.currentCert!.cert, this.currentCert!.key, outputDir);
     }

@@ -3,7 +3,7 @@
   "displayName": "Dev Container Dev Certificates (Remote)",
   "description": "Receives and installs ASP.NET and Aspire compatible HTTPS development certificates inside Dev Containers and remote environments.",
   "icon": "images/dn_workspace_extension_icon_256.png",
-  "version": "0.1.6-pre",
+  "version": "1.0.0-pre",
   "publisher": "dnegstad",
   "license": "MIT",
   "repository": {
@@ -63,7 +63,7 @@
     "build:prod": "node esbuild.mjs --production",
     "watch": "node esbuild.mjs --watch",
     "test": "vitest run",
-    "lint": "eslint src --ext ts",
+    "lint": "eslint src tests",
     "package": "vsce package --no-dependencies"
   },
   "dependencies": {

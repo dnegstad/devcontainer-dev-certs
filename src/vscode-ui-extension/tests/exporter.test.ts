@@ -1,8 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
-import * as forge from "node-forge";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { X509Certificate } from "node:crypto";
 import {
   exportPfx,
   exportPem,
@@ -12,8 +12,9 @@ import {
 } from "../src/cert/exporter";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
+import { parsePfx } from "../src/cert/pfx";
 
-function makeTestCert() {
+async function makeTestCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();
   const expiry = new Date(
     now.getTime() + VALIDITY_DAYS * 24 * 60 * 60 * 1000
@@ -34,65 +35,57 @@ afterEach(() => {
 });
 
 describe("exportPfx", () => {
-  it("writes a PFX file to the output directory", () => {
-    const { cert, key } = makeTestCert();
+  it("writes a PFX file to the output directory", async () => {
+    const { cert, key } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    const outPath = exportPfx(cert, key, dir);
+    const outPath = await exportPfx(cert, key, dir);
     expect(outPath).toBe(path.join(dir, "aspnetcore-dev.pfx"));
     expect(fs.existsSync(outPath)).toBe(true);
   });
 
-  it("produces a PFX that can be parsed back", () => {
-    const { cert, key } = makeTestCert();
+  it("produces a PFX that can be parsed back", async () => {
+    const { cert, key, thumbprint } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    exportPfx(cert, key, dir);
+    await exportPfx(cert, key, dir);
     const pfxBytes = fs.readFileSync(path.join(dir, "aspnetcore-dev.pfx"));
-    const p12Der = forge.util.createBuffer(pfxBytes.toString("binary"));
-    const p12Asn1 = forge.asn1.fromDer(p12Der);
-    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, "");
-
-    const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
-    const certBag = certBags[forge.pki.oids.certBag];
-    expect(certBag).toBeDefined();
-    expect(certBag!.length).toBeGreaterThan(0);
-
-    const parsedCert = certBag![0].cert!;
-    expect(parsedCert.subject.getField("CN")!.value).toBe("localhost");
+    const parsed = await parsePfx(pfxBytes);
+    expect(parsed.cert.subjectCN).toBe("localhost");
+    // GeneratedCert.thumbprint is the SHA-1 (.NET-compatible) form;
+    // verify both that and the SHA-256 form round-trip.
+    expect(parsed.cert.thumbprintSha1).toBe(thumbprint);
+    expect(parsed.cert.thumbprint).toBe(cert.thumbprint);
+    expect(parsed.key).not.toBeNull();
   });
 
-  it("produces a password-protected PFX when password is provided", () => {
-    const { cert, key } = makeTestCert();
+  it("produces a password-protected PFX when password is provided", async () => {
+    const { cert, key } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    exportPfx(cert, key, dir, "test-password");
+    await exportPfx(cert, key, dir, "test-password");
     const pfxBytes = fs.readFileSync(path.join(dir, "aspnetcore-dev.pfx"));
-    const p12Der = forge.util.createBuffer(pfxBytes.toString("binary"));
-    const p12Asn1 = forge.asn1.fromDer(p12Der);
-
-    // Should parse with the correct password
-    const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, "test-password");
-    const certBags = p12.getBags({ bagType: forge.pki.oids.certBag });
-    expect(certBags[forge.pki.oids.certBag]!.length).toBeGreaterThan(0);
+    const parsed = await parsePfx(pfxBytes, "test-password");
+    expect(parsed.cert.subjectCN).toBe("localhost");
   });
 
-  it("creates the output directory if it does not exist", () => {
-    const { cert, key } = makeTestCert();
-    const dir = path.join(tmpDir(), "nested", "subdir");
-    cleanupDirs.push(path.resolve(dir, "..", ".."));
+  it("creates the output directory if it does not exist", async () => {
+    const { cert, key } = await makeTestCert();
+    const root = tmpDir();
+    cleanupDirs.push(root);
+    const dir = path.join(root, "nested", "subdir");
 
-    exportPfx(cert, key, dir);
+    await exportPfx(cert, key, dir);
     expect(fs.existsSync(path.join(dir, "aspnetcore-dev.pfx"))).toBe(true);
   });
 });
 
 describe("exportPem", () => {
-  it("writes cert and key PEM files", () => {
-    const { cert, key } = makeTestCert();
+  it("writes cert and key PEM files", async () => {
+    const { cert, key } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
@@ -103,8 +96,8 @@ describe("exportPem", () => {
     expect(fs.existsSync(keyPath)).toBe(true);
   });
 
-  it("writes a valid PEM certificate that can be parsed back", () => {
-    const { cert, key } = makeTestCert();
+  it("writes a valid PEM certificate that can be parsed back", async () => {
+    const { cert, key } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
@@ -113,28 +106,31 @@ describe("exportPem", () => {
     expect(pemContent).toContain("-----BEGIN CERTIFICATE-----");
     expect(pemContent).toContain("-----END CERTIFICATE-----");
 
-    const parsed = forge.pki.certificateFromPem(pemContent);
-    expect(parsed.subject.getField("CN")!.value).toBe("localhost");
+    const parsed = new X509Certificate(pemContent);
+    expect(parsed.subject).toContain("CN=localhost");
   });
 
-  it("writes a valid PEM private key that can be parsed back", () => {
-    const { cert, key } = makeTestCert();
+  it("writes a PKCS#8 PEM private key that Node can parse back", async () => {
+    const { cert, key } = await makeTestCert();
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
     const { keyPath } = exportPem(cert, key, dir);
     const pemContent = fs.readFileSync(keyPath, "utf-8");
-    expect(pemContent).toContain("-----BEGIN RSA PRIVATE KEY-----");
-    expect(pemContent).toContain("-----END RSA PRIVATE KEY-----");
+    expect(pemContent).toContain("-----BEGIN PRIVATE KEY-----");
+    expect(pemContent).toContain("-----END PRIVATE KEY-----");
 
-    const parsed = forge.pki.privateKeyFromPem(pemContent);
-    expect(parsed).toBeDefined();
+    // Node round-trips it without error (createPrivateKey is implicit via DevKey).
+    const { createPrivateKey } = await import("node:crypto");
+    const obj = createPrivateKey({ key: pemContent, format: "pem" });
+    expect(obj.asymmetricKeyType).toBe("rsa");
   });
 
-  it("creates the output directory if it does not exist", () => {
-    const { cert, key } = makeTestCert();
-    const dir = path.join(tmpDir(), "nested", "subdir");
-    cleanupDirs.push(path.resolve(dir, "..", ".."));
+  it("creates the output directory if it does not exist", async () => {
+    const { cert, key } = await makeTestCert();
+    const root = tmpDir();
+    cleanupDirs.push(root);
+    const dir = path.join(root, "nested", "subdir");
 
     exportPem(cert, key, dir);
     expect(fs.existsSync(path.join(dir, "aspnetcore-dev.pem"))).toBe(true);
@@ -143,8 +139,8 @@ describe("exportPem", () => {
 });
 
 describe("certToPem", () => {
-  it("returns a PEM-encoded certificate string", () => {
-    const { cert } = makeTestCert();
+  it("returns a PEM-encoded certificate string", async () => {
+    const { cert } = await makeTestCert();
     const pem = certToPem(cert);
     expect(pem).toContain("-----BEGIN CERTIFICATE-----");
     expect(pem).toContain("-----END CERTIFICATE-----");
@@ -152,28 +148,25 @@ describe("certToPem", () => {
 });
 
 describe("keyToPem", () => {
-  it("returns a PEM-encoded private key string", () => {
-    const { key } = makeTestCert();
+  it("returns a PEM-encoded private key string", async () => {
+    const { key } = await makeTestCert();
     const pem = keyToPem(key);
     expect(pem).toContain("PRIVATE KEY");
   });
 });
 
 describe("certToDer", () => {
-  it("returns a Buffer of DER bytes", () => {
-    const { cert } = makeTestCert();
+  it("returns a Buffer of DER bytes", async () => {
+    const { cert } = await makeTestCert();
     const der = certToDer(cert);
     expect(Buffer.isBuffer(der)).toBe(true);
     expect(der.length).toBeGreaterThan(0);
   });
 
-  it("produces DER that can be round-tripped through forge", () => {
-    const { cert } = makeTestCert();
+  it("produces DER that Node's X509Certificate can parse", async () => {
+    const { cert } = await makeTestCert();
     const der = certToDer(cert);
-    const asn1 = forge.asn1.fromDer(
-      forge.util.createBuffer(der.toString("binary"))
-    );
-    const parsed = forge.pki.certificateFromAsn1(asn1);
-    expect(parsed.subject.getField("CN")!.value).toBe("localhost");
+    const parsed = new X509Certificate(der);
+    expect(parsed.subject).toContain("CN=localhost");
   });
 });
