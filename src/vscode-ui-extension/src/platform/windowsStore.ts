@@ -126,18 +126,14 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   }
 
   async trustCertificate(cert: DevCert): Promise<void> {
-    // Export public cert as DER, import to the configured Root store via
-    // X509Store API.
+    // Export public cert as DER, then import with the built-in Windows PKI
+    // cmdlet available in Windows PowerShell.
     const tmpCert = path.join(os.tmpdir(), `devcert-trust-${Date.now()}.cer`);
     fs.writeFileSync(tmpCert, certToDer(cert));
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
-      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('${tmpCert.replace(/'/g, "''")}'); ` +
-      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', '${this.storeLocation}'); ` +
-      `$store.Open('ReadWrite'); ` +
-      `$store.Add($cert); ` +
-      `$store.Close(); ` +
+      `Import-Certificate -FilePath '${tmpCert.replace(/'/g, "''")}' -CertStoreLocation Cert:\\${this.storeLocation}\\Root | Out-Null; ` +
       `Remove-Item '${tmpCert.replace(/'/g, "''")}'`;
 
     const pwsh = await getPowerShell();
@@ -164,16 +160,12 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     const script = `
       $ErrorActionPreference = 'SilentlyContinue'
       $oid = '${ASPNET_HTTPS_OID}'
-      foreach ($storeName in @('My', 'Root')) {
-        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($storeName, '${this.storeLocation}')
-        $store.Open('ReadWrite')
-        $toRemove = $store.Certificates | Where-Object {
+      foreach ($storePath in @('Cert:\\${this.storeLocation}\\My', 'Cert:\\${this.storeLocation}\\Root')) {
+        Get-ChildItem $storePath | Where-Object {
           $_.Extensions | Where-Object { $_.Oid.Value -eq $oid }
+        } | ForEach-Object {
+          Remove-Item -LiteralPath $_.PSPath -Force
         }
-        foreach ($cert in $toRemove) {
-          $store.Remove($cert)
-        }
-        $store.Close()
       }
     `;
 
