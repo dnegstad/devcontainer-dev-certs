@@ -79,18 +79,43 @@ const REJECTED_LEGACY_PBE_NAMES: Record<string, string> = {
 
 function unsupportedAlgorithmError(what: string, oid: string): Error {
   const legacyName = REJECTED_LEGACY_PBE_NAMES[oid];
-  if (legacyName) {
-    return new Error(
-      `PFX ${what} is encrypted with the legacy PKCS#12 algorithm ` +
-        `${legacyName} (OID ${oid}), which is not supported. Re-export ` +
-        `the PFX with the modern PBES2/AES default — i.e. ` +
-        `\`openssl pkcs12 -in legacy.pfx -nodes\` piped into ` +
-        `\`openssl pkcs12 -export -out modern.pfx\` (without \`-legacy\`).`
+  // Both branches converge on the same fix (re-export with PBES2/AES);
+  // we only differ in whether we can name the offending algorithm.
+  const algoDescription = legacyName
+    ? `the legacy PKCS#12 algorithm ${legacyName} (OID ${oid})`
+    : `an unrecognized algorithm (OID ${oid})`;
+  return new Error(
+    `PFX ${what} is encrypted with ${algoDescription}, which is not ` +
+      `supported. Re-export the PFX with the modern PBES2/AES default. ` +
+      reExportInstructions()
+  );
+}
+
+/**
+ * Platform-appropriate one-liner the user can paste to convert a legacy
+ * PFX into a PBES2/AES-encrypted one this extension accepts.
+ *
+ * Windows ships PowerShell + the PKI module, so the recipe routes through
+ * the user cert store with `Import-PfxCertificate | Export-PfxCertificate
+ * -CryptoAlgorithmOption AES256_SHA256`. macOS and Linux ship openssl, so
+ * the recipe uses `openssl pkcs12` without the `-legacy` flag.
+ */
+function reExportInstructions(): string {
+  if (process.platform === "win32") {
+    return (
+      `In PowerShell: ` +
+      `\`$p = Read-Host -AsSecureString -Prompt 'Password'; ` +
+      `Import-PfxCertificate -FilePath legacy.pfx ` +
+      `-CertStoreLocation Cert:\\CurrentUser\\My -Password $p -Exportable | ` +
+      `Export-PfxCertificate -FilePath modern.pfx -Password $p ` +
+      `-CryptoAlgorithmOption AES256_SHA256\` ` +
+      `(the cert is left in CurrentUser\\My — remove it afterwards if you ` +
+      `don't want it there).`
     );
   }
-  return new Error(
-    `PFX ${what} uses an unsupported encryption algorithm: ${oid} ` +
-      `(only PBES2/AES-CBC is accepted).`
+  return (
+    `Use openssl: \`openssl pkcs12 -in legacy.pfx -nodes\` piped into ` +
+    `\`openssl pkcs12 -export -out modern.pfx\` (without \`-legacy\`).`
   );
 }
 
