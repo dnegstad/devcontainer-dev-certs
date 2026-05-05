@@ -85,12 +85,9 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     key: DevKey,
     _thumbprint: string
   ): Promise<void> {
-    // Export to temp PFX, then import via Import-PfxCertificate. We previously
-    // used `new X509Certificate2(bytes, pwd, Exportable | PersistKeySet)` +
-    // `X509Store.Add`, but that drives the legacy CryptoAPI PFXImportCertStore
-    // path which fails with "An internal error occurred" on PBES2/AES PFXes
-    // (the format pkijs emits). Import-PfxCertificate handles modern PKCS#12
-    // formats correctly.
+    // Export to temp PFX, then import via Import-PfxCertificate. Our
+    // hand-rolled DER PFX writer (cert/pfx.ts) emits a PFX that CryptoAPI's
+    // PFXImportCertStore — the function this cmdlet wraps — accepts cleanly.
     const tmpPfx = path.join(os.tmpdir(), `devcert-save-${Date.now()}.pfx`);
     await this.writePfx(cert, key, tmpPfx, "import");
 
