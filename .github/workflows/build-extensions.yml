@@ -72,23 +72,28 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: "22"
-      - name: Set up .NET 10 SDK
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "10.0.x"
-
       - name: Install dependencies
         run: npm ci
 
       - name: Build UI Extension
         run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/vscode-ui-extension
 
-      - name: Validate PFX with .NET and Windows CryptoAPI
+      - name: Validate PFX import with Windows CryptoAPI
         # CurrentUser\Root and macOS trust both require interactive trust
         # prompts, so CI validates Windows against LocalMachine stores only.
         env:
           DEVCERTS_WINDOWS_STORE_INTEGRATION: "1"
-        run: npm test -w src/vscode-ui-extension -- tests/dotnetPfx.integration.test.ts tests/windowsStore.integration.test.ts
+        run: npm test -w src/vscode-ui-extension -- tests/windowsStore.integration.test.ts
+
+      - name: Set up .NET 10 SDK
+        # Required only by tests/dotnetPfx.integration.test.ts, which validates
+        # .NET's managed PKCS#12 loader and private-key attachment.
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Validate PFX with .NET
+        run: npm test -w src/vscode-ui-extension -- tests/dotnetPfx.integration.test.ts
 
   feature:
     name: Validate Devcontainer Feature

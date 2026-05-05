@@ -39,13 +39,12 @@ function removeLocalMachineCert(thumbprint: string): void {
   const quotedThumbprint = psString(thumbprint);
   runPowerShell(`
     $ErrorActionPreference = 'SilentlyContinue'
-    foreach ($storeName in @('My', 'Root')) {
-      $store = [System.Security.Cryptography.X509Certificates.X509Store]::new($storeName, 'LocalMachine')
-      $store.Open('ReadWrite')
-      foreach ($cert in @($store.Certificates | Where-Object { $_.Thumbprint -eq ${quotedThumbprint} })) {
-        $store.Remove($cert)
+    foreach ($storePath in @('Cert:\\LocalMachine\\My', 'Cert:\\LocalMachine\\Root')) {
+      Get-ChildItem $storePath | Where-Object {
+        $_.Thumbprint -eq ${quotedThumbprint}
+      } | ForEach-Object {
+        Remove-Item -LiteralPath $_.PSPath -Force
       }
-      $store.Close()
     }
   `);
 }
@@ -62,8 +61,8 @@ describe.skipIf(!enabled)(
     beforeAll(() => {
       pwsh = resolvePowerShell();
       const isAdmin = runPowerShell(`
-        $principal = [Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
-        $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        net session *> $null
+        if ($LASTEXITCODE -eq 0) { 'True' } else { 'False' }
       `);
       if (isAdmin !== "True") {
         throw new Error(
