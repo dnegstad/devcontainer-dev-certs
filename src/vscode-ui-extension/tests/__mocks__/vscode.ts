@@ -45,7 +45,7 @@ export function __resetConfig() {
 
 export const workspace = {
   getConfiguration(section?: string) {
-    const values = (section && configStore[section]) || {};
+    const values = (section ? configStore[section] : undefined) ?? {};
     return {
       get<T>(key: string, defaultValue?: T): T | undefined {
         if (key in values) {

@@ -1,194 +1,311 @@
-import * as forge from "node-forge";
 import {
-    ASPNET_HTTPS_OID,
-    ASPNET_HTTPS_OID_FRIENDLY_NAME,
-    CURRENT_CERTIFICATE_VERSION,
-    MINIMUM_CERTIFICATE_VERSION,
-    RSA_KEY_SIZE,
-    SAN_DNS_NAMES,
-    SAN_IP_ADDRESSES,
+  AuthorityKeyIdentifierExtension,
+  BasicConstraintsExtension,
+  ExtendedKeyUsage,
+  ExtendedKeyUsageExtension,
+  Extension,
+  KeyUsageFlags,
+  KeyUsagesExtension,
+  SubjectAlternativeNameExtension,
+  SubjectKeyIdentifierExtension,
+  X509CertificateGenerator,
+  cryptoProvider,
+} from "@peculiar/x509";
+import { randomBytes, webcrypto } from "node:crypto";
+import { DevCert, DevKey } from "./types";
+import {
+  ASPNET_HTTPS_OID,
+  ASPNET_HTTPS_OID_FRIENDLY_NAME,
+  CURRENT_CERTIFICATE_VERSION,
+  MINIMUM_CERTIFICATE_VERSION,
+  RSA_KEY_SIZE,
+  SAN_DNS_NAMES,
+  SAN_IP_ADDRESSES,
 } from "./properties";
 
+let cryptoProviderConfigured = false;
+function ensureCryptoProvider(): void {
+  if (cryptoProviderConfigured) return;
+  cryptoProvider.set(webcrypto as unknown as Crypto);
+  cryptoProviderConfigured = true;
+}
+
 export interface GeneratedCert {
-    cert: forge.pki.Certificate;
-    key: forge.pki.rsa.PrivateKey;
-    thumbprint: string;
+  cert: DevCert;
+  key: DevKey;
+  /**
+   * SHA-1 thumbprint, uppercase hex. This is the .NET-compatible
+   * `X509Certificate2.Thumbprint` value used as the X509Store filename
+   * (`{thumbprint}.pfx`). For a stronger cert identifier, use
+   * `cert.thumbprint` (SHA-256).
+   */
+  thumbprint: string;
 }
 
 /**
- * Generate a self-signed certificate matching the ASP.NET Core HTTPS dev cert format.
+ * Algorithm choices for `generateCertificate`. Defaults to RSA-2048 to match
+ * the historical ASP.NET dev cert format, but the same code path supports
+ * ECDSA P-256/P-384/P-521 and Ed25519 for user-managed flows.
  */
-export function generateCertificate(
-    notBefore: Date,
-    notAfter: Date
-): GeneratedCert {
-    // Generate RSA key pair
-    const keyPair = forge.pki.rsa.generateKeyPair(RSA_KEY_SIZE);
+export type GenerateAlgorithm =
+  | { kind: "rsa"; modulusLength?: number }
+  | { kind: "ec"; namedCurve: "P-256" | "P-384" | "P-521" }
+  | { kind: "ed25519" }
+  | { kind: "ed448" };
 
-    const cert = forge.pki.createCertificate();
-    cert.publicKey = keyPair.publicKey;
-    cert.serialNumber = generateSerialNumber();
-    cert.validity.notBefore = notBefore;
-    cert.validity.notAfter = notAfter;
+/**
+ * Generate a self-signed certificate matching the ASP.NET Core HTTPS dev
+ * cert format (subject, validity, SANs, custom OID, SKI/AKI).
+ *
+ * The default algorithm is RSA-2048 with SHA-256 signing — a byte-for-byte
+ * compatible replacement for the previous `node-forge` path. Pass an
+ * `algorithm` to opt into ECDSA / Ed25519 (used by user-managed cert flows
+ * that need to round-trip non-RSA keys).
+ */
+export async function generateCertificate(
+  notBefore: Date,
+  notAfter: Date,
+  algorithm: GenerateAlgorithm = { kind: "rsa" }
+): Promise<GeneratedCert> {
+  ensureCryptoProvider();
 
-    // Subject and Issuer (self-signed, so they're the same)
-    const attrs = [{ name: "commonName", value: "localhost" }];
-    cert.setSubject(attrs);
-    cert.setIssuer(attrs);
+  const { keyPair, signingAlgorithm } = await generateKeyPair(algorithm);
 
-    // Compute Subject Key Identifier from public key
-    const pubKeyDer = forge.asn1.toDer(
-        forge.pki.publicKeyToAsn1(keyPair.publicKey)
-    );
-    const ski = forge.md.sha256.create().update(pubKeyDer.getBytes()).digest();
-    const skiHex = ski.toHex();
+  const serialNumber = generateSerialNumber();
+  const subject = "CN=localhost";
+  const issuer = subject;
 
-    // Build extensions
-    cert.setExtensions([
-        // 1. Basic Constraints (critical) — not a CA
-        {
-            name: "basicConstraints",
-            cA: false,
-            critical: true,
-        },
-        // 2. Key Usage (critical) — KeyEncipherment | DigitalSignature
-        {
-            name: "keyUsage",
-            critical: true,
-            digitalSignature: true,
-            keyEncipherment: true,
-        },
-        // 3. Enhanced Key Usage (critical) — Server Authentication
-        {
-            name: "extKeyUsage",
-            critical: true,
-            serverAuth: true,
-        },
-        // 4. Subject Alternative Names (critical)
-        {
-            name: "subjectAltName",
-            critical: true,
-            altNames: [
-                ...SAN_DNS_NAMES.map((dns) => ({ type: 2 as const, value: dns })),
-                ...SAN_IP_ADDRESSES.map((ip) => ({ type: 7 as const, ip })),
-            ],
-        },
-        // 5. ASP.NET Core HTTPS Dev Cert marker (non-critical) — version byte
-        {
-            id: ASPNET_HTTPS_OID,
-            critical: false,
-            value: String.fromCharCode(CURRENT_CERTIFICATE_VERSION),
-        },
-        // 6. Subject Key Identifier
-        {
-            name: "subjectKeyIdentifier",
-            keyIdentifier: ski.getBytes(),
-        },
-        // 7. Authority Key Identifier (self-referencing for self-signed)
-        {
-            name: "authorityKeyIdentifier",
-            keyIdentifier: ski.getBytes(),
-        },
-    ]);
+  const sanEntries = [
+    ...SAN_DNS_NAMES.map(
+      (dns) => ({ type: "dns" as const, value: dns })
+    ),
+    ...SAN_IP_ADDRESSES.map(
+      (ip) => ({ type: "ip" as const, value: ip })
+    ),
+  ];
 
-    // Self-sign with SHA-256
-    cert.sign(keyPair.privateKey, forge.md.sha256.create());
+  const extensions: Extension[] = [
+    new BasicConstraintsExtension(false, undefined, true),
+    new KeyUsagesExtension(
+      KeyUsageFlags.digitalSignature | KeyUsageFlags.keyEncipherment,
+      true
+    ),
+    new ExtendedKeyUsageExtension([ExtendedKeyUsage.serverAuth], true),
+    new SubjectAlternativeNameExtension(sanEntries, true),
+    new Extension(
+      ASPNET_HTTPS_OID,
+      false,
+      new Uint8Array([CURRENT_CERTIFICATE_VERSION]).buffer
+    ),
+    await SubjectKeyIdentifierExtension.create(keyPair.publicKey),
+    await AuthorityKeyIdentifierExtension.create(keyPair.publicKey),
+  ];
 
-    // Compute thumbprint (SHA-1 of DER-encoded certificate, matching .NET's Thumbprint)
-    const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(cert));
-    const thumbprint = forge.md.sha1
-        .create()
-        .update(certDer.getBytes())
-        .digest()
-        .toHex()
-        .toUpperCase();
+  const cert = await X509CertificateGenerator.create({
+    serialNumber,
+    subject,
+    issuer,
+    notBefore,
+    notAfter,
+    signingAlgorithm,
+    publicKey: keyPair.publicKey,
+    signingKey: keyPair.privateKey,
+    extensions,
+  });
 
-    return {
-        cert,
-        key: keyPair.privateKey,
-        thumbprint,
-    };
+  const devCert = new DevCert(cert);
+  const devKey = await DevKey.fromCryptoKey(keyPair.privateKey);
+
+  return {
+    cert: devCert,
+    key: devKey,
+    thumbprint: devCert.thumbprintSha1,
+  };
 }
 
 /**
- * Check if a forge certificate is a valid ASP.NET Core HTTPS development certificate.
- * This checks the subject, validity period, and presence of the custom OID with an acceptable version.
+ * Check whether a parsed certificate looks like a valid ASP.NET Core HTTPS
+ * dev cert: CN=localhost, currently within its validity window, and tagged
+ * with the dev-cert custom OID at an acceptable version.
  */
 export function isValidDevCert(
-    cert: forge.pki.Certificate,
-    minimumVersion: number = MINIMUM_CERTIFICATE_VERSION
+  cert: DevCert,
+  minimumVersion: number = MINIMUM_CERTIFICATE_VERSION
 ): boolean {
-    // Check subject
-    const cn = cert.subject.getField("CN");
-    if (!cn || cn.value !== "localhost") return false;
+  if (cert.subjectCN !== "localhost") return false;
 
-    // Check not expired
-    const now = new Date();
-    if (cert.validity.notBefore > now || cert.validity.notAfter < now)
-        return false;
+  const now = new Date();
+  if (cert.notBefore > now || cert.notAfter < now) return false;
 
-    // Check ASP.NET OID version
-    const version = getCertificateVersion(cert);
-    if (version < 0 || version < minimumVersion) return false;
+  const version = getCertificateVersion(cert);
+  if (version < 0 || version < minimumVersion) return false;
 
-    return true;
+  return true;
 }
 
 /**
- * Extract the version number from the ASP.NET dev cert OID extension.
- * Returns -1 if the certificate does not have the extension.
+ * Extract the version byte from the ASP.NET dev cert custom-OID extension.
+ * Returns -1 if the extension is absent.
  */
-export function getCertificateVersion(cert: forge.pki.Certificate): number {
-    // node-forge accepts string OIDs; @types/node-forge incorrectly types id as number
-    const ext = cert.getExtension({ id: ASPNET_HTTPS_OID as unknown as number });
-    if (!ext) return -1;
+export function getCertificateVersion(cert: DevCert): number {
+  const ext = cert.getExtension(ASPNET_HTTPS_OID);
+  if (!ext) return -1;
 
-    const value = (ext as { value?: string }).value;
-    if (!value || value.length === 0) return 0;
+  // The extension's extnValue is itself a DER OCTET STRING wrapping the
+  // version byte (matching how `dotnet dev-certs` and node-forge serialise
+  // the value). Peel back one layer of OCTET STRING if present, otherwise
+  // treat the bytes directly.
+  const raw = unwrapOctetString(ext.value);
 
-    // Legacy cert: raw data is the ASCII-encoded friendly name
-    if (
-        value.length === ASPNET_HTTPS_OID_FRIENDLY_NAME.length &&
-        value.charCodeAt(0) === 0x41 // 'A'
-    ) {
-        return 0;
-    }
+  if (raw.length === 0) return 0;
 
-    // Current format: single byte containing the version number
-    return value.charCodeAt(0);
+  // Legacy v0 cert: raw bytes spell out the friendly name.
+  if (
+    raw.length === ASPNET_HTTPS_OID_FRIENDLY_NAME.length &&
+    raw[0] === 0x41 // 'A'
+  ) {
+    return 0;
+  }
+
+  return raw[0];
 }
 
 /**
- * Compute the thumbprint (SHA-1 hash) of a PEM certificate string.
+ * Compute the SHA-1 thumbprint of a PEM-encoded certificate string.
+ * Uppercase hex, matching .NET's `X509Certificate2.Thumbprint` and the
+ * filename convention used by Kestrel's X509Store fallback.
+ *
+ * Note: this is intentionally SHA-1 because it has to round-trip through
+ * tooling that defines "thumbprint" as SHA-1 (`dotnet dev-certs`, the
+ * .NET X509Store filename layout, and Windows cert MMC). For a stronger
+ * cert identifier inside this extension, use `DevCert.thumbprint`
+ * (SHA-256) directly.
  */
 export function computeThumbprint(pemCert: string): string {
-    const cert = forge.pki.certificateFromPem(pemCert);
-    const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(cert));
-    return forge.md.sha1
-        .create()
-        .update(certDer.getBytes())
-        .digest()
-        .toHex()
-        .toUpperCase();
+  return new DevCert(pemCert).thumbprintSha1;
 }
 
-/**
- * Generate a random serial number for the certificate
- * @returns a random certificate serial number
- */
+async function generateKeyPair(
+  algorithm: GenerateAlgorithm
+): Promise<{
+  keyPair: CryptoKeyPair;
+  signingAlgorithm: Algorithm | RsaHashedKeyGenParams | EcdsaParams;
+}> {
+  const subtle = webcrypto.subtle;
+
+  if (algorithm.kind === "rsa") {
+    const modulusLength = algorithm.modulusLength ?? RSA_KEY_SIZE;
+    const params: RsaHashedKeyGenParams = {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    };
+    const keyPair = (await subtle.generateKey(params, true, [
+      "sign",
+      "verify",
+    ]));
+    return {
+      keyPair,
+      signingAlgorithm: {
+        name: "RSASSA-PKCS1-v1_5",
+        hash: "SHA-256",
+      } as RsaHashedKeyGenParams,
+    };
+  }
+
+  if (algorithm.kind === "ec") {
+    const params: EcKeyGenParams = {
+      name: "ECDSA",
+      namedCurve: algorithm.namedCurve,
+    };
+    const keyPair = (await subtle.generateKey(params, true, [
+      "sign",
+      "verify",
+    ]));
+    return {
+      keyPair,
+      signingAlgorithm: {
+        name: "ECDSA",
+        hash: defaultEcHash(algorithm.namedCurve),
+      } as EcdsaParams,
+    };
+  }
+
+  if (algorithm.kind === "ed25519") {
+    const keyPair = (await subtle.generateKey(
+      "Ed25519",
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
+    return {
+      keyPair,
+      signingAlgorithm: { name: "Ed25519" },
+    };
+  }
+
+  if (algorithm.kind === "ed448") {
+    const keyPair = (await subtle.generateKey(
+      { name: "Ed448" },
+      true,
+      ["sign", "verify"]
+    )) as CryptoKeyPair;
+    return {
+      keyPair,
+      signingAlgorithm: { name: "Ed448" },
+    };
+  }
+
+  throw new Error(
+    `Unsupported algorithm: ${(algorithm as { kind: string }).kind}`
+  );
+}
+
+function defaultEcHash(curve: string): string {
+  switch (curve) {
+    case "P-256":
+      return "SHA-256";
+    case "P-384":
+      return "SHA-384";
+    case "P-521":
+      return "SHA-512";
+    default:
+      return "SHA-256";
+  }
+}
+
 function generateSerialNumber(): string {
-    // This shouldn't ever be necessary, but better safe than sorry
-    const maxAttempts = 5;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const bytes = Buffer.from(forge.random.getBytesSync(16), "binary");
-        // Ensure a non-negative value
-        bytes[0] &= 0x7f;
-
-        if (bytes.some((value) => value !== 0)) {
-            return bytes.toString("hex");
-        }
+  const maxAttempts = 5;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const bytes = randomBytes(16);
+    bytes[0] &= 0x7f; // ensure non-negative
+    if (bytes.some((value) => value !== 0)) {
+      return bytes.toString("hex");
     }
+  }
+  throw new Error("Failed to generate a non-zero certificate serial number.");
+}
 
-    throw new Error("Failed to generate a non-zero certificate serial number.");
+function unwrapOctetString(value: Buffer): Buffer {
+  if (value.length >= 2 && value[0] === 0x04) {
+    // OCTET STRING tag is 0x04. Decode short-form length.
+    if ((value[1] & 0x80) === 0) {
+      const len = value[1];
+      if (value.length === 2 + len) {
+        return value.subarray(2);
+      }
+    } else {
+      const numLenBytes = value[1] & 0x7f;
+      if (numLenBytes <= 4 && value.length >= 2 + numLenBytes) {
+        let len = 0;
+        for (let i = 0; i < numLenBytes; i++) {
+          len = (len << 8) | value[2 + i];
+        }
+        if (value.length === 2 + numLenBytes + len) {
+          return value.subarray(2 + numLenBytes);
+        }
+      }
+    }
+  }
+  return value;
 }

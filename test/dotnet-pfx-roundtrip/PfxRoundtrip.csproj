@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>DevcontainerDevCerts.Tests.PfxRoundtrip</RootNamespace>
+    <AssemblyName>PfxRoundtrip</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- This harness is CI-only; we don't ship it. Suppress the obsoletion
+         analyzers that fire on PKCS#12 helpers in newer SDKs — we use the
+         non-obsolete X509CertificateLoader path below. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

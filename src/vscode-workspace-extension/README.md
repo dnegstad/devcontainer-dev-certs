@@ -19,7 +19,7 @@ This is especially common when working with [ASP.NET](https://learn.microsoft.co
 A Dev Container feature + two companion VS Code extensions that handle everything automatically:
 
 **Host side** (companion extension):
-- Generates an HTTPS development certificate compatible with ASP.NET and Aspire (using node-forge — no .NET installation required on your host)
+- Generates an HTTPS development certificate compatible with ASP.NET and Aspire (using Node's built-in `crypto` plus `@peculiar/x509`/`pkijs` — no .NET installation required on your host)
 - Trusts it in the host OS certificate store (so browsers trust forwarded ports)
 - Serves the certificate material (PFX + PEM, base64-encoded) to the remote side via VS Code's cross-host command routing
 

@@ -1,3 +1,4 @@
+import "reflect-metadata";
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
@@ -57,7 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
           if (material) {
             ensureTerminalSslCertDir(context);
-            showLinuxTrustGuidance(context);
+            void showLinuxTrustGuidance(context);
           }
 
           return material;
@@ -123,7 +124,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
           if (bundle.certs.some((c) => c.kind === "dotnet-dev")) {
             ensureTerminalSslCertDir(context);
-            showLinuxTrustGuidance(context);
+            void showLinuxTrustGuidance(context);
           }
 
           return bundle;

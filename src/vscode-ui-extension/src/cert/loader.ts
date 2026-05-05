@@ -1,32 +1,26 @@
-import * as forge from "node-forge";
 import * as fs from "fs";
+import { DevCert, DevKey } from "./types";
+import { parsePfx } from "./pfx";
 
 export interface LoadedCert {
-  cert: forge.pki.Certificate;
-  key: forge.pki.rsa.PrivateKey | null;
+  cert: DevCert;
+  key: DevKey | null;
+  /**
+   * SHA-1 thumbprint, uppercase hex (matches .NET's
+   * `X509Certificate2.Thumbprint`). Used as the .NET X509Store filename
+   * stem and as the OpenSSL trust dir filename. For a stronger cert
+   * identifier inside the UI extension, use `cert.thumbprint` (SHA-256).
+   */
   thumbprint: string;
   isExpired: boolean;
 }
 
-function computeThumbprintFromCert(cert: forge.pki.Certificate): string {
-  const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(cert));
-  return forge.md.sha1
-    .create()
-    .update(certDer.getBytes())
-    .digest()
-    .toHex()
-    .toUpperCase();
-}
-
-function buildLoadedCert(
-  cert: forge.pki.Certificate,
-  key: forge.pki.rsa.PrivateKey | null
-): LoadedCert {
+function buildLoadedCert(cert: DevCert, key: DevKey | null): LoadedCert {
   return {
     cert,
     key,
-    thumbprint: computeThumbprintFromCert(cert),
-    isExpired: cert.validity.notAfter.getTime() < Date.now(),
+    thumbprint: cert.thumbprintSha1,
+    isExpired: cert.notAfter.getTime() < Date.now(),
   };
 }
 
@@ -34,30 +28,12 @@ function buildLoadedCert(
  * Load a PFX/PKCS#12 certificate from disk. Returns the first certificate bag
  * and, when present, its matching private key.
  */
-export function loadPfx(filePath: string, password?: string): LoadedCert {
+export async function loadPfx(
+  filePath: string,
+  password?: string
+): Promise<LoadedCert> {
   const bytes = fs.readFileSync(filePath);
-  const p12Der = forge.util.createBuffer(bytes.toString("binary"));
-  const p12Asn1 = forge.asn1.fromDer(p12Der);
-  const p12 = forge.pkcs12.pkcs12FromAsn1(p12Asn1, password ?? "");
-
-  const certBags = p12.getBags({ bagType: forge.pki.oids.certBag })[
-    forge.pki.oids.certBag
-  ];
-  if (!certBags || certBags.length === 0 || !certBags[0].cert) {
-    throw new Error(`PFX at ${filePath} contains no certificate.`);
-  }
-  const cert = certBags[0].cert;
-
-  const keyBags =
-    p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[
-      forge.pki.oids.pkcs8ShroudedKeyBag
-    ] ?? [];
-  const keyBagsUnshrouded =
-    p12.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag] ??
-    [];
-  const keyBag = keyBags[0] ?? keyBagsUnshrouded[0];
-  const key = (keyBag?.key as forge.pki.rsa.PrivateKey | undefined) ?? null;
-
+  const { cert, key } = await parsePfx(bytes, password);
   return buildLoadedCert(cert, key);
 }
 
@@ -69,12 +45,12 @@ export function loadPemPair(
   keyPath?: string | null
 ): LoadedCert {
   const certPem = fs.readFileSync(certPath, "utf-8");
-  const cert = forge.pki.certificateFromPem(certPem);
+  const cert = new DevCert(certPem);
 
-  let key: forge.pki.rsa.PrivateKey | null = null;
+  let key: DevKey | null = null;
   if (keyPath) {
     const keyPem = fs.readFileSync(keyPath, "utf-8");
-    key = forge.pki.privateKeyFromPem(keyPem) as forge.pki.rsa.PrivateKey;
+    key = DevKey.fromPem(keyPem);
   }
 
   return buildLoadedCert(cert, key);

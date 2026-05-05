@@ -7,9 +7,14 @@
     "src/vscode-workspace-extension"
   ],
   "scripts": {
-    "hydrate:sample-project": "node test/sample-project/hydrate-sample-project.mjs"
+    "hydrate:sample-project": "node test/sample-project/hydrate-sample-project.mjs",
+    "lint": "eslint ."
   },
   "devDependencies": {
-    "semver": "^7.7.4"
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.3.0",
+    "globals": "^17.6.0",
+    "semver": "^7.7.4",
+    "typescript-eslint": "^8.59.2"
   }
 }

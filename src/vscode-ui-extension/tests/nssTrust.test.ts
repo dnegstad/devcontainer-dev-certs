@@ -11,7 +11,7 @@ vi.mock("../src/platform/processUtil", () => ({
 // Mock os.homedir to use a temp directory for browser profile discovery
 let mockHomeDir: string;
 vi.mock("os", async (importOriginal) => {
-  const original = (await importOriginal()) as typeof import("os");
+  const original = await importOriginal<typeof os>();
   return {
     ...original,
     homedir: () => mockHomeDir,

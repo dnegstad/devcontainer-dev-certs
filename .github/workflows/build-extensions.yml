@@ -24,6 +24,14 @@ jobs:
       - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: "22"
+      - name: Set up .NET 10 SDK
+        # Required by tests/dotnetPfx.integration.test.ts: builds a tiny
+        # console harness that loads our generated PFX via .NET's modern
+        # PKCS#12 path (X509CertificateLoader.LoadPkcs12). Without this
+        # step the test self-skips and we get no .NET interop coverage.
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
 
       - name: Install system dependencies for integration tests
         run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends libnss3-tools
@@ -40,6 +48,9 @@ jobs:
       - name: Build Workspace Extension
         run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/vscode-workspace-extension
 
+      - name: Test Workspace Extension
+        run: npm test -w src/vscode-workspace-extension
+
       - name: Package UI Extension VSIX
         run: npm run package -w src/vscode-ui-extension
 
@@ -52,6 +63,32 @@ jobs:
         with:
           name: vsix
           path: src/vscode-*-extension/*.vsix
+
+  windows-certificate-validation:
+    name: Windows Certificate Validation
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22"
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build UI Extension
+        run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/vscode-ui-extension
+
+      - name: Validate PFX with .NET and Windows CryptoAPI
+        # CurrentUser\Root and macOS trust both require interactive trust
+        # prompts, so CI validates Windows against LocalMachine stores only.
+        env:
+          DEVCERTS_WINDOWS_STORE_INTEGRATION: "1"
+        run: npm test -w src/vscode-ui-extension -- tests/dotnetPfx.integration.test.ts tests/windowsStore.integration.test.ts
 
   feature:
     name: Validate Devcontainer Feature

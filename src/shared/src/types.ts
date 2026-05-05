@@ -4,6 +4,12 @@
  * with pinned older extension versions on either side of the IPC.
  */
 export interface CertMaterial {
+  /**
+   * SHA-1 thumbprint, uppercase hex (matches `X509Certificate2.Thumbprint`).
+   * The workspace extension uses this directly as the .NET X509Store
+   * filename stem (`{thumbprint}.pfx`) and the OpenSSL trust dir filename
+   * stem, so it has to be SHA-1.
+   */
   thumbprint: string;
   pfxBase64: string;
   pemCertBase64: string;
@@ -26,6 +32,11 @@ export interface CertMaterialV2 {
   kind: CertKind;
   /** Filename stem used in extra destinations. */
   name: string;
+  /**
+   * SHA-1 thumbprint, uppercase hex. The workspace extension keys files
+   * by this in the .NET X509Store and OpenSSL trust dir; .NET tooling
+   * defines "thumbprint" as SHA-1 so the wire-protocol field has to match.
+   */
   thumbprint: string;
   /** Omitted when no private key is available (CA-only user certs). */
   pfxBase64?: string;

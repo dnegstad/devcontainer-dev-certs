@@ -1,15 +1,17 @@
-import * as forge from "node-forge";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
-import { isValidDevCert, computeThumbprint } from "../cert/generator";
+import { isValidDevCert } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
+import { type DevCert, type DevKey } from "../cert/types";
 
 /** Cached PowerShell executable name — prefers pwsh (PowerShell 7+) over powershell (5.1). */
 let resolvedPwsh: string | null = null;
+
+export type WindowsStoreLocation = "CurrentUser" | "LocalMachine";
 
 async function getPowerShell(): Promise<string> {
   if (resolvedPwsh) return resolvedPwsh;
@@ -33,23 +35,31 @@ async function getPowerShell(): Promise<string> {
  * Prefers pwsh (PowerShell 7+) when available, falls back to powershell (5.1).
  */
 export class WindowsCertificateStore extends BaseCertificateStore {
+  constructor(private readonly storeLocation: WindowsStoreLocation = "CurrentUser") {
+    super();
+  }
+
   async findExistingDevCert(): Promise<{
-    cert: forge.pki.Certificate;
-    key: forge.pki.rsa.PrivateKey;
+    cert: DevCert;
+    key: DevKey;
     thumbprint: string;
   } | null> {
-    // Use PowerShell to find dev certs in CurrentUser\My and export the best one as PFX
+    // Use PowerShell to find dev certs in the configured My store and export
+    // the best one as PFX.
     const script = `
       $ErrorActionPreference = 'Stop'
       $oid = '${ASPNET_HTTPS_OID}'
-      $certs = Get-ChildItem Cert:\\CurrentUser\\My | Where-Object {
+      $certs = Get-ChildItem Cert:\\${this.storeLocation}\\My | Where-Object {
         $_.Extensions | Where-Object { $_.Oid.Value -eq $oid }
       } | Sort-Object NotAfter -Descending
       if ($certs.Count -eq 0) { exit 1 }
       $best = $certs[0]
       $tmpPfx = Join-Path $env:TEMP ("devcert-" + [guid]::NewGuid().ToString("N") + ".pfx")
       $pwd = ConvertTo-SecureString -String "export" -Force -AsPlainText
-      Export-PfxCertificate -Cert $best -FilePath $tmpPfx -Password $pwd | Out-Null
+      # AES256_SHA256 forces a PBES2/AES PFX. The default (TripleDES_SHA1)
+      # produces a legacy PKCS#12 PBE format that our pkijs-based parser
+      # deliberately rejects (see cert/pfx.ts).
+      Export-PfxCertificate -Cert $best -FilePath $tmpPfx -Password $pwd -CryptoAlgorithmOption AES256_SHA256 | Out-Null
       Write-Output $tmpPfx
     `;
 
@@ -65,7 +75,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     const pfxPath = result.stdout.trim();
     try {
-      const loaded = this.loadPfx(pfxPath, "export");
+      const loaded = await this.loadPfx(pfxPath, "export");
       if (!loaded || !isValidDevCert(loaded.cert)) return null;
       return loaded;
     } finally {
@@ -78,26 +88,20 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   }
 
   async saveCertificate(
-    cert: forge.pki.Certificate,
-    key: forge.pki.rsa.PrivateKey,
+    cert: DevCert,
+    key: DevKey,
     _thumbprint: string
   ): Promise<void> {
-    // Export to temp PFX, then import via X509Store API (more reliable than Import-PfxCertificate)
-    const tmpPfx = path.join(
-      os.tmpdir(),
-      `devcert-save-${Date.now()}.pfx`
-    );
-    this.writePfx(cert, key, tmpPfx, "import");
+    // Export to temp PFX, then import via Import-PfxCertificate. Our
+    // hand-rolled DER PFX writer (cert/pfx.ts) emits a PFX that CryptoAPI's
+    // PFXImportCertStore — the function this cmdlet wraps — accepts cleanly.
+    const tmpPfx = path.join(os.tmpdir(), `devcert-save-${Date.now()}.pfx`);
+    await this.writePfx(cert, key, tmpPfx, "import");
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
-      `$pfxBytes = [System.IO.File]::ReadAllBytes('${tmpPfx.replace(/'/g, "''")}'); ` +
-      `$flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]'Exportable, PersistKeySet'; ` +
-      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxBytes, 'import', $flags); ` +
-      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'CurrentUser'); ` +
-      `$store.Open('ReadWrite'); ` +
-      `$store.Add($cert); ` +
-      `$store.Close(); ` +
+      `$pwd = ConvertTo-SecureString -String 'import' -Force -AsPlainText; ` +
+      `Import-PfxCertificate -FilePath '${tmpPfx.replace(/'/g, "''")}' -CertStoreLocation Cert:\\${this.storeLocation}\\My -Password $pwd -Exportable | Out-Null; ` +
       `Remove-Item '${tmpPfx.replace(/'/g, "''")}'`;
 
     const pwsh = await getPowerShell();
@@ -110,23 +114,27 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     if (result.exitCode !== 0) {
       // Clean up temp file if PowerShell didn't
-      try { fs.unlinkSync(tmpPfx); } catch { /* ignore */ }
-      throw new Error(`Failed to save certificate to Windows store: ${result.stderr}`);
+      try {
+        fs.unlinkSync(tmpPfx);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(
+        `Failed to save certificate to Windows store: ${result.stderr}`
+      );
     }
   }
 
-  async trustCertificate(cert: forge.pki.Certificate): Promise<void> {
-    // Export public cert as DER, import to CurrentUser\Root via X509Store API
-    const tmpCert = path.join(
-      os.tmpdir(),
-      `devcert-trust-${Date.now()}.cer`
-    );
+  async trustCertificate(cert: DevCert): Promise<void> {
+    // Export public cert as DER, import to the configured Root store via
+    // X509Store API.
+    const tmpCert = path.join(os.tmpdir(), `devcert-trust-${Date.now()}.cer`);
     fs.writeFileSync(tmpCert, certToDer(cert));
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
       `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('${tmpCert.replace(/'/g, "''")}'); ` +
-      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', 'CurrentUser'); ` +
+      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', '${this.storeLocation}'); ` +
       `$store.Open('ReadWrite'); ` +
       `$store.Add($cert); ` +
       `$store.Close(); ` +
@@ -141,8 +149,14 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     ]);
 
     if (result.exitCode !== 0) {
-      try { fs.unlinkSync(tmpCert); } catch { /* ignore */ }
-      throw new Error(`Failed to trust certificate on Windows: ${result.stderr}`);
+      try {
+        fs.unlinkSync(tmpCert);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(
+        `Failed to trust certificate on Windows: ${result.stderr}`
+      );
     }
   }
 
@@ -151,7 +165,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
       $ErrorActionPreference = 'SilentlyContinue'
       $oid = '${ASPNET_HTTPS_OID}'
       foreach ($storeName in @('My', 'Root')) {
-        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($storeName, 'CurrentUser')
+        $store = New-Object System.Security.Cryptography.X509Certificates.X509Store($storeName, '${this.storeLocation}')
         $store.Open('ReadWrite')
         $toRemove = $store.Certificates | Where-Object {
           $_.Extensions | Where-Object { $_.Oid.Value -eq $oid }
@@ -173,11 +187,11 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   }
 
   protected async isTrusted(
-    _cert: forge.pki.Certificate,
+    _cert: DevCert,
     thumbprint: string
   ): Promise<boolean> {
     const script = `
-      $cert = Get-ChildItem Cert:\\CurrentUser\\Root | Where-Object { $_.Thumbprint -eq '${thumbprint}' }
+      $cert = Get-ChildItem Cert:\\${this.storeLocation}\\Root | Where-Object { $_.Thumbprint -eq '${thumbprint}' }
       if ($cert) { Write-Output 'true' } else { Write-Output 'false' }
     `;
 

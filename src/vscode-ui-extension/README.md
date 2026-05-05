@@ -19,7 +19,7 @@ This is especially common when working with [ASP.NET](https://learn.microsoft.co
 A Dev Container feature + two companion VS Code extensions that handle everything automatically:
 
 **Host side** (this extension):
-- Generates an HTTPS development certificate compatible with ASP.NET and Aspire (using node-forge — no .NET installation required on your host)
+- Generates an HTTPS development certificate compatible with ASP.NET and Aspire (using Node's built-in `crypto` plus `@peculiar/x509`/`pkijs` — no .NET installation required on your host)
 - Trusts it in the host OS certificate store (so browsers trust forwarded ports)
 - Serves the certificate material (PFX + PEM, base64-encoded) to the remote side via VS Code's cross-host command routing
 
@@ -53,7 +53,7 @@ The feature declares both companion extensions and configures the container's tr
 
 ### Certificate Generation
 
-The extension generates certificates using node-forge (pure JavaScript — no .NET installation required on your host). The certificate is compatible with the [ASP.NET dev cert format](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-dev-certs) and includes:
+The extension generates certificates using Node's built-in `crypto` plus `@peculiar/x509` (X.509) and `pkijs` (PKCS#12) — no .NET installation required on your host. The auto-generated certificate is compatible with the [ASP.NET dev cert format](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-dev-certs) and includes:
 
 - Subject: `CN=localhost`
 - SAN: `localhost`, `*.dev.localhost`, `*.dev.internal`, `host.docker.internal`, `host.containers.internal`, `127.0.0.1`, `::1`

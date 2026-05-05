@@ -32,7 +32,12 @@ function fakeMaterial(name: string): CertMaterialV2 {
   };
 }
 
-describe("writeExtraDestination", () => {
+// `parseExtraCertDestinations` only accepts POSIX absolute paths because the
+// workspace extension always runs inside a Linux dev container. The tests
+// below feed `os.tmpdir()` straight in, which produces a Windows path on
+// win32 — the parser then rejects it and `destinations[0]` is undefined.
+// Skip on win32 rather than papering over the platform mismatch.
+describe.skipIf(process.platform === "win32")("writeExtraDestination", () => {
   it("writes pem/key/pfx/bundle into a directory for format=all (default)", () => {
     const dir = tmpDir();
     cleanupDirs.push(dir);
