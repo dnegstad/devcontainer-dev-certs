@@ -109,15 +109,16 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.100.0",
-    "@vscode/vsce": "^3.8.0",
+    "@vscode/vsce": "^3.9.1",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.4"
+    "vitest": "^4.1.5"
   },
   "dependencies": {
     "@devcontainer-dev-certs/shared": "*",
-    "@peculiar/x509": "^1.14.3",
+    "@peculiar/x509": "^2.0.0",
     "asn1js": "^3.0.10",
-    "pkijs": "^3.4.0"
+    "pkijs": "^3.4.0",
+    "reflect-metadata": "^0.2.2"
   }
 }
