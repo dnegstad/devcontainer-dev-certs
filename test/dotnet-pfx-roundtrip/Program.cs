@@ -1,10 +1,10 @@
 // CI harness invoked from the UI extension's vitest integration tests.
 //
 // Reads a PFX from disk, loads it via .NET's modern PKCS#12 loader, and
-// prints "OK\t{Subject}\t{Thumbprint}" on success. Anything else exits
-// non-zero with a "FAIL\t{ExceptionType}\t{Message}" line on stderr so
-// the harness driver in TypeScript can surface a useful diagnostic when
-// our PFX format drifts away from what .NET accepts.
+// prints "OK\t{Subject}\t{Thumbprint}\t{HasPrivateKey}" on success. Anything
+// else exits non-zero with a "FAIL\t{ExceptionType}\t{Message}" line on stderr
+// so the harness driver in TypeScript can surface a useful diagnostic when our
+// PFX format drifts away from what .NET accepts.
 //
 // Usage:  PfxRoundtrip <pfx-path> [password]
 //
@@ -36,7 +36,7 @@ try
         X509KeyStorageFlags.EphemeralKeySet
     );
 
-    Console.WriteLine($"OK\t{cert.Subject}\t{cert.Thumbprint}");
+    Console.WriteLine($"OK\t{cert.Subject}\t{cert.Thumbprint}\t{cert.HasPrivateKey}");
     return 0;
 }
 catch (Exception ex)

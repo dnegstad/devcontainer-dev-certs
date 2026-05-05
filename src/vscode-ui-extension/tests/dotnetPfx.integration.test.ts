@@ -101,6 +101,8 @@ describe.skipIf(!dotnetReady)(
       // .NET's X509Certificate2.Thumbprint is SHA-1 uppercase hex — the
       // exact value our generator emits as `cert.thumbprintSha1`.
       expect(parts[2], diagnostic).toBe(generated.cert.thumbprintSha1);
+      // Kestrel needs the private key attached, not just a loadable leaf cert.
+      expect(parts[3], diagnostic).toBe("True");
     }, 60_000);
   }
 );
