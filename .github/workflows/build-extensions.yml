@@ -110,6 +110,12 @@ jobs:
       - name: Validate feature metadata and consistency
         run: node test/validate-feature.mjs
 
+      - name: Validate feature schema (devcontainers/action)
+        uses: devcontainers/action@1082abd5d2bf3a11abccba70eef98df068277772 # v1.4.3
+        with:
+          validate-only: "true"
+          base-path-to-features: src/devcontainer-feature/src
+
       - name: Shellcheck install.sh
         run: shellcheck src/devcontainer-feature/src/devcontainer-dev-certs/install.sh
 
