@@ -49,7 +49,10 @@ export class WindowsCertificateStore extends BaseCertificateStore {
       $best = $certs[0]
       $tmpPfx = Join-Path $env:TEMP ("devcert-" + [guid]::NewGuid().ToString("N") + ".pfx")
       $pwd = ConvertTo-SecureString -String "export" -Force -AsPlainText
-      Export-PfxCertificate -Cert $best -FilePath $tmpPfx -Password $pwd | Out-Null
+      # AES256_SHA256 forces a PBES2/AES PFX. The default (TripleDES_SHA1)
+      # produces a legacy PKCS#12 PBE format that our pkijs-based parser
+      # deliberately rejects (see cert/pfx.ts).
+      Export-PfxCertificate -Cert $best -FilePath $tmpPfx -Password $pwd -CryptoAlgorithmOption AES256_SHA256 | Out-Null
       Write-Output $tmpPfx
     `;
 
@@ -82,19 +85,19 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     key: DevKey,
     _thumbprint: string
   ): Promise<void> {
-    // Export to temp PFX, then import via X509Store API (more reliable than Import-PfxCertificate)
+    // Export to temp PFX, then import via Import-PfxCertificate. We previously
+    // used `new X509Certificate2(bytes, pwd, Exportable | PersistKeySet)` +
+    // `X509Store.Add`, but that drives the legacy CryptoAPI PFXImportCertStore
+    // path which fails with "An internal error occurred" on PBES2/AES PFXes
+    // (the format pkijs emits). Import-PfxCertificate handles modern PKCS#12
+    // formats correctly.
     const tmpPfx = path.join(os.tmpdir(), `devcert-save-${Date.now()}.pfx`);
     await this.writePfx(cert, key, tmpPfx, "import");
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
-      `$pfxBytes = [System.IO.File]::ReadAllBytes('${tmpPfx.replace(/'/g, "''")}'); ` +
-      `$flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]'Exportable, PersistKeySet'; ` +
-      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($pfxBytes, 'import', $flags); ` +
-      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('My', 'CurrentUser'); ` +
-      `$store.Open('ReadWrite'); ` +
-      `$store.Add($cert); ` +
-      `$store.Close(); ` +
+      `$pwd = ConvertTo-SecureString -String 'import' -Force -AsPlainText; ` +
+      `Import-PfxCertificate -FilePath '${tmpPfx.replace(/'/g, "''")}' -CertStoreLocation Cert:\\CurrentUser\\My -Password $pwd -Exportable | Out-Null; ` +
       `Remove-Item '${tmpPfx.replace(/'/g, "''")}'`;
 
     const pwsh = await getPowerShell();
