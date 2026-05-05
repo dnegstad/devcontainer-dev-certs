@@ -14,9 +14,8 @@ import { VALIDITY_DAYS } from "../src/cert/properties";
  * path on .NET 10 LTS.
  */
 let dotnetMajor = 0;
-let dotnetVersion = "";
 try {
-  dotnetVersion = execFileSync("dotnet", ["--version"], {
+  const dotnetVersion = execFileSync("dotnet", ["--version"], {
     timeout: 5000,
     stdio: ["ignore", "pipe", "pipe"],
   })
