@@ -38,7 +38,7 @@ Add the Dev Container feature to your project's `devcontainer.json` (not to any 
 ```json
 {
     "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs": {}
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {}
     }
 }
 ```
@@ -89,7 +89,7 @@ When using the Dev Container feature, these options are available:
 ```json
 {
     "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs": {
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
             "trustNss": false,
             "sslCertDirs": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
         }

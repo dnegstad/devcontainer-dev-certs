@@ -11,7 +11,7 @@ Add the devcontainer feature to your `devcontainer.json` and everything works au
 ```json
 {
     "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:latest": {}
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {}
     }
 }
 ```
@@ -33,7 +33,7 @@ Add the dev container feature to your project's `devcontainer.json`:
 ```json
 {
     "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:latest": {}
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {}
     }
 }
 ```
@@ -131,7 +131,7 @@ test/
 ```json
 {
     "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs": {
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
             "trustNss": true
         }
     }
