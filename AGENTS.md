@@ -17,7 +17,7 @@ The system uses the VS Code **companion extension pattern**: two extensions comm
   2. Writes each cert to every configured extra destination via `writeExtraDestination`.
   3. Runs a single rehash per directory destination after all writes.
 
-- **Devcontainer feature** (`src/devcontainer-feature/`) — sets `SSL_CERT_DIR` via `containerEnv`, creates `.dotnet/corefx/cryptography/x509stores/my/` and `.aspnet/dev-certs/trust/` directories, requests both extensions via `customizations.vscode.extensions`. `install.sh` also pre-creates any directories named in `extraCertDestinations` with `vscode` ownership so the remote extension can write without privileged escalation. Option values (`generateDotNetCert`, `syncUserCertificates`, `extraCertDestinations`) are surfaced to the runtime container via `/etc/environment`.
+- **Devcontainer feature** (`src/devcontainer-feature/`) — sets `SSL_CERT_DIR` from `install.sh` by writing `/etc/profile.d/devcontainer-dev-certs.sh` (login shells, `$HOME`-expanded) and `/etc/environment` (PAM, resolved `_REMOTE_USER_HOME`); the manifest can't carry it because `${containerEnv:HOME}` doesn't resolve inside `containerEnv` and `remoteEnv` isn't allowed in features under strict-schema validation. Creates `.dotnet/corefx/cryptography/x509stores/my/` and `.aspnet/dev-certs/trust/` directories, requests both extensions via `customizations.vscode.extensions`. `install.sh` also pre-creates any directories named in `extraCertDestinations` with `vscode` ownership so the remote extension can write without privileged escalation. Option values (`generateDotNetCert`, `syncUserCertificates`, `extraCertDestinations`) are surfaced to the runtime container via `/etc/environment`.
 
 ## Key Design Decisions
 

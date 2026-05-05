@@ -116,7 +116,7 @@ src/
 
   devcontainer-feature/            Devcontainer feature
     src/devcontainer-dev-certs/
-      devcontainer-feature.json    Feature metadata, containerEnv, extension references
+      devcontainer-feature.json    Feature metadata, options, extension references
       install.sh                   Container build-time setup (creates directories)
 
 test/

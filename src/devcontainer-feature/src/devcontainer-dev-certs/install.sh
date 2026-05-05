@@ -4,7 +4,6 @@ set -e
 # Options from devcontainer-feature.json (uppercased)
 TRUST_NSS="${TRUSTNSS:-false}"
 SSL_CERT_DIRS="${SSLCERTDIRS:-/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl}"
-DEFAULT_SSL_CERT_DIRS="/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
 GENERATE_DOTNET_CERT="${GENERATEDOTNETCERT:-true}"
 SYNC_USER_CERTIFICATES="${SYNCUSERCERTIFICATES:-true}"
 EXTRA_CERT_DESTINATIONS="${EXTRACERTDESTINATIONS:-}"
@@ -92,14 +91,22 @@ append_env() {
     echo "${key}=\"${escaped}\"" >> /etc/environment
 }
 
-# If the user overrode sslCertDirs, we need to override the containerEnv value
-# that was baked into the image with the default paths. containerEnv handles the
-# default case; this only fires on user override.
-if [ "${SSL_CERT_DIRS}" != "${DEFAULT_SSL_CERT_DIRS}" ]; then
-    SSL_CERT_DIR_VALUE="\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
-    append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_VALUE}"
-    echo "Overriding SSL_CERT_DIR: ${SSL_CERT_DIR_VALUE}"
-fi
+# Set SSL_CERT_DIR for the container. The feature manifest can't set this via
+# containerEnv because ${containerEnv:HOME} isn't resolvable at containerEnv
+# bake time, and remoteEnv isn't permitted in a feature under strict-schema
+# validation. Writing it here at install time covers both default and
+# user-overridden sslCertDirs uniformly.
+#
+#   /etc/profile.d/devcontainer-dev-certs.sh — sourced by login shells; $HOME
+#     expands per user, which is what VS Code's userEnvProbe picks up.
+#   /etc/environment — read by pam_env on PAM-based logins (sshd); needs the
+#     resolved REMOTE_USER_HOME baked in since pam_env doesn't expand $HOME.
+PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
+echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\"" > "${PROFILE_SCRIPT}"
+chmod 0644 "${PROFILE_SCRIPT}"
+
+SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
+append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_RESOLVED}"
 
 # Surface the feature options to the running container so the remote extension
 # can read them via process.env. extraCertDestinations can contain spaces
@@ -121,5 +128,6 @@ echo "Dev certificate infrastructure ready."
 echo "  .NET cert store:      ${DOTNET_STORE_DIR}"
 echo "  .NET root store:      ${DOTNET_ROOT_STORE_DIR}"
 echo "  OpenSSL trust:        ${TRUST_DIR}"
+echo "  SSL_CERT_DIR:         ${SSL_CERT_DIR_RESOLVED}"
 echo "  generateDotNetCert:   ${GENERATE_DOTNET_CERT}"
 echo "  syncUserCertificates: ${SYNC_USER_CERTIFICATES}"
