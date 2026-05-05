@@ -41,18 +41,23 @@ function ensureEngine(): void {
   engineConfigured = true;
 }
 
-const OID_CONTENT_DATA = "1.2.840.113549.1.7.1";
-const OID_CONTENT_ENCRYPTED_DATA = "1.2.840.113549.1.7.6";
+// pkijs exports id_* string constants for some PKCS / RFC 5280 OIDs we use;
+// alias to local names for readability. The remaining OIDs (PKCS#12 bag
+// types, PKCS#9 attribute types, PBES2/PBKDF2/AES-CBC/HMAC) aren't exposed
+// as named exports — pkijs only uses them inline inside its own
+// `getOIDByAlgorithm` switch — so we keep those as local constants.
+const OID_CONTENT_DATA = pkijs.id_ContentType_Data;
+const OID_CONTENT_ENCRYPTED_DATA = pkijs.id_ContentType_EncryptedData;
+const OID_X509 = pkijs.id_CertBag_X509Certificate;
+const OID_SHA256 = pkijs.id_sha256;
 const OID_BAG_PKCS8_SHROUDED = "1.2.840.113549.1.12.10.1.2";
 const OID_BAG_CERT = "1.2.840.113549.1.12.10.1.3";
-const OID_X509 = "1.2.840.113549.1.9.22.1";
 const OID_FRIENDLY_NAME = "1.2.840.113549.1.9.20";
 const OID_LOCAL_KEY_ID = "1.2.840.113549.1.9.21";
 const OID_PBES2 = "1.2.840.113549.1.5.13";
 const OID_PBKDF2 = "1.2.840.113549.1.5.12";
 const OID_AES_256_CBC = "2.16.840.1.101.3.4.1.42";
 const OID_HMAC_SHA256 = "1.2.840.113549.2.9";
-const OID_SHA256 = "2.16.840.1.101.3.4.2.1";
 
 // Parameters chosen so the resulting PFX round-trips through Windows
 // CryptoAPI's PFXImportCertStore. Empirically verified against what
