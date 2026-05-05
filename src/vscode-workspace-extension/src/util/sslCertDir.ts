@@ -7,7 +7,8 @@ import { getOpenSslTrustDir } from "@devcontainer-dev-certs/shared";
  * Ensure SSL_CERT_DIR includes the dev-certs trust directory alongside
  * the system CA directories.
  *
- * In devcontainer scenarios, the feature's containerEnv handles this.
+ * In devcontainer scenarios, the feature's install.sh handles this by
+ * writing /etc/profile.d/devcontainer-dev-certs.sh and /etc/environment.
  * For SSH remoting, WSL, and other remotes, the workspace extension
  * handles it here by writing a profile script if SSL_CERT_DIR isn't
  * already configured with the trust directory.
@@ -39,7 +40,7 @@ export function ensureSslCertDir(systemCertDirs: string): void {
       );
     }
   } catch {
-    // Not critical — the containerEnv or manual configuration can handle it.
+    // Not critical — the feature's profile.d script or manual configuration can handle it.
     // This just improves the experience for terminal sessions.
   }
 

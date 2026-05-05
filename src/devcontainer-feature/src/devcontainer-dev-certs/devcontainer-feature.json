@@ -48,9 +48,6 @@
       ]
     }
   },
-  "containerEnv": {
-    "SSL_CERT_DIR": "${containerEnv:HOME}/.aspnet/dev-certs/trust:/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
-  },
   "installsAfter": [
     "ghcr.io/devcontainers/features/common-utils",
     "ghcr.io/devcontainers/features/dotnet"

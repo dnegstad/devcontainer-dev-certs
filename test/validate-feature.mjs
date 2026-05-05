@@ -61,27 +61,29 @@ check(
 
 console.log("\nSSL_CERT_DIR consistency:");
 const defaultSslDirs = feature.options?.sslCertDirs?.default;
-const containerEnvSslCertDir = feature.containerEnv?.SSL_CERT_DIR;
 
-// containerEnv should be ${containerEnv:HOME}/.aspnet/dev-certs/trust:<defaultSslDirs>
-const expectedContainerEnv = `\${containerEnv:HOME}/.aspnet/dev-certs/trust:${defaultSslDirs}`;
+// install.sh writes the trust dir + SSL_CERT_DIRS to /etc/profile.d (login
+// shells, $HOME-expanded) and /etc/environment (PAM, REMOTE_USER_HOME-expanded).
 check(
-  "containerEnv.SSL_CERT_DIR matches trust dir + sslCertDirs default",
-  containerEnvSslCertDir === expectedContainerEnv,
-  `expected "${expectedContainerEnv}" but got "${containerEnvSslCertDir}"`
-);
-
-// install.sh DEFAULT_SSL_CERT_DIRS should match the feature option default
-const defaultMatch = installSh.match(
-  /DEFAULT_SSL_CERT_DIRS="([^"]+)"/
+  "install.sh writes SSL_CERT_DIR to /etc/profile.d/devcontainer-dev-certs.sh",
+  installSh.includes("/etc/profile.d/devcontainer-dev-certs.sh") &&
+    installSh.includes(
+      'export SSL_CERT_DIR=\\"\\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\\"'
+    ),
+  "expected install.sh to write `export SSL_CERT_DIR=\"$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\"` to /etc/profile.d/devcontainer-dev-certs.sh"
 );
 check(
-  "install.sh DEFAULT_SSL_CERT_DIRS matches feature option default",
-  defaultMatch && defaultMatch[1] === defaultSslDirs,
-  `install.sh has "${defaultMatch?.[1]}" but feature default is "${defaultSslDirs}"`
+  "install.sh appends SSL_CERT_DIR to /etc/environment with REMOTE_USER_HOME",
+  installSh.includes(
+    'append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_RESOLVED}"'
+  ) &&
+    installSh.includes(
+      'SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"'
+    ),
+  "expected install.sh to compute SSL_CERT_DIR_RESOLVED from REMOTE_USER_HOME and append it via append_env"
 );
 
-// install.sh SSLCERTDIRS fallback should match too
+// install.sh SSLCERTDIRS fallback should match the feature option default
 const fallbackMatch = installSh.match(
   /SSL_CERT_DIRS="\$\{SSLCERTDIRS:-([^}]+)\}"/
 );
