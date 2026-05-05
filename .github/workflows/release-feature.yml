@@ -71,6 +71,9 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
 
       - name: Login to GHCR
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -79,15 +82,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install devcontainer CLI
+        run: npm install -g @devcontainers/cli@0.86.0
+
       - name: Publish feature to GHCR
-        uses: devcontainers/action@1082abd5d2bf3a11abccba70eef98df068277772 # v1.4.3
-        with:
-          publish-features: "true"
-          base-path-to-features: src/devcontainer-feature/src
-          oci-registry: ghcr.io
-          features-namespace: ${{ github.repository }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          devcontainer features publish \
+            --namespace "${{ github.repository }}" \
+            src/devcontainer-feature/src
 
       - name: Resolve published manifest digest
         id: digest
