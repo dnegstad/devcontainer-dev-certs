@@ -64,9 +64,32 @@ export function installDotNetDevCert(material: CertMaterialV2): void {
   const pemContent = Buffer.from(material.pemCertBase64, "base64").toString(
     "utf-8"
   );
+
+  // Remove any stale dev-cert PEM from a prior rotation. Without this
+  // sweep, the previous `aspnetcore-localhost-{oldThumb}.pem` lingers in
+  // the trust dir and OpenSSL clients (curl, Kestrel) keep trusting it
+  // alongside the freshly installed cert.
+  for (const entry of fs.readdirSync(trustDir)) {
+    if (
+      entry.startsWith("aspnetcore-localhost-") &&
+      entry.endsWith(".pem") &&
+      entry !== pemFileName
+    ) {
+      try {
+        fs.unlinkSync(path.join(trustDir, entry));
+      } catch {
+        // Best-effort.
+      }
+    }
+  }
+
   fs.writeFileSync(pemPath, pemContent);
   chmodSafe(pemPath, 0o644);
 
+  // Drop dangling hash symlinks left over by the removed PEMs, then
+  // create a fresh symlink for the new file. rehashDirectory is cheap
+  // and idempotent on a directory this small.
+  rehashDirectory(trustDir);
   createHashSymlink(trustDir, pemFileName, pemContent);
 }
 

@@ -13,6 +13,27 @@ REMOTE_USER_HOME="${_REMOTE_USER_HOME:-/home/${REMOTE_USER}}"
 
 echo "Setting up dev certificate infrastructure..."
 
+# Validate sslCertDirs: colon-separated absolute paths only. The value lands
+# inside an `export SSL_CERT_DIR=...` line that gets sourced at every login,
+# so command-substitution metacharacters here would execute as the shell
+# user. Reject anything that doesn't look like a plain path list.
+if ! printf '%s' "${SSL_CERT_DIRS}" | grep -qE '^/[A-Za-z0-9._/+@%-]+(:/[A-Za-z0-9._/+@%-]+)*$'; then
+    echo "Error: sslCertDirs contains unexpected characters; expected colon-separated absolute paths." >&2
+    exit 1
+fi
+
+# Validate that no feature option contains a newline. We append these to
+# /etc/environment, and an embedded newline would inject an extra env line
+# (potentially with a name the operator didn't intend).
+for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES EXTRA_CERT_DESTINATIONS; do
+    case "${!varname}" in
+        *$'\n'*)
+            echo "Error: feature option ${varname} must not contain newlines." >&2
+            exit 1
+            ;;
+    esac
+done
+
 # Install NSS tools if requested (for Chromium/Firefox trust)
 if [ "${TRUST_NSS}" = "true" ]; then
     if command -v apt-get &>/dev/null; then
@@ -82,10 +103,18 @@ fi
 # Append KEY="VALUE" to /etc/environment with proper escaping for the PAM
 # parser (pam_env): backslashes and double quotes inside the value must be
 # escaped. Always quote, even for values without special chars, so unquoted
-# spaces don't silently truncate the variable.
+# spaces don't silently truncate the variable. Reject embedded newlines —
+# pam_env is line-oriented and an injected newline would smuggle an
+# additional env assignment into the file.
 append_env() {
     local key="$1"
     local value="$2"
+    case "${value}" in
+        *$'\n'*)
+            echo "Error: refusing to write ${key} containing a newline to /etc/environment." >&2
+            exit 1
+            ;;
+    esac
     local escaped="${value//\\/\\\\}"
     escaped="${escaped//\"/\\\"}"
     echo "${key}=\"${escaped}\"" >> /etc/environment
@@ -102,6 +131,11 @@ append_env() {
 #   /etc/environment — read by pam_env on PAM-based logins (sshd); needs the
 #     resolved REMOTE_USER_HOME baked in since pam_env doesn't expand $HOME.
 PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
+# $HOME is intentionally left unexpanded so each user picks up their own
+# trust directory at login. SSL_CERT_DIRS has been validated against
+# /^/[A-Za-z0-9._/+@%-]+(:/[A-Za-z0-9._/+@%-]+)*$/ above, so the only
+# remaining shell-meaningful character that can reach this line is `$`
+# (via $HOME). All other inputs are safe to embed verbatim.
 echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\"" > "${PROFILE_SCRIPT}"
 chmod 0644 "${PROFILE_SCRIPT}"
 

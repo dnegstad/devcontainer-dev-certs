@@ -111,6 +111,24 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     const pemFileName = getPemFileName(thumbprint);
     const pemPath = path.join(trustDir, pemFileName);
 
+    // Sweep PEMs from any previous dev cert rotation. Otherwise the old
+    // file lingers in the trust dir, gets a hash symlink during rehash,
+    // and OpenSSL clients keep trusting the prior (potentially expired
+    // or revoked) cert alongside the new one.
+    for (const entry of fs.readdirSync(trustDir)) {
+      if (
+        entry.startsWith("aspnetcore-localhost-") &&
+        entry.endsWith(".pem") &&
+        entry !== pemFileName
+      ) {
+        try {
+          fs.unlinkSync(path.join(trustDir, entry));
+        } catch {
+          // Best effort — a concurrent install may have removed it.
+        }
+      }
+    }
+
     fs.writeFileSync(pemPath, cert.pem, { mode: 0o644 });
     await this.rehashDirectory(trustDir);
   }
@@ -148,11 +166,17 @@ export class LinuxCertificateStore extends BaseCertificateStore {
       const hash = await this.getOpenSslSubjectHash(fullPath);
       if (!hash) continue;
 
+      // Slot 0-9 covers any realistic collision count. Catch EEXIST so a
+      // concurrent rehash can't crash this one mid-loop.
       for (let i = 0; i < 10; i++) {
         const linkPath = path.join(directory, `${hash}.${i}`);
-        if (!fs.existsSync(linkPath)) {
+        if (fs.existsSync(linkPath)) continue;
+        try {
           fs.symlinkSync(certFile, linkPath);
           break;
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
+          throw err;
         }
       }
     }
@@ -193,3 +217,4 @@ export class LinuxCertificateStore extends BaseCertificateStore {
 function isHashSymlink(filename: string): boolean {
   return /^[0-9a-f]{8}\.\d+$/.test(filename);
 }
+

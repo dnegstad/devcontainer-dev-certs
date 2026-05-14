@@ -132,6 +132,25 @@ describe("LinuxCertificateStore", () => {
       );
     });
 
+    it("sweeps stale aspnetcore-localhost-*.pem from a previous rotation", async () => {
+      // Plant a stale dev-cert PEM with a different thumbprint.
+      fs.mkdirSync(testTrustDir, { recursive: true });
+      const stalePem = path.join(
+        testTrustDir,
+        "aspnetcore-localhost-OLDTHUMBPRINT.pem"
+      );
+      fs.writeFileSync(
+        stalePem,
+        "-----BEGIN CERTIFICATE-----\nstale\n-----END CERTIFICATE-----\n"
+      );
+      expect(fs.existsSync(stalePem)).toBe(true);
+
+      const { cert } = await makeTestCert();
+      await store.trustCertificate(cert);
+
+      expect(fs.existsSync(stalePem)).toBe(false);
+    });
+
     it("root store PFX contains only the public cert (no private key)", async () => {
       const { cert, thumbprint } = await makeTestCert();
       await store.trustCertificate(cert);
