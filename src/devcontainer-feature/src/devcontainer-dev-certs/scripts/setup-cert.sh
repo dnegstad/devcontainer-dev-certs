@@ -229,6 +229,12 @@ PFX_PATH="${1:?Usage: setup-cert.sh <pfx-path> <pem-path> <thumbprint>}"
 PEM_PATH="${2:?Usage: setup-cert.sh <pfx-path> <pem-path> <thumbprint>}"
 THUMBPRINT="${3:?Usage: setup-cert.sh <pfx-path> <pem-path> <thumbprint>}"
 
+# Both the root-store PFX conversion and the OpenSSL hash symlink need
+# `openssl`. Falling back to a warning leaves the cert partially
+# installed but the script exiting 0, which the caller has no way to
+# detect. Refuse the install up front instead.
+ensure_openssl
+
 # Copy PFX to .NET store
 mkdir -p "${DOTNET_STORE_DIR}"
 cp "${PFX_PATH}" "${DOTNET_STORE_DIR}/${THUMBPRINT}.pfx"
@@ -236,13 +242,9 @@ chmod 600 "${DOTNET_STORE_DIR}/${THUMBPRINT}.pfx"
 
 # Create public-cert-only PFX for .NET Root store (trust verification)
 mkdir -p "${DOTNET_ROOT_STORE_DIR}"
-if command -v openssl &>/dev/null; then
-    openssl pkcs12 -export -in "${PEM_PATH}" -nokeys -passout pass: \
-        -out "${DOTNET_ROOT_STORE_DIR}/${THUMBPRINT}.pfx"
-    chmod 644 "${DOTNET_ROOT_STORE_DIR}/${THUMBPRINT}.pfx"
-else
-    echo "Warning: openssl not found. Root store PFX not created. Certificate may not be reported as trusted by dotnet."
-fi
+openssl pkcs12 -export -in "${PEM_PATH}" -nokeys -passout pass: \
+    -out "${DOTNET_ROOT_STORE_DIR}/${THUMBPRINT}.pfx"
+chmod 644 "${DOTNET_ROOT_STORE_DIR}/${THUMBPRINT}.pfx"
 
 # Copy PEM to trust directory
 mkdir -p "${TRUST_DIR}"
@@ -250,23 +252,8 @@ PEM_FILENAME="aspnetcore-localhost-${THUMBPRINT}.pem"
 cp "${PEM_PATH}" "${TRUST_DIR}/${PEM_FILENAME}"
 chmod 644 "${TRUST_DIR}/${PEM_FILENAME}"
 
-# Create hash symlink (c_rehash equivalent) — requires openssl
-if command -v openssl &>/dev/null; then
-    HASH=$(openssl x509 -hash -noout -in "${TRUST_DIR}/${PEM_FILENAME}" 2>/dev/null || true)
-    if [ -n "${HASH}" ]; then
-        # Find available slot
-        for i in $(seq 0 9); do
-            LINK="${TRUST_DIR}/${HASH}.${i}"
-            if [ ! -e "${LINK}" ]; then
-                ln -sf "${PEM_FILENAME}" "${LINK}"
-                break
-            fi
-        done
-    fi
-else
-    echo "Warning: openssl not found. Hash symlinks not created. OpenSSL trust may not work."
-    echo "Install openssl or use the VSCode extension which handles this natively."
-fi
+# Create hash symlink (c_rehash equivalent).
+create_hash_symlink "${TRUST_DIR}" "${PEM_FILENAME}"
 
 # Fix ownership
 if id "${REMOTE_USER}" &>/dev/null; then

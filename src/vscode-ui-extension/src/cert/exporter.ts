@@ -5,6 +5,12 @@ import { type DevCert, type DevKey } from "./types";
 import { ASPNET_HTTPS_OID_FRIENDLY_NAME } from "./properties";
 import { buildPfx } from "./pfx";
 
+// PFX and unencrypted key PEM contain private key material. Use mode 0o600 on
+// every write — the temp dir created upstream is already mkdtemp'd 0o700, but
+// explicit file modes survive being copied or extracted elsewhere.
+const PRIVATE_FILE_MODE = 0o600;
+const PUBLIC_FILE_MODE = 0o644;
+
 /**
  * Export a certificate with its private key as a PFX/PKCS12 file.
  */
@@ -22,7 +28,7 @@ export async function exportPfx(
     friendlyName: ASPNET_HTTPS_OID_FRIENDLY_NAME,
   });
   const outPath = path.join(outputDir, "aspnetcore-dev.pfx");
-  fs.writeFileSync(outPath, der);
+  fs.writeFileSync(outPath, der, { mode: PRIVATE_FILE_MODE });
   return outPath;
 }
 
@@ -40,8 +46,8 @@ export function exportPem(
   const certPath = path.join(outputDir, "aspnetcore-dev.pem");
   const keyPath = path.join(outputDir, "aspnetcore-dev.key");
 
-  fs.writeFileSync(certPath, cert.pem);
-  fs.writeFileSync(keyPath, key.pem);
+  fs.writeFileSync(certPath, cert.pem, { mode: PUBLIC_FILE_MODE });
+  fs.writeFileSync(keyPath, key.pem, { mode: PRIVATE_FILE_MODE });
 
   return { certPath, keyPath };
 }
@@ -79,7 +85,7 @@ export async function exportRootPfx(
   fs.mkdirSync(outputDir, { recursive: true });
   const der = await buildPfx({ cert });
   const outPath = path.join(outputDir, "aspnetcore-dev-root.pfx");
-  fs.writeFileSync(outPath, der);
+  fs.writeFileSync(outPath, der, { mode: PUBLIC_FILE_MODE });
   return outPath;
 }
 
@@ -105,27 +111,27 @@ export async function exportLoadedCert(
   fs.mkdirSync(outputDir, { recursive: true });
 
   const pemCertPath = path.join(outputDir, `${name}.pem`);
-  fs.writeFileSync(pemCertPath, loaded.cert.pem);
+  fs.writeFileSync(pemCertPath, loaded.cert.pem, { mode: PUBLIC_FILE_MODE });
 
   let pemKeyPath: string | null = null;
   let pfxPath: string | null = null;
   if (loaded.key) {
     pemKeyPath = path.join(outputDir, `${name}.key`);
-    fs.writeFileSync(pemKeyPath, loaded.key.pem);
+    fs.writeFileSync(pemKeyPath, loaded.key.pem, { mode: PRIVATE_FILE_MODE });
 
     const pfxBytes = await buildPfx({
       cert: loaded.cert,
       key: loaded.key,
     });
     pfxPath = path.join(outputDir, `${name}.pfx`);
-    fs.writeFileSync(pfxPath, pfxBytes);
+    fs.writeFileSync(pfxPath, pfxBytes, { mode: PRIVATE_FILE_MODE });
   }
 
   let rootPfxPath: string | null = null;
   if (options.includeRootPfx) {
     const rootBytes = await buildPfx({ cert: loaded.cert });
     rootPfxPath = path.join(outputDir, `${name}-root.pfx`);
-    fs.writeFileSync(rootPfxPath, rootBytes);
+    fs.writeFileSync(rootPfxPath, rootBytes, { mode: PUBLIC_FILE_MODE });
   }
 
   return { pemCertPath, pemKeyPath, pfxPath, rootPfxPath };

@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -95,8 +96,10 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     // Export to temp PFX, then import via Import-PfxCertificate. Our
     // hand-rolled DER PFX writer (cert/pfx.ts) emits a PFX that CryptoAPI's
     // PFXImportCertStore — the function this cmdlet wraps — accepts cleanly.
-    const tmpPfx = path.join(os.tmpdir(), `devcert-save-${Date.now()}.pfx`);
-    await this.writePfx(cert, key, tmpPfx, "import");
+    // Unguessable filename + 0o600 keeps the PFX (with private key)
+    // unreadable to other local users during the import window.
+    const tmpPfx = path.join(os.tmpdir(), `devcert-save-${randomUUID()}.pfx`);
+    await this.writePfx(cert, key, tmpPfx, "import", 0o600);
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
@@ -128,7 +131,9 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   async trustCertificate(cert: DevCert): Promise<void> {
     // Export public cert as DER, then import with the built-in Windows PKI
     // cmdlet available in Windows PowerShell.
-    const tmpCert = path.join(os.tmpdir(), `devcert-trust-${Date.now()}.cer`);
+    // Public-cert only — no private key — but the random name still prevents
+    // concurrent invocations from colliding on the same temp path.
+    const tmpCert = path.join(os.tmpdir(), `devcert-trust-${randomUUID()}.cer`);
     fs.writeFileSync(tmpCert, certToDer(cert));
 
     const script =

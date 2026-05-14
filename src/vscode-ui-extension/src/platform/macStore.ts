@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -5,6 +6,7 @@ import { BaseCertificateStore } from "./baseStore";
 import { runProcess } from "./processUtil";
 import { isValidDevCert } from "../cert/generator";
 import { certToDer } from "../cert/exporter";
+import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { type DevCert, type DevKey } from "../cert/types";
 
 /**
@@ -63,11 +65,15 @@ export class MacCertificateStore extends BaseCertificateStore {
       this.devCertsDir,
       `aspnetcore-localhost-${thumbprint}.pfx`
     );
-    await this.writePfx(cert, key, pfxPath);
+    // ~/.aspnet/dev-certs/https/*.pfx contains the private key; force 0o600
+    // so it can't be read by other users on a multi-user mac.
+    await this.writePfx(cert, key, pfxPath, "", 0o600);
   }
 
   async trustCertificate(cert: DevCert): Promise<void> {
-    const tmpCert = path.join(os.tmpdir(), `devcert-trust-${Date.now()}.cer`);
+    // /tmp is shared on macOS; an unguessable filename rules out symlink
+    // races on the temporary public-cert artifact.
+    const tmpCert = path.join(os.tmpdir(), `devcert-trust-${randomUUID()}.cer`);
     fs.writeFileSync(tmpCert, certToDer(cert));
 
     const result = await runProcess("security", [
@@ -95,18 +101,45 @@ export class MacCertificateStore extends BaseCertificateStore {
   }
 
   async removeCertificates(): Promise<void> {
-    // Remove trust entries from keychain (loop because there may be multiple)
-    for (let i = 0; i < 10; i++) {
-      const result = await runProcess("security", [
-        "delete-certificate",
-        "-c",
-        "localhost",
-        this.keychainPath,
-      ]);
-      if (result.exitCode !== 0) break;
+    // Collect SHA-1 thumbprints of every dev cert we have on disk so we
+    // can delete keychain entries by hash. Matching on `-c localhost` is
+    // too broad — the user may have unrelated `localhost` certs added
+    // for other tools and we don't want to nuke those.
+    const thumbprints = new Set<string>();
+    if (fs.existsSync(this.devCertsDir)) {
+      const pfxFiles = fs
+        .readdirSync(this.devCertsDir)
+        .filter(
+          (f) => f.startsWith("aspnetcore-localhost-") && f.endsWith(".pfx")
+        );
+      for (const pfxFile of pfxFiles) {
+        try {
+          const result = await this.loadPfx(path.join(this.devCertsDir, pfxFile));
+          if (result && result.cert.hasExtension(ASPNET_HTTPS_OID)) {
+            thumbprints.add(result.thumbprint);
+          }
+        } catch {
+          // Skip unparseable files; they're not ours to delete by hash.
+        }
+      }
     }
 
-    // Remove trust settings
+    for (const thumbprint of thumbprints) {
+      // delete-certificate exits non-zero once there are no more entries
+      // matching the hash; loop with a generous bound to drain any
+      // duplicates left by past regenerations.
+      for (let i = 0; i < 100; i++) {
+        const result = await runProcess("security", [
+          "delete-certificate",
+          "-Z",
+          thumbprint,
+          this.keychainPath,
+        ]);
+        if (result.exitCode !== 0) break;
+      }
+    }
+
+    // Remove trust settings entries that pointed at any of those certs.
     await runProcess("security", [
       "remove-trusted-cert",
       "-d",
@@ -130,7 +163,7 @@ export class MacCertificateStore extends BaseCertificateStore {
     cert: DevCert,
     _thumbprint: string
   ): Promise<boolean> {
-    const tmpCert = path.join(os.tmpdir(), `devcert-verify-${Date.now()}.cer`);
+    const tmpCert = path.join(os.tmpdir(), `devcert-verify-${randomUUID()}.cer`);
     try {
       fs.writeFileSync(tmpCert, certToDer(cert));
 

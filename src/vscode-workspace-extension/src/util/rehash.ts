@@ -63,15 +63,7 @@ export function rehashDirectory(directory: string): void {
     const hash = computeSubjectHash(pemContent);
     if (!hash) continue;
 
-    // Find available slot
-    for (let i = 0; i < 10; i++) {
-      const linkName = `${hash}.${i}`;
-      const linkPath = path.join(directory, linkName);
-      if (!fs.existsSync(linkPath)) {
-        fs.symlinkSync(certFile, linkPath);
-        break;
-      }
-    }
+    createHashSymlinkForHash(directory, certFile, hash);
   }
 }
 
@@ -85,13 +77,27 @@ export function createHashSymlink(
 ): void {
   const hash = computeSubjectHash(pemContent);
   if (!hash) return;
+  createHashSymlinkForHash(directory, pemFileName, hash);
+}
 
+function createHashSymlinkForHash(
+  directory: string,
+  pemFileName: string,
+  hash: string
+): void {
+  // Slot 0-9 covers any realistic number of collisions in a dev trust dir.
+  // Catch EEXIST so a concurrent rehash from another process doesn't crash
+  // the caller — existsSync()/symlinkSync() isn't atomic on its own.
   for (let i = 0; i < 10; i++) {
     const linkName = `${hash}.${i}`;
     const linkPath = path.join(directory, linkName);
-    if (!fs.existsSync(linkPath)) {
+    if (fs.existsSync(linkPath)) continue;
+    try {
       fs.symlinkSync(pemFileName, linkPath);
-      break;
+      return;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw err;
     }
   }
 }

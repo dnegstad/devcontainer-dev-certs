@@ -140,11 +140,10 @@ export class CertProvider {
       await this.certManager.trust();
     }
 
-    const tmpDir = path.join(
-      os.tmpdir(),
-      `devcerts-export-${Date.now()}`
-    );
-    fs.mkdirSync(tmpDir, { recursive: true });
+    // mkdtempSync gives us a unique 0o700 dir in tmpdir. Combined with
+    // 0o600 modes on the key/PFX writes themselves, the unencrypted key
+    // material is never readable by other local users while it's on disk.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-export-"));
 
     try {
       await this.certManager.exportCert("pfx", tmpDir);
@@ -212,11 +211,10 @@ export class CertProvider {
 
     const trustInContainer = config.trustInContainer !== false;
 
-    const tmpDir = path.join(
-      os.tmpdir(),
-      `devcerts-user-export-${Date.now()}-${config.name}`
+    // Per-cert isolated 0o700 temp dir; name embedded for debuggability.
+    const tmpDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), `devcerts-user-export-${config.name}-`)
     );
-    fs.mkdirSync(tmpDir, { recursive: true });
 
     try {
       const exported = await exportLoadedCert(loaded, config.name, tmpDir, {

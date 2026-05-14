@@ -1,7 +1,30 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { getOpenSslTrustDir } from "@devcontainer-dev-certs/shared";
+import { getOpenSslTrustDir, log } from "@devcontainer-dev-certs/shared";
+
+// Absolute paths only, no shell metacharacters. The value is sourced from
+// workspace configuration (`devcontainer-dev-certs.sslCertDirs`) which a
+// malicious workspace can set — we get written into shell profile files
+// that run at every login, so we reject anything that isn't a plain
+// colon-separated list of POSIX paths.
+const SAFE_PATH_CHAR = "[A-Za-z0-9._/+@%-]";
+const SAFE_COLON_PATHS_RE = new RegExp(
+  `^/${SAFE_PATH_CHAR}+(?::/${SAFE_PATH_CHAR}+)*$`
+);
+
+function isSafeColonPaths(value: string): boolean {
+  return SAFE_COLON_PATHS_RE.test(value);
+}
+
+// Belt-and-braces: even though we've validated the input, we still emit the
+// shell line with single quotes so a future regression in the validator
+// can't smuggle through command substitution. POSIX shells don't expand
+// anything inside single quotes — a literal `'` is encoded by closing the
+// quoted string, emitting an escaped quote, and reopening.
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
 
 /**
  * Ensure SSL_CERT_DIR includes the dev-certs trust directory alongside
@@ -22,7 +45,22 @@ export function ensureSslCertDir(systemCertDirs: string): void {
     return;
   }
 
+  if (!isSafeColonPaths(systemCertDirs)) {
+    log(
+      `Refusing to configure SSL_CERT_DIR: sslCertDirs value contains unexpected characters. ` +
+        `Expected colon-separated absolute paths only.`
+    );
+    return;
+  }
+  if (!isSafeColonPaths(trustDir)) {
+    log(
+      `Refusing to configure SSL_CERT_DIR: computed trust dir contains unexpected characters.`
+    );
+    return;
+  }
+
   const desiredValue = `${trustDir}:${systemCertDirs}`;
+  const quoted = shellSingleQuote(desiredValue);
 
   // Set for the current process and any child processes we spawn
   process.env["SSL_CERT_DIR"] = desiredValue;
@@ -35,7 +73,7 @@ export function ensureSslCertDir(systemCertDirs: string): void {
     if (fs.existsSync(profileDir) && !fs.existsSync(profileScript)) {
       fs.writeFileSync(
         profileScript,
-        `export SSL_CERT_DIR="${desiredValue}"\n`,
+        `export SSL_CERT_DIR=${quoted}\n`,
         { mode: 0o644 }
       );
     }
@@ -54,7 +92,7 @@ export function ensureSslCertDir(systemCertDirs: string): void {
       if (!content.includes(marker)) {
         fs.appendFileSync(
           bashrc,
-          `\n${marker}\nexport SSL_CERT_DIR="${desiredValue}"\n`
+          `\n${marker}\nexport SSL_CERT_DIR=${quoted}\n`
         );
       }
     }
