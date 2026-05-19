@@ -77,11 +77,6 @@ export function activate(context: vscode.ExtensionContext): void {
       "devcontainer-dev-certs.getAllCertMaterial",
       async (args: GetAllCertMaterialArgs | undefined): Promise<CertBundle> => {
         try {
-          const effectiveArgs: GetAllCertMaterialArgs = {
-            includeDotNetDev: args?.includeDotNetDev !== false,
-            includeUserCerts: args?.includeUserCerts !== false,
-          };
-
           const autoProvisionCfg = vscode.workspace
             .getConfiguration("devcontainer-dev-certs")
             .get<boolean>("autoProvision", true);
@@ -89,37 +84,22 @@ export function activate(context: vscode.ExtensionContext): void {
             .getConfiguration("devcontainerDevCerts")
             .get<boolean>("generateDotNetCert", true);
 
-          const dotnetWillGenerate =
-            effectiveArgs.includeDotNetDev && hostWantsDotNet && autoProvisionCfg;
-
-          if (dotnetWillGenerate) {
-            const status = await certManager.check();
-            if (!status.exists || !status.isTrusted) {
-              const consented = context.globalState.get<boolean>(
-                "certProvisionConsented"
-              );
-              if (!consented) {
-                const userConsented = await promptForCertConsent();
-                if (!userConsented) {
-                  log(
-                    "User declined dotnet dev cert provisioning; returning bundle without it."
-                  );
-                  return await certProvider.getAllCertMaterial({
-                    ...effectiveArgs,
-                    includeDotNetDev: false,
-                  });
-                }
-                await context.globalState.update(
-                  "certProvisionConsented",
-                  true
-                );
-              }
-            }
-          }
+          const decision = await resolveDotnetProvisioning({
+            args,
+            hostWantsDotNet,
+            autoProvision: autoProvisionCfg,
+            checkCert: () => certManager.check(),
+            hasPriorConsent: () =>
+              context.globalState.get<boolean>("certProvisionConsented") ===
+              true,
+            recordConsent: () =>
+              context.globalState.update("certProvisionConsented", true),
+            promptUser: promptForCertConsent,
+          });
 
           const bundle = await certProvider.getAllCertMaterial({
-            includeDotNetDev: dotnetWillGenerate,
-            includeUserCerts: effectiveArgs.includeUserCerts,
+            includeDotNetDev: decision.includeDotNetDev,
+            includeUserCerts: decision.effectiveArgs.includeUserCerts,
           });
 
           if (bundle.certs.some((c) => c.kind === "dotnet-dev")) {
@@ -192,12 +172,14 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /**
- * Show a modal consent dialog before first-time certificate provisioning.
- * Explains what the extension does and includes platform-specific details
- * about any OS-level prompts the user will see.
+ * Show a modal consent dialog before first-time provisioning of the
+ * auto-generated ASP.NET Core / Aspire dev certificate. Scoped narrowly to
+ * that one cert — declining does NOT disable the extension, and any
+ * user-managed certs configured via `devcontainerDevCerts.userCertificates`
+ * are still synced into the container.
  */
 async function promptForCertConsent(): Promise<boolean> {
-  const enable = "Enable";
+  const generate = "Generate & Trust";
   const platformDetail =
     process.platform === "darwin"
       ? "macOS will prompt you for your login keychain password to complete the trust step."
@@ -206,13 +188,77 @@ async function promptForCertConsent(): Promise<boolean> {
         : "The certificate will be added to your local trust store.";
 
   const choice = await vscode.window.showInformationMessage(
-    "Dev Certs: This extension generates and trusts an HTTPS development certificate " +
-      "so Dev Containers can serve over HTTPS without browser warnings. " +
-      platformDetail,
+    "Dev Certs: Generate and trust the ASP.NET Core / Aspire HTTPS development " +
+      "certificate on this host so Dev Containers can serve over HTTPS without " +
+      "browser warnings? " +
+      platformDetail +
+      " Declining only skips this cert — user-managed certificates configured " +
+      "in devcontainerDevCerts.userCertificates will still sync. To suppress this " +
+      "prompt permanently, set devcontainerDevCerts.generateDotNetCert to false.",
     { modal: true },
-    enable
+    generate
   );
-  return choice === enable;
+  return choice === generate;
+}
+
+export interface ResolveDotnetProvisioningDeps {
+  args: GetAllCertMaterialArgs | undefined;
+  hostWantsDotNet: boolean;
+  autoProvision: boolean;
+  checkCert: () => Promise<{ exists: boolean; isTrusted: boolean }>;
+  hasPriorConsent: () => boolean;
+  recordConsent: () => Promise<void> | Thenable<void>;
+  promptUser: () => Promise<boolean>;
+}
+
+export interface DotnetProvisioningDecision {
+  effectiveArgs: GetAllCertMaterialArgs;
+  includeDotNetDev: boolean;
+}
+
+/**
+ * Decide whether to provision the dotnet dev cert for an incoming
+ * `getAllCertMaterial` call. Gates on the caller's `includeDotNetDev`, the
+ * host's `generateDotNetCert` setting, and `autoProvision`. Only consults
+ * `certManager.check()` and shows the consent prompt when all three are on —
+ * keeping the OS trust store untouched (and the modal silent) for users who
+ * have opted out of the auto-generated cert.
+ */
+export async function resolveDotnetProvisioning(
+  deps: ResolveDotnetProvisioningDeps
+): Promise<DotnetProvisioningDecision> {
+  const effectiveArgs: GetAllCertMaterialArgs = {
+    includeDotNetDev: deps.args?.includeDotNetDev !== false,
+    includeUserCerts: deps.args?.includeUserCerts !== false,
+  };
+
+  const dotnetWillGenerate =
+    effectiveArgs.includeDotNetDev &&
+    deps.hostWantsDotNet &&
+    deps.autoProvision;
+
+  if (!dotnetWillGenerate) {
+    return { effectiveArgs, includeDotNetDev: false };
+  }
+
+  const status = await deps.checkCert();
+  if (status.exists && status.isTrusted) {
+    return { effectiveArgs, includeDotNetDev: true };
+  }
+
+  if (deps.hasPriorConsent()) {
+    return { effectiveArgs, includeDotNetDev: true };
+  }
+
+  const consented = await deps.promptUser();
+  if (!consented) {
+    log(
+      "User declined dotnet dev cert provisioning; returning bundle without it."
+    );
+    return { effectiveArgs, includeDotNetDev: false };
+  }
+  await deps.recordConsent();
+  return { effectiveArgs, includeDotNetDev: true };
 }
 
 /**
