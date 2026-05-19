@@ -129,8 +129,13 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   }
 
   async trustCertificate(cert: DevCert): Promise<void> {
-    // Export public cert as DER, then import with the built-in Windows PKI
-    // cmdlet available in Windows PowerShell.
+    // Add the public cert to the configured Root store via the .NET X509Store
+    // API. We deliberately avoid `Import-Certificate` here: when targeting
+    // `Cert:\CurrentUser\Root` that cmdlet pops a "You are about to install a
+    // certificate from a certification authority..." confirmation dialog, and
+    // under `-NonInteractive` PowerShell fails with "UI is not allowed in this
+    // operation." X509Store.Add talks to CryptoAPI directly and skips the
+    // confirmation prompt.
     // Public-cert only — no private key — but the random name still prevents
     // concurrent invocations from colliding on the same temp path.
     const tmpCert = path.join(os.tmpdir(), `devcert-trust-${randomUUID()}.cer`);
@@ -138,7 +143,11 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     const script =
       `$ErrorActionPreference = 'Stop'; ` +
-      `Import-Certificate -FilePath '${tmpCert.replace(/'/g, "''")}' -CertStoreLocation Cert:\\${this.storeLocation}\\Root | Out-Null; ` +
+      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('${tmpCert.replace(/'/g, "''")}'); ` +
+      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', '${this.storeLocation}'); ` +
+      `$store.Open('ReadWrite'); ` +
+      `$store.Add($cert); ` +
+      `$store.Close(); ` +
       `Remove-Item '${tmpCert.replace(/'/g, "''")}'`;
 
     const pwsh = await getPowerShell();
