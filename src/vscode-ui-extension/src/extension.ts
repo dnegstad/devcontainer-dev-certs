@@ -202,7 +202,7 @@ async function promptForCertConsent(): Promise<boolean> {
     ),
     platformDetail,
     vscode.l10n.t(
-      "Declining only skips this certificate — user-managed certificates configured in devcontainerDevCerts.userCertificates will still sync."
+      "Declining skips generating a new development certificate — user-managed certificates configured in devcontainerDevCerts.userCertificates will still sync."
     ),
     vscode.l10n.t(
       "To suppress this prompt permanently, set devcontainerDevCerts.generateDotNetCert to false."
