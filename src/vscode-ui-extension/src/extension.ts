@@ -124,7 +124,9 @@ export function activate(context: vscode.ExtensionContext): void {
       async () => {
         if (process.platform !== "linux") {
           vscode.window.showInformationMessage(
-            "Dev Certs: Browser trust is handled automatically by the OS on this platform."
+            vscode.l10n.t(
+              "Dev Certs: Browser trust is handled automatically by the OS on this platform."
+            )
           );
           return;
         }
@@ -132,7 +134,9 @@ export function activate(context: vscode.ExtensionContext): void {
         const status = await certManager.check();
         if (!status.exists || !status.thumbprint) {
           vscode.window.showWarningMessage(
-            "Dev Certs: No dev certificate found. Open a Dev Container to generate one."
+            vscode.l10n.t(
+              "Dev Certs: No development certificate found. Open a Dev Container to generate one."
+            )
           );
           return;
         }
@@ -141,7 +145,9 @@ export function activate(context: vscode.ExtensionContext): void {
         const pemPath = path.join(trustDir, getPemFileName(status.thumbprint));
         if (!fs.existsSync(pemPath)) {
           vscode.window.showWarningMessage(
-            "Dev Certs: Certificate PEM not found at expected location."
+            vscode.l10n.t(
+              "Dev Certs: Certificate PEM not found at expected location."
+            )
           );
           return;
         }
@@ -149,20 +155,27 @@ export function activate(context: vscode.ExtensionContext): void {
         const result = await trustInNss(pemPath);
         if (result.success) {
           vscode.window.showInformationMessage(
-            `Dev Certs: Browser trust updated. ${result.message}`
+            vscode.l10n.t(
+              "Dev Certs: Browser trust updated. {0}",
+              result.message
+            )
           );
         } else {
-          const copyPath = "Copy Certificate Path";
+          const copyPath = vscode.l10n.t("Copy Certificate Path");
           const choice = await vscode.window.showWarningMessage(
-            `Dev Certs: Could not automatically trust in browsers (${result.message}). ` +
-              "To trust manually in Firefox: Settings → Privacy & Security → Certificates → " +
-              "View Certificates → Authorities → Import, then select the certificate file.",
+            vscode.l10n.t(
+              "Dev Certs: Could not automatically trust in browsers ({0}). To trust manually in Firefox: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import, then select the certificate file.",
+              result.message
+            ),
             copyPath
           );
           if (choice === copyPath) {
             await vscode.env.clipboard.writeText(pemPath);
             vscode.window.showInformationMessage(
-              `Dev Certs: Certificate path copied: ${pemPath}`
+              vscode.l10n.t(
+                "Dev Certs: Certificate path copied: {0}",
+                pemPath
+              )
             );
           }
         }
@@ -173,28 +186,31 @@ export function activate(context: vscode.ExtensionContext): void {
 
 /**
  * Show a modal consent dialog before first-time provisioning of the
- * auto-generated ASP.NET Core / Aspire dev certificate. Scoped narrowly to
- * that one cert — declining does NOT disable the extension, and any
- * user-managed certs configured via `devcontainerDevCerts.userCertificates`
- * are still synced into the container.
+ * auto-generated HTTPS development certificate (compatible with ASP.NET Core
+ * and Aspire). Scoped narrowly to that one certificate — declining does NOT
+ * disable the extension, and any user-managed certificates configured via
+ * `devcontainerDevCerts.userCertificates` are still synced into the container.
  */
 async function promptForCertConsent(): Promise<boolean> {
-  const generate = "Generate & Trust";
+  const generate = vscode.l10n.t("Generate & Trust");
   const platformDetail =
     process.platform === "darwin"
-      ? "macOS will prompt you for your login keychain password to complete the trust step."
+      ? vscode.l10n.t(
+          "macOS will prompt you for your login keychain password to complete the trust step."
+        )
       : process.platform === "win32"
-        ? "Windows will ask you to confirm adding the certificate to your user certificate store."
-        : "The certificate will be added to your local trust store.";
+        ? vscode.l10n.t(
+            "Windows will ask you to confirm adding the certificate to your user certificate store."
+          )
+        : vscode.l10n.t(
+            "The certificate will be added to your local trust store."
+          );
 
   const choice = await vscode.window.showInformationMessage(
-    "Dev Certs: Generate and trust the ASP.NET Core / Aspire HTTPS development " +
-      "certificate on this host so Dev Containers can serve over HTTPS without " +
-      "browser warnings? " +
-      platformDetail +
-      " Declining only skips this cert — user-managed certificates configured " +
-      "in devcontainerDevCerts.userCertificates will still sync. To suppress this " +
-      "prompt permanently, set devcontainerDevCerts.generateDotNetCert to false.",
+    vscode.l10n.t(
+      "Dev Certs: Generate and trust an HTTPS development certificate (compatible with ASP.NET Core and Aspire) on this host so Dev Containers can serve over HTTPS without browser warnings? {0} Declining only skips this certificate — user-managed certificates configured in devcontainerDevCerts.userCertificates will still sync. To suppress this prompt permanently, set devcontainerDevCerts.generateDotNetCert to false.",
+      platformDetail
+    ),
     { modal: true },
     generate
   );
@@ -290,10 +306,11 @@ async function showLinuxTrustGuidance(
   if (process.platform !== "linux") return;
   if (context.globalState.get<boolean>("linuxTrustGuidanceShown")) return;
 
-  const trustBrowsers = "Trust in Browsers";
+  const trustBrowsers = vscode.l10n.t("Trust in Browsers");
   const choice = await vscode.window.showInformationMessage(
-    "Dev Certs: Certificate is trusted for CLI tools (curl, wget) in VS Code terminals. " +
-      "For Firefox and Chromium, additional browser trust setup is needed.",
+    vscode.l10n.t(
+      "Dev Certs: Certificate is trusted for CLI tools (curl, wget) in VS Code terminals. For Firefox and Chromium, additional browser trust setup is needed."
+    ),
     trustBrowsers
   );
 

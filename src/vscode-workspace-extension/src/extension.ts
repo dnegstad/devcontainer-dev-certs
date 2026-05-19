@@ -116,7 +116,11 @@ async function injectCertificate(): Promise<void> {
       failures.push(material.name);
       log(`Error installing cert '${material.name}': ${message}`);
       vscode.window.showErrorMessage(
-        `Dev Certs: Failed to install certificate '${material.name}'. ${message}`
+        vscode.l10n.t(
+          "Dev Certs: Failed to install certificate '{0}'. {1}",
+          material.name,
+          message
+        )
       );
     }
   }
@@ -137,7 +141,11 @@ async function injectCertificate(): Promise<void> {
   // certs that are already in place.
   if (newInstalls.length > 0) {
     vscode.window.showInformationMessage(
-      `Dev certificates installed (${newInstalls.length}): ${newInstalls.join(", ")}`
+      vscode.l10n.t(
+        "Dev certificates installed ({0}): {1}",
+        newInstalls.length,
+        newInstalls.join(", ")
+      )
     );
   }
 }
@@ -168,8 +176,9 @@ async function tryGetBundle(
     } else {
       log(`Error retrieving cert bundle from host: ${message}`);
       vscode.window.showErrorMessage(
-        "Dev Certs: Failed to obtain certificates from the host machine. " +
-          "Check the Dev Container Dev Certs output on the host for details."
+        vscode.l10n.t(
+          "Dev Certs: Failed to obtain certificates from the host machine. Check the Dev Container Dev Certs output on the host for details."
+        )
       );
       return null;
     }
@@ -196,8 +205,9 @@ async function tryGetBundle(
       await promptInstallUiExtension();
     } else {
       vscode.window.showErrorMessage(
-        "Dev Certs: Failed to generate or trust the certificate on the host machine. " +
-          "Check the Dev Container Dev Certs output on the host for details."
+        vscode.l10n.t(
+          "Dev Certs: Failed to generate or trust the certificate on the host machine. Check the Dev Container Dev Certs output on the host for details."
+        )
       );
     }
     return null;
@@ -206,8 +216,9 @@ async function tryGetBundle(
   if (!legacy) {
     log("getCertMaterial returned null.");
     vscode.window.showWarningMessage(
-      "Dev Certs: The host extension could not provide certificate material. " +
-        "Check the host extension output for details."
+      vscode.l10n.t(
+        "Dev Certs: The host extension could not provide certificate material. Check the host extension output for details."
+      )
     );
     return null;
   }
@@ -226,10 +237,11 @@ async function tryGetBundle(
 }
 
 async function promptInstallUiExtension(): Promise<void> {
-  const install = "Install Host Extension";
+  const install = vscode.l10n.t("Install Host Extension");
   const choice = await vscode.window.showWarningMessage(
-    "Dev Certs: The host companion extension is not installed on your local machine. " +
-      "It is required to generate and share development certificates.",
+    vscode.l10n.t(
+      "Dev Certs: The host companion extension is not installed on your local machine. It is required to generate and share development certificates."
+    ),
     install
   );
 
@@ -238,13 +250,16 @@ async function promptInstallUiExtension(): Promise<void> {
       "workbench.extensions.installExtension",
       UI_EXTENSION_ID
     );
+    const reload = vscode.l10n.t("Reload");
     vscode.window
       .showInformationMessage(
-        "Dev Certs: Host extension installed. Reload the window to complete setup.",
-        "Reload"
+        vscode.l10n.t(
+          "Dev Certs: Host extension installed. Reload the window to complete setup."
+        ),
+        reload
       )
       .then((action) => {
-        if (action === "Reload") {
+        if (action === reload) {
           vscode.commands.executeCommand("workbench.action.reloadWindow");
         }
       });
