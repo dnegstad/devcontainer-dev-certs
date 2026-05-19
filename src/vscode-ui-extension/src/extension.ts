@@ -206,12 +206,25 @@ async function promptForCertConsent(): Promise<boolean> {
             "The certificate will be added to your local trust store."
           );
 
-  const choice = await vscode.window.showInformationMessage(
+  const message = vscode.l10n.t(
+    "Generate and trust an HTTPS development certificate on this host?"
+  );
+  const detail = [
     vscode.l10n.t(
-      "Dev Certs: Generate and trust an HTTPS development certificate (compatible with ASP.NET Core and Aspire) on this host so Dev Containers can serve over HTTPS without browser warnings? {0} Declining only skips this certificate — user-managed certificates configured in devcontainerDevCerts.userCertificates will still sync. To suppress this prompt permanently, set devcontainerDevCerts.generateDotNetCert to false.",
-      platformDetail
+      "The certificate is compatible with ASP.NET Core and Aspire, so Dev Containers can serve over HTTPS without browser warnings."
     ),
-    { modal: true },
+    platformDetail,
+    vscode.l10n.t(
+      "Declining only skips this certificate — user-managed certificates configured in devcontainerDevCerts.userCertificates will still sync."
+    ),
+    vscode.l10n.t(
+      "To suppress this prompt permanently, set devcontainerDevCerts.generateDotNetCert to false."
+    ),
+  ].join("\n\n");
+
+  const choice = await vscode.window.showInformationMessage(
+    message,
+    { modal: true, detail },
     generate
   );
   return choice === generate;
