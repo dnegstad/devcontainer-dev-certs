@@ -269,7 +269,7 @@ export async function resolveDotnetProvisioning(
   const consented = await deps.promptUser();
   if (!consented) {
     log(
-      "User declined dotnet dev cert provisioning; returning bundle without it."
+      "User declined developer certificate provisioning; returning bundle without it."
     );
     return { effectiveArgs, includeDotNetDev: false };
   }
