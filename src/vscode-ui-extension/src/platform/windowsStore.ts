@@ -129,43 +129,42 @@ export class WindowsCertificateStore extends BaseCertificateStore {
   }
 
   async trustCertificate(cert: DevCert): Promise<void> {
-    // Add the public cert to the configured Root store via the .NET X509Store
-    // API. We deliberately avoid `Import-Certificate` here: when targeting
-    // `Cert:\CurrentUser\Root` that cmdlet pops a "You are about to install a
-    // certificate from a certification authority..." confirmation dialog, and
-    // under `-NonInteractive` PowerShell fails with "UI is not allowed in this
-    // operation." X509Store.Add talks to CryptoAPI directly and skips the
-    // confirmation prompt.
-    // Public-cert only — no private key — but the random name still prevents
-    // concurrent invocations from colliding on the same temp path.
+    // Use certutil.exe — the built-in Windows CA admin tool from
+    // %SystemRoot%\System32, present on every Windows install since XP — to
+    // add the public cert to the configured Root store.
+    //
+    // We can't go back to `Import-Certificate` (the PowerShell PKI cmdlet
+    // PR #36 switched to): when it targets Cert:\CurrentUser\Root the
+    // underlying CryptoAPI call shows a "You are about to install a
+    // certificate from a certification authority..." confirmation dialog,
+    // which fails under `-NonInteractive` with "UI is not allowed in this
+    // operation." We also intentionally avoid the older path of
+    // `New-Object System.Security.Cryptography.X509Certificates.X509Store`
+    // — the host extension is meant to work without taking on a .NET
+    // dependency. certutil.exe uses CryptoAPI directly, skips the
+    // confirmation dialog, and is the same tool mkcert and similar dev-cert
+    // utilities use on Windows for the same reason.
+    //
+    // Public-cert only — no private key — but the random name still
+    // prevents concurrent invocations from colliding on the same temp path.
     const tmpCert = path.join(os.tmpdir(), `devcert-trust-${randomUUID()}.cer`);
     fs.writeFileSync(tmpCert, certToDer(cert));
 
-    const script =
-      `$ErrorActionPreference = 'Stop'; ` +
-      `$cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2('${tmpCert.replace(/'/g, "''")}'); ` +
-      `$store = New-Object System.Security.Cryptography.X509Certificates.X509Store('Root', '${this.storeLocation}'); ` +
-      `$store.Open('ReadWrite'); ` +
-      `$store.Add($cert); ` +
-      `$store.Close(); ` +
-      `Remove-Item '${tmpCert.replace(/'/g, "''")}'`;
+    const args = ["-f"];
+    if (this.storeLocation === "CurrentUser") args.push("-user");
+    args.push("-addstore", "Root", tmpCert);
 
-    const pwsh = await getPowerShell();
-    const result = await runProcess(pwsh, [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      script,
-    ]);
+    const result = await runProcess("certutil.exe", args);
+
+    try {
+      fs.unlinkSync(tmpCert);
+    } catch {
+      /* best effort */
+    }
 
     if (result.exitCode !== 0) {
-      try {
-        fs.unlinkSync(tmpCert);
-      } catch {
-        /* ignore */
-      }
       throw new Error(
-        `Failed to trust certificate on Windows: ${result.stderr}`
+        `Failed to trust certificate on Windows: ${result.stderr || result.stdout}`
       );
     }
   }
