@@ -58,7 +58,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
           if (material) {
             ensureTerminalSslCertDir(context);
-            void showLinuxTrustGuidance(context);
+            void attemptLinuxBrowserTrust(context, material.thumbprint);
           }
 
           return material;
@@ -102,9 +102,12 @@ export function activate(context: vscode.ExtensionContext): void {
             includeUserCerts: decision.effectiveArgs.includeUserCerts,
           });
 
-          if (bundle.certs.some((c) => c.kind === "dotnet-dev")) {
+          const dotnetCert = bundle.certs.find(
+            (c) => c.kind === "dotnet-dev"
+          );
+          if (dotnetCert) {
             ensureTerminalSslCertDir(context);
-            void showLinuxTrustGuidance(context);
+            void attemptLinuxBrowserTrust(context, dotnetCert.thumbprint);
           }
 
           return bundle;
@@ -161,23 +164,7 @@ export function activate(context: vscode.ExtensionContext): void {
             )
           );
         } else {
-          const copyPath = vscode.l10n.t("Copy Certificate Path");
-          const choice = await vscode.window.showWarningMessage(
-            vscode.l10n.t(
-              "Dev Certs: Could not automatically trust in browsers ({0}). To trust manually in Firefox: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import, then select the certificate file.",
-              result.message
-            ),
-            copyPath
-          );
-          if (choice === copyPath) {
-            await vscode.env.clipboard.writeText(pemPath);
-            vscode.window.showInformationMessage(
-              vscode.l10n.t(
-                "Dev Certs: Certificate path copied: {0}",
-                pemPath
-              )
-            );
-          }
+          await showBrowserTrustFailureGuidance(pemPath, result.message);
         }
       }
     )
@@ -310,27 +297,79 @@ function ensureTerminalSslCertDir(context: vscode.ExtensionContext): void {
 }
 
 /**
- * Show a one-time informational message on Linux after the first successful
- * cert provision, offering to trust the certificate in browsers.
+ * Best-effort browser trust on Linux as part of the Generate & Trust flow.
+ * Runs once per certificate thumbprint: if `trustInNss` succeeds we stay
+ * silent (CLI + browser trust both work, nothing to bother the user with);
+ * if it fails for any reason — missing certutil, no installed NSS databases,
+ * or one of the databases rejected the add — fall through to the same manual
+ * Firefox guidance the explicit `trustInBrowsers` command shows on failure.
+ *
+ * Keyed by thumbprint so cert rotation triggers a fresh attempt, but ordinary
+ * activations don't re-spam the toast on every Dev Container open.
  */
-async function showLinuxTrustGuidance(
-  context: vscode.ExtensionContext
+async function attemptLinuxBrowserTrust(
+  context: vscode.ExtensionContext,
+  thumbprint: string
 ): Promise<void> {
   if (process.platform !== "linux") return;
-  if (context.globalState.get<boolean>("linuxTrustGuidanceShown")) return;
 
-  const trustBrowsers = vscode.l10n.t("Trust in Browsers");
-  const choice = await vscode.window.showInformationMessage(
-    vscode.l10n.t(
-      "Dev Certs: Certificate is trusted for CLI tools (curl, wget) in VS Code terminals. For Firefox and Chromium, additional browser trust setup is needed."
-    ),
-    trustBrowsers
+  const lastAttempted = context.globalState.get<string>(
+    "linuxAutoTrustThumbprint"
   );
+  if (lastAttempted === thumbprint) return;
 
-  await context.globalState.update("linuxTrustGuidanceShown", true);
+  const pemPath = path.join(getOpenSslTrustDir(), getPemFileName(thumbprint));
+  if (!fs.existsSync(pemPath)) {
+    log(
+      `Linux auto-trust: PEM not found at ${pemPath}, skipping browser trust attempt.`
+    );
+    return;
+  }
 
-  if (choice === trustBrowsers) {
-    vscode.commands.executeCommand("devcontainer-dev-certs.trustInBrowsers");
+  await context.globalState.update("linuxAutoTrustThumbprint", thumbprint);
+
+  let result: { success: boolean; message: string };
+  try {
+    result = await trustInNss(pemPath);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(`Linux auto-trust failed unexpectedly: ${message}`);
+    await showBrowserTrustFailureGuidance(pemPath, message);
+    return;
+  }
+
+  if (result.success) {
+    log(`Linux auto-trust: ${result.message}`);
+    return;
+  }
+
+  log(`Linux auto-trust did not fully succeed: ${result.message}`);
+  await showBrowserTrustFailureGuidance(pemPath, result.message);
+}
+
+/**
+ * Toast shown when automatic browser trust didn't fully succeed — either
+ * because the tooling/databases weren't available or because at least one
+ * NSS database rejected the import. Offers the user a Copy Certificate Path
+ * action so they can finish the trust step manually in Firefox.
+ */
+async function showBrowserTrustFailureGuidance(
+  pemPath: string,
+  reason: string
+): Promise<void> {
+  const copyPath = vscode.l10n.t("Copy Certificate Path");
+  const choice = await vscode.window.showWarningMessage(
+    vscode.l10n.t(
+      "Dev Certs: Could not automatically trust in browsers ({0}). To trust manually in Firefox: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import, then select the certificate file.",
+      reason
+    ),
+    copyPath
+  );
+  if (choice === copyPath) {
+    await vscode.env.clipboard.writeText(pemPath);
+    vscode.window.showInformationMessage(
+      vscode.l10n.t("Dev Certs: Certificate path copied: {0}", pemPath)
+    );
   }
 }
 
