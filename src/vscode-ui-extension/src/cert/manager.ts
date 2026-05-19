@@ -4,9 +4,19 @@ import { VALIDITY_DAYS } from "./properties";
 import {
   type PlatformCertificateStore,
   type CertificateStatus,
+  type LinuxNssTrustReporter,
   createPlatformStore,
 } from "../platform/types";
 import { log } from "@devcontainer-dev-certs/shared";
+
+export interface CertManagerOptions {
+  /**
+   * Optional reporter invoked by the Linux platform store after attempting
+   * browser-NSS trust as part of `trustCertificate`. No-op on other
+   * platforms.
+   */
+  linuxNssTrustReporter?: LinuxNssTrustReporter;
+}
 
 /**
  * Certificate manager that orchestrates generation, trust, export, and status
@@ -16,8 +26,12 @@ export class CertManager {
   private store: PlatformCertificateStore | null = null;
   private currentCert: GeneratedCert | null = null;
 
+  constructor(private readonly options: CertManagerOptions = {}) {}
+
   private async getStore(): Promise<PlatformCertificateStore> {
-    this.store ??= await createPlatformStore();
+    this.store ??= await createPlatformStore({
+      linuxNssTrustReporter: this.options.linuxNssTrustReporter,
+    });
     return this.store;
   }
 

@@ -23,6 +23,31 @@ import { runProcess } from "../src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
 
+function makeNssDb(...segs: string[]): string {
+  const dir = path.join(mockHomeDir, ...segs);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "cert9.db"), "");
+  return dir;
+}
+
+function whichOk(): void {
+  mockedRunProcess.mockResolvedValueOnce({
+    exitCode: 0,
+    stdout: "/usr/bin/certutil\n",
+    stderr: "",
+  });
+}
+
+function certutilOk(times: number): void {
+  for (let i = 0; i < times; i++) {
+    mockedRunProcess.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+    });
+  }
+}
+
 describe("trustInNss", () => {
   let tmpDir: string;
   let pemPath: string;
@@ -32,7 +57,10 @@ describe("trustInNss", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-nss-test-"));
     mockHomeDir = tmpDir;
     pemPath = path.join(tmpDir, "test-cert.pem");
-    fs.writeFileSync(pemPath, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n");
+    fs.writeFileSync(
+      pemPath,
+      "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n"
+    );
   });
 
   afterEach(() => {
@@ -66,22 +94,16 @@ describe("trustInNss", () => {
     expect(result.message).toContain("No browser NSS databases found");
   });
 
-  it("trusts in Chromium NSS database when present", async () => {
-    // Create fake Chromium NSS database
-    const nssDir = path.join(tmpDir, ".pki", "nssdb");
-    fs.mkdirSync(nssDir, { recursive: true });
-    fs.writeFileSync(path.join(nssDir, "cert9.db"), "");
-
-    mockedRunProcess
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "/usr/bin/certutil\n", stderr: "" }) // which
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // certutil -D (remove)
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }); // certutil -A (add)
+  it("trusts in native Chromium NSS database when present", async () => {
+    const nssDir = makeNssDb(".pki", "nssdb");
+    whichOk();
+    certutilOk(2); // -D then -A
 
     const result = await trustInNss(pemPath);
 
-    expect(result.message).toContain("Chromium: trusted");
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("Trusted in: Chromium");
 
-    // Verify certutil -A was called with correct args
     const addCall = mockedRunProcess.mock.calls.find(
       (call) => call[0] === "certutil" && call[1].includes("-A")
     );
@@ -91,32 +113,97 @@ describe("trustInNss", () => {
     expect(addCall![1]).toContain(`sql:${nssDir}`);
   });
 
-  it("trusts in Firefox profile NSS databases when present", async () => {
-    // Create fake Firefox profile
-    const profileDir = path.join(tmpDir, ".mozilla", "firefox", "abc123.default");
-    fs.mkdirSync(profileDir, { recursive: true });
-    fs.writeFileSync(path.join(profileDir, "cert9.db"), "");
-
-    mockedRunProcess
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "/usr/bin/certutil\n", stderr: "" }) // which
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // certutil -D
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }); // certutil -A
+  it("trusts in native Firefox profile NSS databases when present", async () => {
+    makeNssDb(".mozilla", "firefox", "abc123.default");
+    whichOk();
+    certutilOk(2);
 
     const result = await trustInNss(pemPath);
 
     expect(result.success).toBe(true);
-    expect(result.message).toContain("Firefox (abc123.default): trusted");
+    expect(result.message).toContain("Trusted in: Firefox (abc123.default)");
+  });
+
+  it("trusts in Snap Firefox profile NSS databases when present", async () => {
+    makeNssDb("snap", "firefox", "common", ".mozilla", "firefox", "snap.default");
+    whichOk();
+    certutilOk(2);
+
+    const result = await trustInNss(pemPath);
+
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("Trusted in: Firefox (Snap) (snap.default)");
+  });
+
+  it("trusts in Flatpak Firefox profile NSS databases when present", async () => {
+    makeNssDb(
+      ".var",
+      "app",
+      "org.mozilla.firefox",
+      ".mozilla",
+      "firefox",
+      "fp.default"
+    );
+    whichOk();
+    certutilOk(2);
+
+    const result = await trustInNss(pemPath);
+
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("Trusted in: Firefox (Flatpak) (fp.default)");
+  });
+
+  it("trusts in Snap Chromium NSS database when present", async () => {
+    makeNssDb("snap", "chromium", "common", ".pki", "nssdb");
+    whichOk();
+    certutilOk(2);
+
+    const result = await trustInNss(pemPath);
+
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("Trusted in: Chromium (Snap)");
+  });
+
+  it("trusts in Flatpak Chromium-family NSS databases when present", async () => {
+    makeNssDb(".var", "app", "com.google.Chrome", ".pki", "nssdb");
+    makeNssDb(".var", "app", "com.brave.Browser", ".pki", "nssdb");
+    whichOk();
+    certutilOk(4); // 2 dbs × (-D, -A)
+
+    const result = await trustInNss(pemPath);
+
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("Chrome (Flatpak)");
+    expect(result.message).toContain("Brave (Flatpak)");
+  });
+
+  it("trusts in Firefox forks (LibreWolf, Waterfox, Floorp, ESR) when present", async () => {
+    makeNssDb(".mozilla", "firefox-esr", "esr.default");
+    makeNssDb(".librewolf", "lw.default");
+    makeNssDb(".waterfox", "wf.default");
+    makeNssDb(".floorp", "fl.default");
+    whichOk();
+    certutilOk(8);
+
+    const result = await trustInNss(pemPath);
+
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("Firefox ESR (esr.default)");
+    expect(result.message).toContain("LibreWolf (lw.default)");
+    expect(result.message).toContain("Waterfox (wf.default)");
+    expect(result.message).toContain("Floorp (fl.default)");
   });
 
   it("reports failure per-database when certutil -A fails", async () => {
-    const profileDir = path.join(tmpDir, ".mozilla", "firefox", "test.profile");
-    fs.mkdirSync(profileDir, { recursive: true });
-    fs.writeFileSync(path.join(profileDir, "cert9.db"), "");
-
+    makeNssDb(".mozilla", "firefox", "test.profile");
+    whichOk();
     mockedRunProcess
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "/usr/bin/certutil\n", stderr: "" }) // which
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // certutil -D
-      .mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "SEC_ERROR_BAD_DATABASE" }); // certutil -A fails
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // -D
+      .mockResolvedValueOnce({
+        exitCode: 1,
+        stdout: "",
+        stderr: "SEC_ERROR_BAD_DATABASE",
+      }); // -A fails
 
     const result = await trustInNss(pemPath);
 
@@ -126,52 +213,65 @@ describe("trustInNss", () => {
   });
 
   it("removes existing cert before adding for idempotency", async () => {
-    const profileDir = path.join(tmpDir, ".mozilla", "firefox", "idempotent.profile");
-    fs.mkdirSync(profileDir, { recursive: true });
-    fs.writeFileSync(path.join(profileDir, "cert9.db"), "");
-
-    mockedRunProcess
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "/usr/bin/certutil\n", stderr: "" }) // which
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // certutil -D (remove)
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }); // certutil -A (add)
+    makeNssDb(".mozilla", "firefox", "idempotent.profile");
+    whichOk();
+    certutilOk(2);
 
     await trustInNss(pemPath);
 
-    // First certutil call after `which` should be -D (delete)
     const deleteCall = mockedRunProcess.mock.calls[1];
     expect(deleteCall[0]).toBe("certutil");
     expect(deleteCall[1]).toContain("-D");
     expect(deleteCall[1]).toContain("Dev Container Dev Cert");
 
-    // Second certutil call should be -A (add)
     const addCall = mockedRunProcess.mock.calls[2];
     expect(addCall[0]).toBe("certutil");
     expect(addCall[1]).toContain("-A");
   });
 
-  it("handles both Chromium and Firefox databases in one call", async () => {
-    // Create both
-    const nssDir = path.join(tmpDir, ".pki", "nssdb");
-    fs.mkdirSync(nssDir, { recursive: true });
-    fs.writeFileSync(path.join(nssDir, "cert9.db"), "");
-
-    const profileDir = path.join(tmpDir, ".mozilla", "firefox", "multi.default");
-    fs.mkdirSync(profileDir, { recursive: true });
-    fs.writeFileSync(path.join(profileDir, "cert9.db"), "");
-
-    mockedRunProcess
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "/usr/bin/certutil\n", stderr: "" }) // which
-      // Chromium
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // certutil -D
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // certutil -A
-      // Firefox
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // certutil -D
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }); // certutil -A
+  it("handles native Chromium and Firefox in a single call", async () => {
+    makeNssDb(".pki", "nssdb");
+    makeNssDb(".mozilla", "firefox", "multi.default");
+    whichOk();
+    certutilOk(4);
 
     const result = await trustInNss(pemPath);
 
     expect(result.success).toBe(true);
-    expect(result.message).toContain("Chromium: trusted");
-    expect(result.message).toContain("Firefox (multi.default): trusted");
+    expect(result.message).toContain("Trusted in: Chromium, Firefox (multi.default)");
+  });
+
+  it("skips Firefox roots silently when no profile has cert9.db", async () => {
+    // Profile dir exists but no cert9.db inside — counts as not-yet-initialized
+    const noCertProfile = path.join(
+      mockHomeDir,
+      ".mozilla",
+      "firefox",
+      "empty.profile"
+    );
+    fs.mkdirSync(noCertProfile, { recursive: true });
+    whichOk();
+
+    const result = await trustInNss(pemPath);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain("No browser NSS databases found");
+  });
+
+  it("combines trusted databases into a single comma-separated entry", async () => {
+    makeNssDb(".pki", "nssdb");
+    makeNssDb("snap", "firefox", "common", ".mozilla", "firefox", "p.default");
+    whichOk();
+    certutilOk(4);
+
+    const result = await trustInNss(pemPath);
+
+    expect(result.success).toBe(true);
+    // Exactly one "Trusted in:" prefix — failures (none here) would be appended
+    // separately after a semicolon.
+    expect(result.message.match(/Trusted in:/g)?.length).toBe(1);
+    expect(result.message).toBe(
+      "Trusted in: Chromium, Firefox (Snap) (p.default)"
+    );
   });
 });

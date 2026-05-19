@@ -1,4 +1,21 @@
 import { type DevCert, type DevKey } from "../cert/types";
+import { type NssTrustResult } from "./nssTrust";
+
+/**
+ * Callback the Linux store invokes after attempting browser-NSS trust as
+ * part of `trustCertificate`. Lets the extension host surface a guidance
+ * toast on failure without giving the platform store a direct dependency
+ * on `vscode`.
+ */
+export type LinuxNssTrustReporter = (
+  result: NssTrustResult,
+  pemPath: string
+) => void;
+
+export interface CreatePlatformStoreOptions {
+  /** Optional reporter for NSS trust outcomes; honored only on Linux. */
+  linuxNssTrustReporter?: LinuxNssTrustReporter;
+}
 
 export interface CertificateStatus {
   exists: boolean;
@@ -59,7 +76,9 @@ export interface PlatformCertificateStore {
 /**
  * Create the appropriate store for the current platform.
  */
-export async function createPlatformStore(): Promise<PlatformCertificateStore> {
+export async function createPlatformStore(
+  options: CreatePlatformStoreOptions = {}
+): Promise<PlatformCertificateStore> {
   switch (process.platform) {
     case "win32": {
       const { WindowsCertificateStore } = await import("./windowsStore.js");
@@ -71,7 +90,9 @@ export async function createPlatformStore(): Promise<PlatformCertificateStore> {
     }
     case "linux": {
       const { LinuxCertificateStore } = await import("./linuxStore.js");
-      return new LinuxCertificateStore();
+      return new LinuxCertificateStore({
+        nssTrustReporter: options.linuxNssTrustReporter,
+      });
     }
     default:
       throw new Error(`Unsupported platform: ${process.platform}`);

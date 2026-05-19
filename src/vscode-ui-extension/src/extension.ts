@@ -17,7 +17,16 @@ import type { CertBundle } from "@devcontainer-dev-certs/shared";
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs"));
 
-  const certManager = new CertManager();
+  const certManager = new CertManager({
+    linuxNssTrustReporter: (result, pemPath) => {
+      if (result.success) {
+        log(`Linux NSS trust: ${result.message}`);
+        return;
+      }
+      log(`Linux NSS trust did not fully succeed: ${result.message}`);
+      void showBrowserTrustFailureGuidance(pemPath, result.message);
+    },
+  });
   const certProvider = new CertProvider(certManager);
 
   log("UI extension activated (managed certificate provider).");
@@ -58,7 +67,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
           if (material) {
             ensureTerminalSslCertDir(context);
-            void showLinuxTrustGuidance(context);
           }
 
           return material;
@@ -77,11 +85,6 @@ export function activate(context: vscode.ExtensionContext): void {
       "devcontainer-dev-certs.getAllCertMaterial",
       async (args: GetAllCertMaterialArgs | undefined): Promise<CertBundle> => {
         try {
-          const effectiveArgs: GetAllCertMaterialArgs = {
-            includeDotNetDev: args?.includeDotNetDev !== false,
-            includeUserCerts: args?.includeUserCerts !== false,
-          };
-
           const autoProvisionCfg = vscode.workspace
             .getConfiguration("devcontainer-dev-certs")
             .get<boolean>("autoProvision", true);
@@ -89,42 +92,26 @@ export function activate(context: vscode.ExtensionContext): void {
             .getConfiguration("devcontainerDevCerts")
             .get<boolean>("generateDotNetCert", true);
 
-          const dotnetWillGenerate =
-            effectiveArgs.includeDotNetDev && hostWantsDotNet && autoProvisionCfg;
-
-          if (dotnetWillGenerate) {
-            const status = await certManager.check();
-            if (!status.exists || !status.isTrusted) {
-              const consented = context.globalState.get<boolean>(
-                "certProvisionConsented"
-              );
-              if (!consented) {
-                const userConsented = await promptForCertConsent();
-                if (!userConsented) {
-                  log(
-                    "User declined dotnet dev cert provisioning; returning bundle without it."
-                  );
-                  return await certProvider.getAllCertMaterial({
-                    ...effectiveArgs,
-                    includeDotNetDev: false,
-                  });
-                }
-                await context.globalState.update(
-                  "certProvisionConsented",
-                  true
-                );
-              }
-            }
-          }
+          const decision = await resolveDotnetProvisioning({
+            args,
+            hostWantsDotNet,
+            autoProvision: autoProvisionCfg,
+            checkCert: () => certManager.check(),
+            hasPriorConsent: () =>
+              context.globalState.get<boolean>("certProvisionConsented") ===
+              true,
+            recordConsent: () =>
+              context.globalState.update("certProvisionConsented", true),
+            promptUser: promptForCertConsent,
+          });
 
           const bundle = await certProvider.getAllCertMaterial({
-            includeDotNetDev: dotnetWillGenerate,
-            includeUserCerts: effectiveArgs.includeUserCerts,
+            includeDotNetDev: decision.includeDotNetDev,
+            includeUserCerts: decision.effectiveArgs.includeUserCerts,
           });
 
           if (bundle.certs.some((c) => c.kind === "dotnet-dev")) {
             ensureTerminalSslCertDir(context);
-            void showLinuxTrustGuidance(context);
           }
 
           return bundle;
@@ -144,7 +131,9 @@ export function activate(context: vscode.ExtensionContext): void {
       async () => {
         if (process.platform !== "linux") {
           vscode.window.showInformationMessage(
-            "Dev Certs: Browser trust is handled automatically by the OS on this platform."
+            vscode.l10n.t(
+              "Dev Certs: Browser trust is handled automatically by the OS on this platform."
+            )
           );
           return;
         }
@@ -152,7 +141,9 @@ export function activate(context: vscode.ExtensionContext): void {
         const status = await certManager.check();
         if (!status.exists || !status.thumbprint) {
           vscode.window.showWarningMessage(
-            "Dev Certs: No dev certificate found. Open a Dev Container to generate one."
+            vscode.l10n.t(
+              "Dev Certs: No development certificate found. Open a Dev Container to generate one."
+            )
           );
           return;
         }
@@ -161,7 +152,9 @@ export function activate(context: vscode.ExtensionContext): void {
         const pemPath = path.join(trustDir, getPemFileName(status.thumbprint));
         if (!fs.existsSync(pemPath)) {
           vscode.window.showWarningMessage(
-            "Dev Certs: Certificate PEM not found at expected location."
+            vscode.l10n.t(
+              "Dev Certs: Certificate PEM not found at expected location."
+            )
           );
           return;
         }
@@ -169,22 +162,13 @@ export function activate(context: vscode.ExtensionContext): void {
         const result = await trustInNss(pemPath);
         if (result.success) {
           vscode.window.showInformationMessage(
-            `Dev Certs: Browser trust updated. ${result.message}`
+            vscode.l10n.t(
+              "Dev Certs: Browser trust updated. {0}",
+              result.message
+            )
           );
         } else {
-          const copyPath = "Copy Certificate Path";
-          const choice = await vscode.window.showWarningMessage(
-            `Dev Certs: Could not automatically trust in browsers (${result.message}). ` +
-              "To trust manually in Firefox: Settings → Privacy & Security → Certificates → " +
-              "View Certificates → Authorities → Import, then select the certificate file.",
-            copyPath
-          );
-          if (choice === copyPath) {
-            await vscode.env.clipboard.writeText(pemPath);
-            vscode.window.showInformationMessage(
-              `Dev Certs: Certificate path copied: ${pemPath}`
-            );
-          }
+          await showBrowserTrustFailureGuidance(pemPath, result.message);
         }
       }
     )
@@ -192,27 +176,109 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 /**
- * Show a modal consent dialog before first-time certificate provisioning.
- * Explains what the extension does and includes platform-specific details
- * about any OS-level prompts the user will see.
+ * Show a modal consent dialog before first-time provisioning of the
+ * auto-generated HTTPS development certificate (compatible with ASP.NET Core
+ * and Aspire). Scoped narrowly to that one certificate — declining does NOT
+ * disable the extension, and any user-managed certificates configured via
+ * `devcontainerDevCerts.userCertificates` are still synced into the container.
  */
 async function promptForCertConsent(): Promise<boolean> {
-  const enable = "Enable";
+  const generate = vscode.l10n.t("Generate & Trust");
   const platformDetail =
     process.platform === "darwin"
-      ? "macOS will prompt you for your login keychain password to complete the trust step."
+      ? vscode.l10n.t(
+          "macOS will prompt you for your login keychain password to complete the trust step."
+        )
       : process.platform === "win32"
-        ? "Windows will ask you to confirm adding the certificate to your user certificate store."
-        : "The certificate will be added to your local trust store.";
+        ? vscode.l10n.t(
+            "Windows will ask you to confirm adding the certificate to your user certificate store."
+          )
+        : vscode.l10n.t(
+            "The certificate will be added to your local trust store."
+          );
+
+  const message = vscode.l10n.t(
+    "Generate and trust an HTTPS development certificate on this host?"
+  );
+  const detail = [
+    vscode.l10n.t(
+      "The certificate is compatible with ASP.NET Core and Aspire, so Dev Containers can serve over HTTPS without browser warnings."
+    ),
+    platformDetail,
+    vscode.l10n.t(
+      "Declining skips generating a new development certificate — user-managed certificates configured in devcontainerDevCerts.userCertificates will still sync."
+    ),
+    vscode.l10n.t(
+      "To suppress this prompt permanently, set devcontainerDevCerts.generateDotNetCert to false."
+    ),
+  ].join("\n\n");
 
   const choice = await vscode.window.showInformationMessage(
-    "Dev Certs: This extension generates and trusts an HTTPS development certificate " +
-      "so Dev Containers can serve over HTTPS without browser warnings. " +
-      platformDetail,
-    { modal: true },
-    enable
+    message,
+    { modal: true, detail },
+    generate
   );
-  return choice === enable;
+  return choice === generate;
+}
+
+export interface ResolveDotnetProvisioningDeps {
+  args: GetAllCertMaterialArgs | undefined;
+  hostWantsDotNet: boolean;
+  autoProvision: boolean;
+  checkCert: () => Promise<{ exists: boolean; isTrusted: boolean }>;
+  hasPriorConsent: () => boolean;
+  recordConsent: () => Promise<void> | Thenable<void>;
+  promptUser: () => Promise<boolean>;
+}
+
+export interface DotnetProvisioningDecision {
+  effectiveArgs: GetAllCertMaterialArgs;
+  includeDotNetDev: boolean;
+}
+
+/**
+ * Decide whether to provision the dotnet dev cert for an incoming
+ * `getAllCertMaterial` call. Gates on the caller's `includeDotNetDev`, the
+ * host's `generateDotNetCert` setting, and `autoProvision`. Only consults
+ * `certManager.check()` and shows the consent prompt when all three are on —
+ * keeping the OS trust store untouched (and the modal silent) for users who
+ * have opted out of the auto-generated cert.
+ */
+export async function resolveDotnetProvisioning(
+  deps: ResolveDotnetProvisioningDeps
+): Promise<DotnetProvisioningDecision> {
+  const effectiveArgs: GetAllCertMaterialArgs = {
+    includeDotNetDev: deps.args?.includeDotNetDev !== false,
+    includeUserCerts: deps.args?.includeUserCerts !== false,
+  };
+
+  const dotnetWillGenerate =
+    effectiveArgs.includeDotNetDev &&
+    deps.hostWantsDotNet &&
+    deps.autoProvision;
+
+  if (!dotnetWillGenerate) {
+    return { effectiveArgs, includeDotNetDev: false };
+  }
+
+  const status = await deps.checkCert();
+  if (status.exists && status.isTrusted) {
+    return { effectiveArgs, includeDotNetDev: true };
+  }
+
+  if (deps.hasPriorConsent()) {
+    return { effectiveArgs, includeDotNetDev: true };
+  }
+
+  const consented = await deps.promptUser();
+  if (!consented) {
+    log(
+      "User declined developer certificate provisioning; returning bundle without it."
+    );
+    return { effectiveArgs, includeDotNetDev: false };
+  }
+  await deps.recordConsent();
+  return { effectiveArgs, includeDotNetDev: true };
 }
 
 /**
@@ -235,26 +301,28 @@ function ensureTerminalSslCertDir(context: vscode.ExtensionContext): void {
 }
 
 /**
- * Show a one-time informational message on Linux after the first successful
- * cert provision, offering to trust the certificate in browsers.
+ * Toast shown when automatic browser trust didn't fully succeed — either
+ * because the tooling/databases weren't available or because at least one
+ * NSS database rejected the import. Offers the user a Copy Certificate Path
+ * action so they can finish the trust step manually in Firefox.
  */
-async function showLinuxTrustGuidance(
-  context: vscode.ExtensionContext
+async function showBrowserTrustFailureGuidance(
+  pemPath: string,
+  reason: string
 ): Promise<void> {
-  if (process.platform !== "linux") return;
-  if (context.globalState.get<boolean>("linuxTrustGuidanceShown")) return;
-
-  const trustBrowsers = "Trust in Browsers";
-  const choice = await vscode.window.showInformationMessage(
-    "Dev Certs: Certificate is trusted for CLI tools (curl, wget) in VS Code terminals. " +
-      "For Firefox and Chromium, additional browser trust setup is needed.",
-    trustBrowsers
+  const copyPath = vscode.l10n.t("Copy Certificate Path");
+  const choice = await vscode.window.showWarningMessage(
+    vscode.l10n.t(
+      "Dev Certs: Could not automatically trust in browsers ({0}). To trust manually in Firefox: Settings → Privacy & Security → Certificates → View Certificates → Authorities → Import, then select the certificate file.",
+      reason
+    ),
+    copyPath
   );
-
-  await context.globalState.update("linuxTrustGuidanceShown", true);
-
-  if (choice === trustBrowsers) {
-    vscode.commands.executeCommand("devcontainer-dev-certs.trustInBrowsers");
+  if (choice === copyPath) {
+    await vscode.env.clipboard.writeText(pemPath);
+    vscode.window.showInformationMessage(
+      vscode.l10n.t("Dev Certs: Certificate path copied: {0}", pemPath)
+    );
   }
 }
 

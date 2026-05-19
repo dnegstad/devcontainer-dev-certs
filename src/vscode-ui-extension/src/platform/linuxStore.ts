@@ -1,7 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
+import { trustInNss, type NssTrustResult } from "./nssTrust";
 import { runProcess } from "./processUtil";
+import { type LinuxNssTrustReporter } from "./types";
 import { type DevCert, type DevKey } from "../cert/types";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { buildPfx } from "../cert/pfx";
@@ -10,7 +12,18 @@ import {
   getDotNetRootStorePath,
   getOpenSslTrustDir,
   getPemFileName,
+  log,
 } from "@devcontainer-dev-certs/shared";
+
+export interface LinuxCertificateStoreOptions {
+  /**
+   * Optional callback invoked once with the result of the best-effort
+   * browser-NSS trust step inside `trustCertificate`. Omitting it disables
+   * the NSS step entirely (used by integration tests and CLI contexts
+   * where browser trust isn't relevant).
+   */
+  nssTrustReporter?: LinuxNssTrustReporter;
+}
 
 /**
  * Linux certificate store implementation.
@@ -22,8 +35,17 @@ import {
  * Trust is established by:
  * 1. Writing a PFX to the .NET Root store path (for .NET runtime validation)
  * 2. Writing a PEM to the OpenSSL trust directory with hash symlinks (for OpenSSL/curl/etc.)
+ * 3. Best-effort import into Linux browser NSS databases, when a reporter
+ *    is configured.
  */
 export class LinuxCertificateStore extends BaseCertificateStore {
+  private readonly nssTrustReporter?: LinuxNssTrustReporter;
+
+  constructor(options: LinuxCertificateStoreOptions = {}) {
+    super();
+    this.nssTrustReporter = options.nssTrustReporter;
+  }
+
   private get dotNetRootStorePath(): string {
     return getDotNetRootStorePath();
   }
@@ -55,6 +77,40 @@ export class LinuxCertificateStore extends BaseCertificateStore {
   async trustCertificate(cert: DevCert): Promise<void> {
     await this.trustInDotNetRootStore(cert);
     await this.trustViaOpenSsl(cert);
+    await this.trustInNssBrowsers(cert);
+  }
+
+  /**
+   * Best-effort browser NSS trust. Mirrors the Windows / macOS pattern where
+   * `trustCertificate` performs every trust step the platform supports out
+   * of the box — on Linux that includes adding the cert to the user's NSS
+   * databases for Firefox / Chromium-family browsers. Never throws: NSS
+   * tooling or stores are commonly absent and shouldn't break .NET / OpenSSL
+   * trust. Results are surfaced via the reporter callback (typically used by
+   * the extension host to show a manual-guidance toast on failure).
+   */
+  private async trustInNssBrowsers(cert: DevCert): Promise<void> {
+    if (!this.nssTrustReporter) return;
+
+    const pemPath = path.join(
+      getOpenSslTrustDir(),
+      getPemFileName(cert.thumbprintSha1)
+    );
+    if (!fs.existsSync(pemPath)) {
+      log(`Linux NSS trust: PEM not found at ${pemPath}, skipping.`);
+      return;
+    }
+
+    let result: NssTrustResult;
+    try {
+      result = await trustInNss(pemPath);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(`Linux NSS trust threw unexpectedly: ${message}`);
+      result = { success: false, message };
+    }
+
+    this.nssTrustReporter(result, pemPath);
   }
 
   async removeCertificates(): Promise<void> {

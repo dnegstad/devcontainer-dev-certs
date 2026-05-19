@@ -103,7 +103,11 @@ export class CertProvider {
             `Failed to load user certificate '${userConfig.name}': ${message}`
           );
           void vscode.window.showErrorMessage(
-            `Dev Certs: Failed to load user certificate '${userConfig.name}': ${message}`
+            vscode.l10n.t(
+              "Dev Certs: Failed to load user certificate '{0}': {1}",
+              userConfig.name,
+              message
+            )
           );
         }
       }
@@ -254,8 +258,15 @@ export class CertProvider {
     if (this.warnedExpiredCerts.has(name)) return;
     this.warnedExpiredCerts.add(name);
     const iso = notAfter.toISOString();
-    const message = `Certificate '${name}' expired on ${iso}; it will still be synced to the container, but TLS clients will reject it.`;
-    log(`[warn] ${message}`);
-    void vscode.window.showWarningMessage(`Dev Certs: ${message}`);
+    log(
+      `[warn] Certificate '${name}' expired on ${iso}; it will still be synced to the container, but TLS clients will reject it.`
+    );
+    void vscode.window.showWarningMessage(
+      vscode.l10n.t(
+        "Dev Certs: Certificate '{0}' expired on {1}; it will still be synced to the container, but TLS clients will reject it.",
+        name,
+        iso
+      )
+    );
   }
 }
