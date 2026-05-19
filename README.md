@@ -216,6 +216,14 @@ Open the repo in VS Code and press F5. The `build-extensions` task will:
 
 The Extension Development Host opens with the UI extension loaded on the host side. To test the full devcontainer flow, reopen `.out/test-project/` in a container.
 
+## Known issues
+
+### podman: subsequent feature's `apt-get update` fails with `Couldn't create temporary file /tmp/apt.conf.XXX`
+
+This is [containers/buildah#6747](https://github.com/containers/buildah/issues/6747): when a devcontainer feature is installed via the `RUN --mount=type=bind,target=/tmp/build-features-src/<feat>_0 ...` pattern the devcontainer CLI generates, buildah/podman can commit the resulting layer with `/tmp` reset from `1777 root:root` to `0755 root:root`. A later feature that calls `apt-get update` then fails because `_apt` (uid 42) can no longer write to `/tmp`. Docker is not affected.
+
+This feature applies the workaround at the end of its own install script, so combinations like `devcontainer-dev-certs` + `azure-functions-core-tools` on podman work out of the box. If you hit the same class of failure with a *different* feature, copy the standalone [`examples/buildah-tmp-fix/`](examples/buildah-tmp-fix/) local feature into your `.devcontainer/` and place it in `devcontainer.json` between the offending feature and the consumer.
+
 ## Limitations
 
 - **Auto-generated dev cert matches .NET's format only.** The `generateDotNetCert` flow produces a cert identical to `dotnet dev-certs https` (specific OID marker, subject, SAN entries). To sync differently-shaped certs (corporate CAs, custom wildcard certs, etc.), add them via the `devcontainerDevCerts.userCertificates` VS Code setting — they're copied as-is.

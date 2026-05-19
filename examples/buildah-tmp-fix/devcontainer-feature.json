@@ -1,0 +1,6 @@
+{
+  "id": "buildah-tmp-fix",
+  "version": "0.1.0",
+  "name": "Buildah /tmp permission fix",
+  "description": "Workaround for containers/buildah#6747. When a previous devcontainer feature's install RUN uses `--mount=type=bind,target=/tmp/...`, buildah/podman commits the layer with /tmp at mode 0755 root:root instead of 1777. A later feature that runs apt-get update then fails with 'Couldn't create temporary file /tmp/apt.conf.XXX'. Place this feature in devcontainer.json BETWEEN the offending upstream feature and any subsequent feature that runs apt-get update."
+}
