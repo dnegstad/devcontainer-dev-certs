@@ -16,6 +16,14 @@ vi.mock("../src/platform/processUtil", () => ({
   }),
 }));
 
+// Mock trustInNss so the in-trust NSS step doesn't touch the real homedir.
+// Tests that exercise the NSS step explicitly construct a store with a
+// reporter; the default tests construct it without one, in which case the
+// step is skipped entirely and this mock is never invoked.
+vi.mock("../src/platform/nssTrust", () => ({
+  trustInNss: vi.fn(),
+}));
+
 // Override the shared paths to point at temp directories.
 let testStoreDir: string;
 let testRootStoreDir: string;
@@ -33,8 +41,10 @@ vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
 
 import { LinuxCertificateStore } from "../src/platform/linuxStore";
 import { runProcess } from "../src/platform/processUtil";
+import { trustInNss } from "../src/platform/nssTrust";
 
 const mockedRunProcess = vi.mocked(runProcess);
+const mockedTrustInNss = vi.mocked(trustInNss);
 
 async function makeTestCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();
@@ -161,6 +171,78 @@ describe("LinuxCertificateStore", () => {
       // Root store filename is keyed by the SHA-1 thumbprint.
       expect(parsed.cert.thumbprintSha1).toBe(thumbprint);
       expect(parsed.key).toBeNull();
+    });
+
+    describe("NSS browser trust step", () => {
+      it("skips NSS entirely when no reporter is configured", async () => {
+        const { cert } = await makeTestCert();
+        await store.trustCertificate(cert);
+
+        expect(mockedTrustInNss).not.toHaveBeenCalled();
+      });
+
+      it("reports success when trustInNss resolves with success", async () => {
+        const reporter = vi.fn();
+        const reportingStore = new LinuxCertificateStore({
+          nssTrustReporter: reporter,
+        });
+        mockedTrustInNss.mockResolvedValueOnce({
+          success: true,
+          message: "Trusted in: Firefox (default)",
+        });
+
+        const { cert, thumbprint } = await makeTestCert();
+        await reportingStore.trustCertificate(cert);
+
+        const expectedPemPath = path.join(
+          testTrustDir,
+          `aspnetcore-localhost-${thumbprint}.pem`
+        );
+        expect(mockedTrustInNss).toHaveBeenCalledWith(expectedPemPath);
+        expect(reporter).toHaveBeenCalledOnce();
+        expect(reporter).toHaveBeenCalledWith(
+          { success: true, message: "Trusted in: Firefox (default)" },
+          expectedPemPath
+        );
+      });
+
+      it("reports failure when trustInNss resolves unsuccessfully", async () => {
+        const reporter = vi.fn();
+        const reportingStore = new LinuxCertificateStore({
+          nssTrustReporter: reporter,
+        });
+        mockedTrustInNss.mockResolvedValueOnce({
+          success: false,
+          message: "certutil is not installed.",
+        });
+
+        const { cert } = await makeTestCert();
+        await reportingStore.trustCertificate(cert);
+
+        expect(reporter).toHaveBeenCalledOnce();
+        expect(reporter.mock.calls[0][0]).toEqual({
+          success: false,
+          message: "certutil is not installed.",
+        });
+      });
+
+      it("reports failure when trustInNss throws unexpectedly", async () => {
+        const reporter = vi.fn();
+        const reportingStore = new LinuxCertificateStore({
+          nssTrustReporter: reporter,
+        });
+        mockedTrustInNss.mockRejectedValueOnce(new Error("boom"));
+
+        const { cert } = await makeTestCert();
+        await reportingStore.trustCertificate(cert);
+
+        expect(reporter).toHaveBeenCalledOnce();
+        expect(reporter.mock.calls[0][0]).toEqual({
+          success: false,
+          message: "boom",
+        });
+      });
+
     });
   });
 

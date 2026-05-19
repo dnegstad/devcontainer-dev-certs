@@ -17,7 +17,16 @@ import type { CertBundle } from "@devcontainer-dev-certs/shared";
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs"));
 
-  const certManager = new CertManager();
+  const certManager = new CertManager({
+    linuxNssTrustReporter: (result, pemPath) => {
+      if (result.success) {
+        log(`Linux NSS trust: ${result.message}`);
+        return;
+      }
+      log(`Linux NSS trust did not fully succeed: ${result.message}`);
+      void showBrowserTrustFailureGuidance(pemPath, result.message);
+    },
+  });
   const certProvider = new CertProvider(certManager);
 
   log("UI extension activated (managed certificate provider).");
@@ -58,7 +67,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
           if (material) {
             ensureTerminalSslCertDir(context);
-            void attemptLinuxBrowserTrust(context, material.thumbprint);
           }
 
           return material;
@@ -102,12 +110,8 @@ export function activate(context: vscode.ExtensionContext): void {
             includeUserCerts: decision.effectiveArgs.includeUserCerts,
           });
 
-          const dotnetCert = bundle.certs.find(
-            (c) => c.kind === "dotnet-dev"
-          );
-          if (dotnetCert) {
+          if (bundle.certs.some((c) => c.kind === "dotnet-dev")) {
             ensureTerminalSslCertDir(context);
-            void attemptLinuxBrowserTrust(context, dotnetCert.thumbprint);
           }
 
           return bundle;
@@ -294,57 +298,6 @@ function ensureTerminalSslCertDir(context: vscode.ExtensionContext): void {
   envCollection.prepend("SSL_CERT_DIR", trustDir + ":");
 
   log(`SSL_CERT_DIR prepended with ${trustDir} for integrated terminals`);
-}
-
-/**
- * Best-effort browser trust on Linux as part of the Generate & Trust flow.
- * Runs once per certificate thumbprint: if `trustInNss` succeeds we stay
- * silent (CLI + browser trust both work, nothing to bother the user with);
- * if it fails for any reason — missing certutil, no installed NSS databases,
- * or one of the databases rejected the add — fall through to the same manual
- * Firefox guidance the explicit `trustInBrowsers` command shows on failure.
- *
- * Keyed by thumbprint so cert rotation triggers a fresh attempt, but ordinary
- * activations don't re-spam the toast on every Dev Container open.
- */
-async function attemptLinuxBrowserTrust(
-  context: vscode.ExtensionContext,
-  thumbprint: string
-): Promise<void> {
-  if (process.platform !== "linux") return;
-
-  const lastAttempted = context.globalState.get<string>(
-    "linuxAutoTrustThumbprint"
-  );
-  if (lastAttempted === thumbprint) return;
-
-  const pemPath = path.join(getOpenSslTrustDir(), getPemFileName(thumbprint));
-  if (!fs.existsSync(pemPath)) {
-    log(
-      `Linux auto-trust: PEM not found at ${pemPath}, skipping browser trust attempt.`
-    );
-    return;
-  }
-
-  await context.globalState.update("linuxAutoTrustThumbprint", thumbprint);
-
-  let result: { success: boolean; message: string };
-  try {
-    result = await trustInNss(pemPath);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    log(`Linux auto-trust failed unexpectedly: ${message}`);
-    await showBrowserTrustFailureGuidance(pemPath, message);
-    return;
-  }
-
-  if (result.success) {
-    log(`Linux auto-trust: ${result.message}`);
-    return;
-  }
-
-  log(`Linux auto-trust did not fully succeed: ${result.message}`);
-  await showBrowserTrustFailureGuidance(pemPath, result.message);
 }
 
 /**
