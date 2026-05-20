@@ -12,7 +12,7 @@ import {
   getOpenSslTrustDir,
   getPemFileName,
 } from "@devcontainer-dev-certs/shared";
-import type { CertBundle } from "@devcontainer-dev-certs/shared";
+import type { CertBundle, CertBundleV3 } from "@devcontainer-dev-certs/shared";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs"));
@@ -79,45 +79,81 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  // Multi-cert command: supports dotnet-dev opt-out and user-managed certs.
+  // Shared resolution + provisioning flow for the V2 and V3 multi-cert
+  // endpoints. Each endpoint differs only in the bundle shape it returns;
+  // the consent prompt, host-setting gating, and certProvider dispatch all
+  // live here so we don't drift between versions.
+  const resolveAndProvision = async (
+    args: GetAllCertMaterialArgs | undefined
+  ): Promise<GetAllCertMaterialArgs> => {
+    const autoProvisionCfg = vscode.workspace
+      .getConfiguration("devcontainer-dev-certs")
+      .get<boolean>("autoProvision", true);
+    const hostWantsDotNet = vscode.workspace
+      .getConfiguration("devcontainerDevCerts")
+      .get<boolean>("generateDotNetCert", true);
+
+    const decision = await resolveDotnetProvisioning({
+      args,
+      hostWantsDotNet,
+      autoProvision: autoProvisionCfg,
+      checkCert: () => certManager.check(),
+      hasPriorConsent: () =>
+        context.globalState.get<boolean>("certProvisionConsented") === true,
+      recordConsent: () =>
+        context.globalState.update("certProvisionConsented", true),
+      promptUser: promptForCertConsent,
+    });
+
+    return {
+      includeDotNetDev: decision.includeDotNetDev,
+      includeUserCerts: decision.effectiveArgs.includeUserCerts,
+    };
+  };
+
+  // V2 multi-cert command (legacy). Kept for workspace extensions pinned to
+  // the V2 wire contract — passwordless pfxBase64, no installToDotNetStore
+  // flag. New workspaces should call the V3 command below.
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.getAllCertMaterial",
       async (args: GetAllCertMaterialArgs | undefined): Promise<CertBundle> => {
         try {
-          const autoProvisionCfg = vscode.workspace
-            .getConfiguration("devcontainer-dev-certs")
-            .get<boolean>("autoProvision", true);
-          const hostWantsDotNet = vscode.workspace
-            .getConfiguration("devcontainerDevCerts")
-            .get<boolean>("generateDotNetCert", true);
-
-          const decision = await resolveDotnetProvisioning({
-            args,
-            hostWantsDotNet,
-            autoProvision: autoProvisionCfg,
-            checkCert: () => certManager.check(),
-            hasPriorConsent: () =>
-              context.globalState.get<boolean>("certProvisionConsented") ===
-              true,
-            recordConsent: () =>
-              context.globalState.update("certProvisionConsented", true),
-            promptUser: promptForCertConsent,
-          });
-
-          const bundle = await certProvider.getAllCertMaterial({
-            includeDotNetDev: decision.includeDotNetDev,
-            includeUserCerts: decision.effectiveArgs.includeUserCerts,
-          });
-
+          const effective = await resolveAndProvision(args);
+          const bundle = await certProvider.getAllCertMaterial(effective);
           if (bundle.certs.some((c) => c.kind === "dotnet-dev")) {
             ensureTerminalSslCertDir(context);
           }
-
           return bundle;
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           log(`Error providing certificate bundle: ${message}`);
+          throw err;
+        }
+      }
+    )
+  );
+
+  // V3 multi-cert command. Returns password-preserving pfxBase64 alongside
+  // an installToDotNetStore flag (and a separate passwordless payload when
+  // the cert opted in). The workspace extension reads V3 directly so it
+  // never has to write password-stripped bytes to disk without consent.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "devcontainer-dev-certs.getAllCertMaterialV3",
+      async (
+        args: GetAllCertMaterialArgs | undefined
+      ): Promise<CertBundleV3> => {
+        try {
+          const effective = await resolveAndProvision(args);
+          const bundle = await certProvider.getAllCertMaterialV3(effective);
+          if (bundle.certs.some((c) => c.kind === "dotnet-dev")) {
+            ensureTerminalSslCertDir(context);
+          }
+          return bundle;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          log(`Error providing certificate bundle (V3): ${message}`);
           throw err;
         }
       }

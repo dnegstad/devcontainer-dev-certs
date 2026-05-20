@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import type * as Shared from "@devcontainer-dev-certs/shared";
-import type { CertMaterialV2 } from "@devcontainer-dev-certs/shared";
+import type { CertMaterialV3 } from "@devcontainer-dev-certs/shared";
 
 // Sandbox the .NET store / trust-dir paths into per-test temp dirs so the
 // real filesystem locations stay untouched.
@@ -43,7 +43,7 @@ afterEach(() => {
   cleanupDirs.length = 0;
 });
 
-function userMaterial(overrides: Partial<CertMaterialV2> = {}): CertMaterialV2 {
+function userMaterial(overrides: Partial<CertMaterialV3> = {}): CertMaterialV3 {
   return {
     kind: "user",
     name: "corp-ca",
@@ -122,7 +122,7 @@ describe.skipIf(process.platform === "win32")("installUserCert store gating", ()
 
 describe.skipIf(process.platform === "win32")("installDotNetDevCert", () => {
   it("always writes to the store regardless of any opt-in flag", () => {
-    const material: CertMaterialV2 = {
+    const material: CertMaterialV3 = {
       kind: "dotnet-dev",
       name: "aspnetcore-dev",
       thumbprint: "DEADBEEF",

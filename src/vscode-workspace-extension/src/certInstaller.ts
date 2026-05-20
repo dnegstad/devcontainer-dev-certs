@@ -9,11 +9,15 @@ import {
   getPemFileName,
   getPemFileNameForUser,
 } from "@devcontainer-dev-certs/shared";
-import type { CertMaterialV2 } from "@devcontainer-dev-certs/shared";
+import type { CertMaterialV3 } from "@devcontainer-dev-certs/shared";
 import { createHashSymlink, rehashDirectory } from "./util/rehash";
 import type { ExtraDestination } from "./util/destinations";
 
-export type { CertMaterial, CertMaterialV2 } from "@devcontainer-dev-certs/shared";
+export type {
+  CertMaterial,
+  CertMaterialV2,
+  CertMaterialV3,
+} from "@devcontainer-dev-certs/shared";
 
 function chmodSafe(filePath: string, mode: number): void {
   try {
@@ -28,7 +32,7 @@ function chmodSafe(filePath: string, mode: number): void {
  * OpenSSL trust locations using thumbprint-keyed filenames that Kestrel
  * expects. Byte-identical to the legacy single-cert behavior.
  */
-export function installDotNetDevCert(material: CertMaterialV2): void {
+export function installDotNetDevCert(material: CertMaterialV3): void {
   if (material.kind !== "dotnet-dev") {
     throw new Error(
       `installDotNetDevCert called with non-dotnet-dev cert (kind=${material.kind})`
@@ -99,7 +103,7 @@ export function installDotNetDevCert(material: CertMaterialV2): void {
  * trustInContainer is true the public cert also lands in the .NET Root store
  * and the OpenSSL trust directory under a stable `{name}.pem` filename.
  */
-export function installUserCert(material: CertMaterialV2): void {
+export function installUserCert(material: CertMaterialV3): void {
   if (material.kind !== "user") {
     throw new Error(
       `installUserCert called with non-user cert (kind=${material.kind})`
@@ -169,7 +173,7 @@ export function installUserCert(material: CertMaterialV2): void {
  * the thumbprint-keyed PFX (when applicable) and, when trust is requested,
  * the named PEM exist.
  */
-export function isCertInstalled(material: CertMaterialV2): boolean {
+export function isCertInstalled(material: CertMaterialV3): boolean {
   if (material.kind === "dotnet-dev") {
     const pfxPath = path.join(
       getDotNetStorePath(),
@@ -213,7 +217,7 @@ export function isCertInstalled(material: CertMaterialV2): boolean {
  */
 export function writeExtraDestination(
   dest: ExtraDestination,
-  material: CertMaterialV2
+  material: CertMaterialV3
 ): { rehashDir: string | null; errors: string[] } {
   // The name is used verbatim as a filename stem under the destination dir.
   assertValidCertName(material.name);

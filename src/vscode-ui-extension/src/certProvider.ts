@@ -10,8 +10,10 @@ import { buildPfx } from "./cert/pfx";
 import { assertValidCertName, log } from "@devcontainer-dev-certs/shared";
 import type {
   CertBundle,
+  CertBundleV3,
   CertMaterial,
   CertMaterialV2,
+  CertMaterialV3,
 } from "@devcontainer-dev-certs/shared";
 import { DOTNET_DEV_CERT_NAME } from "@devcontainer-dev-certs/shared";
 
@@ -30,9 +32,20 @@ export interface GetAllCertMaterialArgs {
   includeUserCerts: boolean;
 }
 
+/**
+ * Cached cert payload. Holds both wire shapes side-by-side so the V2 and
+ * V3 endpoints can both serve from the cache without recomputing — and so
+ * repeated V2 calls return object-identical entries (callers depend on
+ * cache hits skipping work, not on per-call snapshots).
+ */
+interface CachedCert {
+  v3: CertMaterialV3;
+  v2: CertMaterialV2;
+}
+
 export class CertProvider {
-  private cachedDotNet: CertMaterialV2 | null = null;
-  private cachedUser = new Map<string, CertMaterialV2>();
+  private cachedDotNet: CachedCert | null = null;
+  private cachedUser = new Map<string, CachedCert>();
   private warnedExpiredCerts = new Set<string>();
 
   constructor(private readonly certManager: CertManager) {}
@@ -60,26 +73,63 @@ export class CertProvider {
     if (!cert) return null;
 
     return {
-      thumbprint: cert.thumbprint,
-      pfxBase64: cert.pfxBase64 ?? "",
-      pemCertBase64: cert.pemCertBase64,
-      pemKeyBase64: cert.pemKeyBase64 ?? "",
-      rootPfxBase64: cert.rootPfxBase64 ?? "",
+      thumbprint: cert.v2.thumbprint,
+      pfxBase64: cert.v2.pfxBase64 ?? "",
+      pemCertBase64: cert.v2.pemCertBase64,
+      pemKeyBase64: cert.v2.pemKeyBase64 ?? "",
+      rootPfxBase64: cert.v2.rootPfxBase64 ?? "",
     };
   }
 
   /**
-   * Multi-cert entry point. Returns the bundle of certs requested by the
-   * caller, combining the optional auto-generated dotnet dev cert with any
-   * user-managed certificates configured in VS Code settings.
+   * V2 entry point — kept for backward compatibility with workspace
+   * extensions pinned to the V2 wire contract (passwordless `pfxBase64`,
+   * no `installToDotNetStore` flag). New code paths should call
+   * `getAllCertMaterialV3` instead.
+   *
+   * Downmap rules:
+   * - dotnet-dev: drop V3-only fields. `pfxBase64` is intrinsically
+   *   passwordless either way.
+   * - user certs: replace V3's password-preserving `pfxBase64` with the
+   *   cached passwordless variant. V2 consumers wrote `pfxBase64`
+   *   directly to the .NET X509Store, which requires passwordless; the
+   *   user's password is therefore stripped on the V2 wire as it was
+   *   before this change. Upgrading the workspace extension to V3
+   *   restores password preservation.
    */
   async getAllCertMaterial(
     args: GetAllCertMaterialArgs
   ): Promise<CertBundle> {
+    const certs = await this.collect(args);
+    return { certs: certs.map((c) => c.v2) };
+  }
+
+  /**
+   * V3 entry point. Returns the multi-cert bundle with the new password-
+   * preserving `pfxBase64`, the per-cert `installToDotNetStore` flag, and
+   * the (separate) passwordless `dotNetStorePfxBase64` payload when the
+   * cert opted into the store install.
+   */
+  async getAllCertMaterialV3(
+    args: GetAllCertMaterialArgs
+  ): Promise<CertBundleV3> {
+    const certs = await this.collect(args);
+    return { certs: certs.map((c) => c.v3) };
+  }
+
+  clearCache(): void {
+    this.cachedDotNet = null;
+    this.cachedUser.clear();
+    this.warnedExpiredCerts.clear();
+  }
+
+  private async collect(
+    args: GetAllCertMaterialArgs
+  ): Promise<CachedCert[]> {
     const config = vscode.workspace.getConfiguration("devcontainerDevCerts");
     const hostWantsDotNet = config.get<boolean>("generateDotNetCert", true);
 
-    const certs: CertMaterialV2[] = [];
+    const certs: CachedCert[] = [];
 
     if (args.includeDotNetDev && hostWantsDotNet) {
       const dotnet = await this.ensureDotNetDevCert(true);
@@ -101,8 +151,8 @@ export class CertProvider {
       );
       for (const userConfig of userConfigs) {
         try {
-          const mat = await this.loadUserCert(userConfig, globalStoreOptIn);
-          if (mat) certs.push(mat);
+          const entry = await this.loadUserCert(userConfig, globalStoreOptIn);
+          if (entry) certs.push(entry);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           log(
@@ -119,21 +169,18 @@ export class CertProvider {
       }
     }
 
-    return { certs };
-  }
-
-  clearCache(): void {
-    this.cachedDotNet = null;
-    this.cachedUser.clear();
-    this.warnedExpiredCerts.clear();
+    return certs;
   }
 
   private async ensureDotNetDevCert(
     autoProvision: boolean
-  ): Promise<CertMaterialV2 | null> {
+  ): Promise<CachedCert | null> {
     if (this.cachedDotNet) {
       const status = await this.certManager.check();
-      if (status.exists && status.thumbprint === this.cachedDotNet.thumbprint) {
+      if (
+        status.exists &&
+        status.thumbprint === this.cachedDotNet.v3.thumbprint
+      ) {
         return this.cachedDotNet;
       }
       this.cachedDotNet = null;
@@ -171,24 +218,37 @@ export class CertProvider {
       // home is the .NET store, so `pfxBase64` and `dotNetStorePfxBase64`
       // share the same bytes — there's no consent decision to make here.
       const pfxBase64 = fs.readFileSync(pfxPath).toString("base64");
-      const material: CertMaterialV2 = {
+      const pemCertBase64 = fs.readFileSync(pemCertPath).toString("base64");
+      const pemKeyBase64 = fs.readFileSync(pemKeyPath).toString("base64");
+      const rootPfxBase64 = fs.readFileSync(rootPfxPath).toString("base64");
+      const thumbprint = updatedStatus.thumbprint!;
+      const v3: CertMaterialV3 = {
         kind: "dotnet-dev",
         name: DOTNET_DEV_CERT_NAME,
-        thumbprint: updatedStatus.thumbprint!,
+        thumbprint,
         pfxBase64,
-        pemCertBase64: fs.readFileSync(pemCertPath).toString("base64"),
-        pemKeyBase64: fs.readFileSync(pemKeyPath).toString("base64"),
-        rootPfxBase64: fs.readFileSync(rootPfxPath).toString("base64"),
+        pemCertBase64,
+        pemKeyBase64,
+        rootPfxBase64,
         trustInContainer: true,
         installToDotNetStore: true,
         dotNetStorePfxBase64: pfxBase64,
       };
+      const v2: CertMaterialV2 = {
+        kind: "dotnet-dev",
+        name: DOTNET_DEV_CERT_NAME,
+        thumbprint,
+        pfxBase64,
+        pemCertBase64,
+        pemKeyBase64,
+        rootPfxBase64,
+        trustInContainer: true,
+      };
+      const entry: CachedCert = { v3, v2 };
 
-      this.cachedDotNet = material;
-      log(
-        `Dotnet dev cert material ready. Thumbprint: ${material.thumbprint}`
-      );
-      return material;
+      this.cachedDotNet = entry;
+      log(`Dotnet dev cert material ready. Thumbprint: ${thumbprint}`);
+      return entry;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -197,7 +257,7 @@ export class CertProvider {
   private async loadUserCert(
     config: UserCertificateConfig,
     globalStoreOptIn: boolean
-  ): Promise<CertMaterialV2 | null> {
+  ): Promise<CachedCert | null> {
     // Enforced before any filesystem operation — the name is used directly
     // as a filename stem in the temp export dir, the container trust PEM,
     // and each extra destination. Reject anything that could path-traverse.
@@ -248,35 +308,65 @@ export class CertProvider {
       });
 
       const pfxBase64 = await this.buildUserPfxBase64(loaded, config);
+      // Always compute the passwordless variant when a key is available.
+      // V3 ships it on the wire only when installToDotNetStore is true,
+      // but the V2 downmap needs it unconditionally to keep V2 wire-compat
+      // (passwordless `pfxBase64` always).
+      const passwordlessPfxBase64 = loaded.key
+        ? (await buildPfx({ cert: loaded.cert, key: loaded.key })).toString(
+            "base64"
+          )
+        : undefined;
       const dotNetStorePfxBase64 = installToDotNetStore
-        ? await this.buildPasswordlessStorePfxBase64(loaded, config)
+        ? passwordlessPfxBase64
         : undefined;
 
-      const material: CertMaterialV2 = {
+      const pemCertBase64 = fs
+        .readFileSync(exported.pemCertPath)
+        .toString("base64");
+      const pemKeyBase64 = exported.pemKeyPath
+        ? fs.readFileSync(exported.pemKeyPath).toString("base64")
+        : undefined;
+      const rootPfxBase64 = exported.rootPfxPath
+        ? fs.readFileSync(exported.rootPfxPath).toString("base64")
+        : undefined;
+
+      const v3: CertMaterialV3 = {
         kind: "user",
         name: config.name,
         thumbprint: loaded.thumbprint,
-        pemCertBase64: fs
-          .readFileSync(exported.pemCertPath)
-          .toString("base64"),
-        pemKeyBase64: exported.pemKeyPath
-          ? fs.readFileSync(exported.pemKeyPath).toString("base64")
-          : undefined,
+        pemCertBase64,
+        pemKeyBase64,
         pfxBase64,
-        rootPfxBase64: exported.rootPfxPath
-          ? fs.readFileSync(exported.rootPfxPath).toString("base64")
-          : undefined,
+        rootPfxBase64,
         trustInContainer,
         installToDotNetStore,
         dotNetStorePfxBase64,
       };
 
-      this.cachedUser.set(cacheKey, material);
+      const v2: CertMaterialV2 = {
+        kind: "user",
+        name: config.name,
+        thumbprint: loaded.thumbprint,
+        pemCertBase64,
+        pemKeyBase64,
+        // The V2 wire contract is "passwordless pfxBase64 always" — V2
+        // consumers wrote these bytes directly to the .NET store, which
+        // requires passwordless. The user's password (when supplied) is
+        // therefore stripped on the V2 wire; V3 consumers get the
+        // password-preserving copy via `v3.pfxBase64` instead.
+        pfxBase64: passwordlessPfxBase64,
+        rootPfxBase64,
+        trustInContainer,
+      };
+
+      const entry: CachedCert = { v3, v2 };
+      this.cachedUser.set(cacheKey, entry);
       log(
-        `User cert '${config.name}' ready. Thumbprint: ${material.thumbprint}; ` +
+        `User cert '${config.name}' ready. Thumbprint: ${v3.thumbprint}; ` +
           `installToDotNetStore=${installToDotNetStore}`
       );
-      return material;
+      return entry;
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -306,28 +396,6 @@ export class CertProvider {
       key: loaded.key,
       password: config.pfxPassword ?? "",
     });
-    return bytes.toString("base64");
-  }
-
-  /**
-   * Build the passwordless PFX bytes that get written to the .NET X509Store.
-   * `StoreName.My` enumeration on Linux opens each file with a null password,
-   * so the store copy *must* be passwordless — this is the consented strip
-   * the user opted into via `installUserCertsToDotNetStore`. We never write
-   * these bytes anywhere else (`pfxBase64` carries the password-preserving
-   * payload for everything else).
-   */
-  private async buildPasswordlessStorePfxBase64(
-    loaded: LoadedCert,
-    config: UserCertificateConfig
-  ): Promise<string | undefined> {
-    if (!loaded.key) {
-      log(
-        `User cert '${config.name}' has no private key; skipping X509Store install.`
-      );
-      return undefined;
-    }
-    const bytes = await buildPfx({ cert: loaded.cert, key: loaded.key });
     return bytes.toString("base64");
   }
 

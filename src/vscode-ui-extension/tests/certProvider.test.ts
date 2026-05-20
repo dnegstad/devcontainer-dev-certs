@@ -139,8 +139,6 @@ describe("CertProvider.getAllCertMaterial", () => {
     expect(bundle.certs[0].pfxBase64).toBeTruthy();
     expect(bundle.certs[0].pemKeyBase64).toBeTruthy();
     expect(bundle.certs[0].rootPfxBase64).toBeTruthy();
-    expect(bundle.certs[0].installToDotNetStore).toBe(false);
-    expect(bundle.certs[0].dotNetStorePfxBase64).toBeUndefined();
   });
 
   it("returns both dotnet-dev and user certs when both enabled", async () => {
@@ -337,7 +335,7 @@ describe("CertProvider.getAllCertMaterial", () => {
     });
 
     const provider = new CertProvider(mockManager("DOTNET-THUMB"));
-    const bundle = await provider.getAllCertMaterial({
+    const bundle = await provider.getAllCertMaterialV3({
       includeDotNetDev: false,
       includeUserCerts: true,
     });
@@ -374,7 +372,7 @@ describe("CertProvider.getAllCertMaterial", () => {
     });
 
     const provider = new CertProvider(mockManager("DOTNET-THUMB"));
-    const bundle = await provider.getAllCertMaterial({
+    const bundle = await provider.getAllCertMaterialV3({
       includeDotNetDev: false,
       includeUserCerts: true,
     });
@@ -403,7 +401,7 @@ describe("CertProvider.getAllCertMaterial", () => {
       installUserCertsToDotNetStore: false,
       userCertificates,
     });
-    const off = await provider.getAllCertMaterial({
+    const off = await provider.getAllCertMaterialV3({
       includeDotNetDev: false,
       includeUserCerts: true,
     });
@@ -414,7 +412,7 @@ describe("CertProvider.getAllCertMaterial", () => {
       installUserCertsToDotNetStore: true,
       userCertificates,
     });
-    const on = await provider.getAllCertMaterial({
+    const on = await provider.getAllCertMaterialV3({
       includeDotNetDev: false,
       includeUserCerts: true,
     });
@@ -422,9 +420,11 @@ describe("CertProvider.getAllCertMaterial", () => {
     expect(on.certs[0].dotNetStorePfxBase64).toBeTruthy();
   });
 
-  it("transmits PFX-source bytes verbatim without re-encoding", async () => {
+  it("transmits PFX-source bytes verbatim on V3 without re-encoding", async () => {
     // Use a real PFX with a known password so we can prove the bytes
-    // round-trip the IPC unchanged — no decrypt/re-encrypt strip.
+    // round-trip the V3 IPC unchanged — no decrypt/re-encrypt strip.
+    // The V2 wire contract still forces passwordless bytes; that's the
+    // tradeoff for keeping V2 consumers working.
     const { cert, key } = await makeValidCert();
     const password = "round-trip-secret";
     const sourceBytes = await buildPfx({ cert, key, password });
@@ -441,13 +441,24 @@ describe("CertProvider.getAllCertMaterial", () => {
     });
 
     const provider = new CertProvider(mockManager("DOTNET-THUMB"));
-    const bundle = await provider.getAllCertMaterial({
+    const v3 = await provider.getAllCertMaterialV3({
       includeDotNetDev: false,
       includeUserCerts: true,
     });
+    const v3Bytes = Buffer.from(v3.certs[0].pfxBase64!, "base64");
+    expect(v3Bytes.equals(sourceBytes)).toBe(true);
 
-    const wireBytes = Buffer.from(bundle.certs[0].pfxBase64!, "base64");
-    expect(wireBytes.equals(sourceBytes)).toBe(true);
+    // V2 endpoint, by contrast, strips the password (passwordless wire
+    // contract). The bytes differ, but still describe the same cert+key.
+    const v2 = await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+    const v2Bytes = Buffer.from(v2.certs[0].pfxBase64!, "base64");
+    expect(v2Bytes.equals(sourceBytes)).toBe(false);
+    const v2Parsed = await parsePfx(v2Bytes, "");
+    expect(v2Parsed.cert).toBeTruthy();
+    expect(v2Parsed.key).toBeTruthy();
   });
 
   it("supports user certs with ECDSA keys", async () => {
