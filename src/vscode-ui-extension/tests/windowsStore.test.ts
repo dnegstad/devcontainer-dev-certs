@@ -14,28 +14,16 @@ vi.mock("../src/platform/processUtil", () => ({
   runProcess: vi.fn(),
 }));
 
-import { WindowsCertificateStore } from "../src/platform/windowsStore";
+import {
+  WindowsCertificateStore,
+  type PsCandidate,
+  type PsSkipped,
+} from "../src/platform/windowsStore";
 import { runProcess } from "../src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
 
 initLogger("test");
-
-interface PsCandidate {
-  thumbprint: string;
-  pfxPath: string;
-  subjectCN: string;
-  notBefore: string;
-  notAfter: string;
-}
-
-interface PsSkipped {
-  thumbprint: string;
-  subjectCN: string;
-  notBefore: string;
-  notAfter: string;
-  reason: string;
-}
 
 /**
  * Wire `runProcess` to behave like PowerShell:

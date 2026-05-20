@@ -30,7 +30,11 @@ async function getPowerShell(): Promise<string> {
   return resolvedPwsh;
 }
 
-interface PsCandidate {
+/**
+ * Shape of one entry in the PowerShell enumeration script's `candidates`
+ * array — a cert whose private key was successfully exported as a PFX.
+ */
+export interface PsCandidate {
   thumbprint: string;
   pfxPath: string;
   subjectCN: string | null;
@@ -38,7 +42,12 @@ interface PsCandidate {
   notAfter: string;
 }
 
-interface PsSkipped {
+/**
+ * Shape of one entry in the PowerShell enumeration script's `skipped`
+ * array — a cert that matched the dev-cert OID but couldn't be exported
+ * (no private key, or key not exportable).
+ */
+export interface PsSkipped {
   thumbprint: string;
   subjectCN: string | null;
   notBefore: string;
@@ -46,7 +55,7 @@ interface PsSkipped {
   reason: string;
 }
 
-interface PsEnumeration {
+export interface PsEnumeration {
   candidates: PsCandidate[];
   skipped: PsSkipped[];
 }
