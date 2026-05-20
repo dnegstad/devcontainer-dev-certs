@@ -3,12 +3,13 @@
 
 export const warningMessages: string[] = [];
 export const errorMessages: string[] = [];
+export const logMessages: string[] = [];
 
 export const window = {
   createOutputChannel(_name: string) {
     return {
-      appendLine(_msg: string) {
-        // no-op in tests
+      appendLine(msg: string) {
+        logMessages.push(msg);
       },
     };
   },
@@ -41,6 +42,7 @@ export function __resetConfig() {
   }
   warningMessages.length = 0;
   errorMessages.length = 0;
+  logMessages.length = 0;
 }
 
 export const workspace = {

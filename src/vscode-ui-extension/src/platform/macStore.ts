@@ -2,12 +2,20 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { BaseCertificateStore } from "./baseStore";
+import {
+  BaseCertificateStore,
+  classifyCandidate,
+  selectBestDevCert,
+  type UsableDevCert,
+} from "./baseStore";
 import { runProcess } from "./processUtil";
-import { isValidDevCert } from "../cert/generator";
+import {
+  getCertificateVersion,
+  isValidDevCert,
+} from "../cert/generator";
 import { certToDer } from "../cert/exporter";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
-import { type DevCert, type DevKey } from "../cert/types";
+import { DevCert, type DevKey } from "../cert/types";
 
 /**
  * macOS certificate store implementation.
@@ -27,32 +35,146 @@ export class MacCertificateStore extends BaseCertificateStore {
     return path.join(os.homedir(), "Library", "Keychains", "login.keychain-db");
   }
 
-  async findExistingDevCert(): Promise<{
-    cert: DevCert;
-    key: DevKey;
-    thumbprint: string;
-  } | null> {
-    if (!fs.existsSync(this.devCertsDir)) return null;
+  async findExistingDevCert(): Promise<UsableDevCert | null> {
+    const context = "macOS login keychain";
+    const usable: UsableDevCert[] = [];
+    const seenThumbprints = new Set<string>();
 
-    const pfxFiles = fs
-      .readdirSync(this.devCertsDir)
-      .filter(
-        (f) => f.startsWith("aspnetcore-localhost-") && f.endsWith(".pfx")
-      );
+    // 1) Walk ~/.aspnet/dev-certs/https/. For each parseable PFX whose cert
+    //    passes isValidDevCert, additionally verify a matching cert is
+    //    actually present in the login keychain via `security find-
+    //    certificate -Z <thumb>` (public-only, no prompt). PFXs whose cert
+    //    isn't in the keychain are classified as "orphaned cache file"
+    //    skipped entries and excluded from selection.
+    if (fs.existsSync(this.devCertsDir)) {
+      const pfxFiles = fs
+        .readdirSync(this.devCertsDir)
+        .filter(
+          (f) => f.startsWith("aspnetcore-localhost-") && f.endsWith(".pfx")
+        );
 
-    for (const pfxFile of pfxFiles) {
-      try {
+      for (const pfxFile of pfxFiles) {
         const pfxPath = path.join(this.devCertsDir, pfxFile);
-        const result = await this.loadPfx(pfxPath);
-        if (result && isValidDevCert(result.cert)) {
-          return result;
+        const loaded = await this.loadPfxLenient(pfxPath);
+
+        if (!loaded) {
+          classifyCandidate({
+            kind: "parseFailure",
+            source: pfxPath,
+            thumbprintHint: extractThumbHintFromMacFilename(pfxFile),
+          });
+          continue;
         }
-      } catch {
-        // Skip invalid PFX files
+
+        const classified = classifyCandidate({
+          kind: "loaded",
+          source: pfxPath,
+          loaded,
+        });
+        if (classified === null) continue;
+        if (classified.kind !== "usable") {
+          seenThumbprints.add(loaded.thumbprint);
+          continue;
+        }
+
+        // Verify keychain presence — no prompt, public-only.
+        const inKeychain = await this.isCertInKeychain(classified.thumbprint);
+        if (!inKeychain) {
+          classifyCandidate({
+            kind: "forcedSkip",
+            source: pfxPath,
+            reason:
+              "PFX present on disk but matching certificate not in macOS login keychain (orphaned cache file)",
+            metadata: {
+              thumbprint: classified.thumbprint,
+              subjectCN: classified.cert.subjectCN,
+              version: getCertificateVersion(classified.cert),
+              notBefore: classified.cert.notBefore,
+              notAfter: classified.cert.notAfter,
+            },
+          });
+          seenThumbprints.add(classified.thumbprint);
+          continue;
+        }
+
+        seenThumbprints.add(classified.thumbprint);
+        usable.push(classified);
       }
     }
 
-    return null;
+    // 2) Soft keychain enumeration — emit a warning for keychain-resident
+    //    dev certs that lack a matching cache PFX. Public-only read, never
+    //    triggers an ACL prompt, low EDR signal.
+    const keychainEntries = await this.enumerateKeychainDevCerts();
+    for (const entry of keychainEntries) {
+      if (seenThumbprints.has(entry.thumbprint)) continue;
+      classifyCandidate({
+        kind: "forcedSkip",
+        source: context,
+        reason:
+          `present in keychain but no matching PFX in ${this.devCertsDir}/aspnetcore-localhost-${entry.thumbprint}.pfx`,
+        metadata: {
+          thumbprint: entry.thumbprint,
+          subjectCN: entry.cert.subjectCN,
+          version: getCertificateVersion(entry.cert),
+          notBefore: entry.cert.notBefore,
+          notAfter: entry.cert.notAfter,
+        },
+      });
+    }
+
+    return selectBestDevCert(usable, this.devCertsDir);
+  }
+
+  /**
+   * Returns true if a certificate with the given SHA-1 thumbprint is
+   * present in the login keychain. Uses `security find-certificate -Z`
+   * which only reads the public certificate — no ACL prompt is raised
+   * regardless of the cert's private-key ACL.
+   */
+  private async isCertInKeychain(thumbprint: string): Promise<boolean> {
+    const result = await runProcess("security", [
+      "find-certificate",
+      "-Z",
+      thumbprint,
+      this.keychainPath,
+    ]);
+    return result.exitCode === 0;
+  }
+
+  /**
+   * Enumerate ASP.NET dev cert candidates that exist in the login keychain.
+   * Returns parsed certs whose CN is `localhost`, that bear the ASP.NET
+   * custom OID, and whose validity window is current. Public-only, no
+   * prompts.
+   */
+  private async enumerateKeychainDevCerts(): Promise<
+    Array<{ cert: DevCert; thumbprint: string }>
+  > {
+    const result = await runProcess("security", [
+      "find-certificate",
+      "-a",
+      "-p",
+      "-Z",
+      this.keychainPath,
+    ]);
+    if (result.exitCode !== 0) return [];
+
+    const out: Array<{ cert: DevCert; thumbprint: string }> = [];
+    const pemBlocks = extractPemBlocks(result.stdout);
+    for (const pem of pemBlocks) {
+      try {
+        const cert = new DevCert(pem);
+        if (cert.subjectCN !== "localhost") continue;
+        if (!cert.hasExtension(ASPNET_HTTPS_OID)) continue;
+        if (!isValidDevCert(cert)) continue;
+        out.push({ cert, thumbprint: cert.thumbprintSha1 });
+      } catch {
+        // Skip lines that don't parse as a cert (the -a -p -Z output
+        // includes SHA-1 lines interleaved with PEM blocks).
+      }
+    }
+    return out;
   }
 
   async saveCertificate(
@@ -184,4 +306,24 @@ export class MacCertificateStore extends BaseCertificateStore {
       }
     }
   }
+}
+
+function extractThumbHintFromMacFilename(filename: string): string | null {
+  const m = filename.match(/^aspnetcore-localhost-([0-9A-Fa-f]{40})\.pfx$/);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/**
+ * Pull PEM-encoded CERTIFICATE blocks out of `security find-certificate -p`
+ * output. The CLI interleaves SHA-1 hash lines (when `-Z` is passed) with
+ * the PEM blocks; we just grab the blocks.
+ */
+function extractPemBlocks(text: string): string[] {
+  const blocks: string[] = [];
+  const regex = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(text)) !== null) {
+    blocks.push(m[0]);
+  }
+  return blocks;
 }

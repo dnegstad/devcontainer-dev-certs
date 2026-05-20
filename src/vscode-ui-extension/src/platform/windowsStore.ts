@@ -2,9 +2,13 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { BaseCertificateStore } from "./baseStore";
+import {
+  BaseCertificateStore,
+  classifyCandidate,
+  selectBestDevCert,
+  type UsableDevCert,
+} from "./baseStore";
 import { runProcess } from "./processUtil";
-import { isValidDevCert } from "../cert/generator";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
 import { type DevCert, type DevKey } from "../cert/types";
@@ -26,6 +30,27 @@ async function getPowerShell(): Promise<string> {
   return resolvedPwsh;
 }
 
+interface PsCandidate {
+  thumbprint: string;
+  pfxPath: string;
+  subjectCN: string | null;
+  notBefore: string;
+  notAfter: string;
+}
+
+interface PsSkipped {
+  thumbprint: string;
+  subjectCN: string | null;
+  notBefore: string;
+  notAfter: string;
+  reason: string;
+}
+
+interface PsEnumeration {
+  candidates: PsCandidate[];
+  skipped: PsSkipped[];
+}
+
 /**
  * Windows certificate store implementation.
  *
@@ -40,28 +65,52 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     super();
   }
 
-  async findExistingDevCert(): Promise<{
-    cert: DevCert;
-    key: DevKey;
-    thumbprint: string;
-  } | null> {
-    // Use PowerShell to find dev certs in the configured My store and export
-    // the best one as PFX.
+  async findExistingDevCert(): Promise<UsableDevCert | null> {
+    // Enumerate every dev-cert candidate in the configured My store, then
+    // attempt to export each as a PBES2/AES PFX. We hand selection back to
+    // shared TS so the version-byte tiebreaker logic stays in one place.
     const script = `
       $ErrorActionPreference = 'Stop'
       $oid = '${ASPNET_HTTPS_OID}'
+      $candidates = New-Object System.Collections.ArrayList
+      $skipped = New-Object System.Collections.ArrayList
       $certs = Get-ChildItem Cert:\\${this.storeLocation}\\My | Where-Object {
         $_.Extensions | Where-Object { $_.Oid.Value -eq $oid }
-      } | Sort-Object NotAfter -Descending
-      if ($certs.Count -eq 0) { exit 1 }
-      $best = $certs[0]
-      $tmpPfx = Join-Path $env:TEMP ("devcert-" + [guid]::NewGuid().ToString("N") + ".pfx")
-      $pwd = ConvertTo-SecureString -String "export" -Force -AsPlainText
-      # AES256_SHA256 forces a PBES2/AES PFX. The default (TripleDES_SHA1)
-      # produces a legacy PKCS#12 PBE format that our pkijs-based parser
-      # deliberately rejects (see cert/pfx.ts).
-      Export-PfxCertificate -Cert $best -FilePath $tmpPfx -Password $pwd -CryptoAlgorithmOption AES256_SHA256 | Out-Null
-      Write-Output $tmpPfx
+      }
+      foreach ($cert in $certs) {
+        $thumb = $cert.Thumbprint
+        $cn = $null
+        try { $cn = $cert.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } catch {}
+        $nbf = $cert.NotBefore.ToUniversalTime().ToString('o')
+        $exp = $cert.NotAfter.ToUniversalTime().ToString('o')
+        if (-not $cert.HasPrivateKey) {
+          [void]$skipped.Add(@{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reason = 'no private key in store' })
+          continue
+        }
+        try {
+          $tmpPfx = Join-Path $env:TEMP ("devcert-" + [guid]::NewGuid().ToString("N") + ".pfx")
+          $pwd = ConvertTo-SecureString -String 'export' -Force -AsPlainText
+          # AES256_SHA256 forces a PBES2/AES PFX. The default (TripleDES_SHA1)
+          # produces a legacy PKCS#12 PBE format that our pkijs-based parser
+          # deliberately rejects (see cert/pfx.ts).
+          Export-PfxCertificate -Cert $cert -FilePath $tmpPfx -Password $pwd -CryptoAlgorithmOption AES256_SHA256 | Out-Null
+          [void]$candidates.Add(@{ thumbprint = $thumb; pfxPath = $tmpPfx; subjectCN = $cn; notBefore = $nbf; notAfter = $exp })
+        } catch {
+          $msg = $_.Exception.Message
+          $policy = $null
+          try { $policy = $cert.PrivateKey.Key.ExportPolicy } catch {}
+          if ($policy) {
+            $reason = "private key not exportable (KeyExportPolicy=$policy)"
+          } elseif ($msg -match 'not exportable' -or $msg -match 'cannot be exported') {
+            $reason = 'private key not exportable'
+          } else {
+            $reason = "Export-PfxCertificate failed: $msg"
+          }
+          [void]$skipped.Add(@{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reason = $reason })
+        }
+      }
+      $payload = @{ candidates = $candidates; skipped = $skipped }
+      $payload | ConvertTo-Json -Compress -Depth 4
     `;
 
     const pwsh = await getPowerShell();
@@ -74,16 +123,69 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     if (result.exitCode !== 0) return null;
 
-    const pfxPath = result.stdout.trim();
+    const parsed = parseEnumeration(result.stdout);
+    if (!parsed) return null;
+
+    const tempPfxPaths: string[] = parsed.candidates.map((c) => c.pfxPath);
     try {
-      const loaded = await this.loadPfx(pfxPath, "export");
-      if (!loaded || !isValidDevCert(loaded.cert)) return null;
-      return loaded;
+      const usable: UsableDevCert[] = [];
+      const storeContext = `Windows ${this.storeLocation}\\My`;
+
+      for (const cand of parsed.candidates) {
+        const loaded = await this.loadPfxLenient(cand.pfxPath, "export");
+        if (!loaded) {
+          // PFX produced by Export-PfxCertificate failed to parse — surface
+          // as an unusable warning so the user has visibility.
+          classifyCandidate({
+            kind: "forcedSkip",
+            source: storeContext,
+            reason:
+              "Export-PfxCertificate produced a PFX that could not be parsed",
+            metadata: {
+              thumbprint: cand.thumbprint,
+              subjectCN: cand.subjectCN,
+              notBefore: parseDateOrNull(cand.notBefore),
+              notAfter: parseDateOrNull(cand.notAfter),
+            },
+          });
+          continue;
+        }
+
+        const classified = classifyCandidate({
+          kind: "loaded",
+          source: storeContext,
+          loaded,
+        });
+        if (classified === null) continue;
+        if (classified.kind === "usable") usable.push(classified);
+      }
+
+      for (const sk of parsed.skipped) {
+        // Re-apply isValidDevCert gates against the metadata we received so
+        // we don't emit the unusable warning for clearly-unrelated certs
+        // that happened to share the OID but are e.g. expired.
+        if (!metadataLooksLikeValidDevCert(sk)) continue;
+        classifyCandidate({
+          kind: "forcedSkip",
+          source: storeContext,
+          reason: sk.reason,
+          metadata: {
+            thumbprint: sk.thumbprint,
+            subjectCN: sk.subjectCN,
+            notBefore: parseDateOrNull(sk.notBefore),
+            notAfter: parseDateOrNull(sk.notAfter),
+          },
+        });
+      }
+
+      return selectBestDevCert(usable, storeContext);
     } finally {
-      try {
-        fs.unlinkSync(pfxPath);
-      } catch {
-        // best effort cleanup
+      for (const p of tempPfxPaths) {
+        try {
+          fs.unlinkSync(p);
+        } catch {
+          // best effort cleanup
+        }
       }
     }
   }
@@ -210,4 +312,53 @@ export class WindowsCertificateStore extends BaseCertificateStore {
 
     return result.stdout.trim() === "true";
   }
+}
+
+function parseEnumeration(stdout: string): PsEnumeration | null {
+  const trimmed = stdout.trim();
+  if (!trimmed) return { candidates: [], skipped: [] };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+
+  // PowerShell's ConvertTo-Json emits a hashtable with a single child as a
+  // bare object rather than a 1-element array; coerce defensively.
+  if (!parsed || typeof parsed !== "object") return null;
+  const root = parsed as Record<string, unknown>;
+  return {
+    candidates: coerceArray<PsCandidate>(root.candidates),
+    skipped: coerceArray<PsSkipped>(root.skipped),
+  };
+}
+
+function coerceArray<T>(value: unknown): T[] {
+  if (value === undefined || value === null) return [];
+  if (Array.isArray(value)) return value as T[];
+  return [value as T];
+}
+
+function parseDateOrNull(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function metadataLooksLikeValidDevCert(sk: PsSkipped): boolean {
+  // The PS script already filtered by ASPNET_HTTPS_OID. We layer CN +
+  // validity-window checks on top so we don't emit the unusable warning
+  // for clearly-unrelated certs (e.g. expired or differently-named) that
+  // happened to carry the same OID. We can't check the version byte from
+  // TS without parsing the cert, so we skip that gate here.
+  if (!sk.subjectCN) return false;
+  if (sk.subjectCN.toLowerCase() !== "localhost") return false;
+  const nbf = parseDateOrNull(sk.notBefore);
+  const exp = parseDateOrNull(sk.notAfter);
+  if (!nbf || !exp) return false;
+  const now = new Date();
+  if (nbf > now || exp < now) return false;
+  return true;
 }
