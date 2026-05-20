@@ -3,7 +3,7 @@
   "displayName": "Dev Container Dev Certificates (Host)",
   "description": "Generates and trusts ASP.NET and Aspire compatible HTTPS development certificates on the host machine for use in Dev Containers and remote environments.",
   "icon": "images/dn_ui_extension_icon_256.png",
-  "version": "1.1.0-pre",
+  "version": "1.1.0",
   "publisher": "dnegstad",
   "license": "MIT",
   "repository": {
@@ -78,7 +78,7 @@
               },
               "pfxPassword": {
                 "type": "string",
-                "description": "Password for the PFX, if any. Leave unset for an empty password."
+                "description": "Password for the certificate's PFX form. For pfxPath sources, the password used to open the file (preserved end-to-end — the .pfx written to extra destinations opens with this same password). For pemCertPath sources, the encryption password applied to the .pfx synthesized for extra destinations; if unset, the synthesized .pfx is passwordless (matching the source PEM key file's on-disk posture)."
               },
               "pemCertPath": {
                 "type": "string",
@@ -92,9 +92,19 @@
                 "type": "boolean",
                 "default": true,
                 "description": "When true (default), plant the cert in the OpenSSL trust directory and the .NET Root store inside the container."
+              },
+              "excludeFromDotNetStore": {
+                "type": "boolean",
+                "default": false,
+                "description": "When true, exempts this certificate from devcontainerDevCerts.installUserCertsToDotNetStore. Use to keep a sensitive cert out of the .NET X509Store while still installing other user certs there. Has no effect when the top-level setting is false (no user certs go to the store anyway)."
               }
             }
           }
+        },
+        "devcontainerDevCerts.installUserCertsToDotNetStore": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, copies every user certificate from devcontainerDevCerts.userCertificates into the container's .NET X509Store (~/.dotnet/corefx/cryptography/x509stores/my/) so X509Store(StoreName.My, StoreLocation.CurrentUser) enumerates them. SECURITY WARNING: .NET's StoreName.My enumeration on Linux opens each file with a null password and cannot accept per-file passwords, so each cert's copy stored there has its password stripped. The private key sits on disk in plain-text-equivalent form, protected only by file permissions (0o600). Leave this false (the default) unless you specifically need .NET store enumeration to find your user certs. The auto-generated dotnet-dev cert is always installed to the store regardless of this setting (it has no password to strip, and the store IS its canonical location). To exempt an individual cert from this global setting, add excludeFromDotNetStore: true to that entry."
         }
       }
     }

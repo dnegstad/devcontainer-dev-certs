@@ -92,15 +92,19 @@ export async function exportRootPfx(
 export interface ExportedLoadedCert {
   pemCertPath: string;
   pemKeyPath: string | null;
-  pfxPath: string | null;
   rootPfxPath: string | null;
 }
 
 /**
- * Export a user-managed (or generically loaded) certificate to a directory
- * under a stable `{name}.*` filename scheme. PFX artifacts are only produced
- * when the cert has a private key attached; the root PFX is only produced
- * when `includeRootPfx` is true.
+ * Export a user-managed (or generically loaded) certificate's PEM artifacts
+ * to a directory under a stable `{name}.*` filename scheme. The cert is
+ * always written; the key is only written when a key is attached; the
+ * public-cert-only root PFX is only produced when `includeRootPfx` is true.
+ *
+ * Notably this does NOT synthesize a key-bearing `{name}.pfx`. That decision
+ * lives in certProvider, where the user's pfxPassword is in scope — silently
+ * encoding a passwordless PFX here would strip the user's password without
+ * their consent. See certProvider.ts:loadUserCert for the PFX byte source.
  */
 export async function exportLoadedCert(
   loaded: LoadedCert,
@@ -114,17 +118,9 @@ export async function exportLoadedCert(
   fs.writeFileSync(pemCertPath, loaded.cert.pem, { mode: PUBLIC_FILE_MODE });
 
   let pemKeyPath: string | null = null;
-  let pfxPath: string | null = null;
   if (loaded.key) {
     pemKeyPath = path.join(outputDir, `${name}.key`);
     fs.writeFileSync(pemKeyPath, loaded.key.pem, { mode: PRIVATE_FILE_MODE });
-
-    const pfxBytes = await buildPfx({
-      cert: loaded.cert,
-      key: loaded.key,
-    });
-    pfxPath = path.join(outputDir, `${name}.pfx`);
-    fs.writeFileSync(pfxPath, pfxBytes, { mode: PRIVATE_FILE_MODE });
   }
 
   let rootPfxPath: string | null = null;
@@ -134,5 +130,5 @@ export async function exportLoadedCert(
     fs.writeFileSync(rootPfxPath, rootBytes, { mode: PUBLIC_FILE_MODE });
   }
 
-  return { pemCertPath, pemKeyPath, pfxPath, rootPfxPath };
+  return { pemCertPath, pemKeyPath, rootPfxPath };
 }

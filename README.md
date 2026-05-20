@@ -173,6 +173,28 @@ Each entry supplies exactly one of `pfxPath` (+ optional `pfxPassword`) or `pemC
 
 User-managed certs are **never** added to the host OS trust store; the assumption is you already trust them on the host if you're syncing them.
 
+### Password handling
+
+The user's PFX password is preserved end-to-end. For `pfxPath` sources, the original file bytes are sent to the container verbatim — no decrypt-then-reencrypt round trip strips the password on the wire or on disk. For `pemCertPath` sources, the `pfxPassword` field doubles as the encryption password used to synthesize a `.pfx` for extra destinations; if unset, the synthesized `.pfx` is passwordless (matching the source PEM key file's on-disk posture — neither carries a password, so there's nothing to strip).
+
+### .NET X509Store install (opt-in)
+
+By default, user-managed certs are **not** copied into the container's .NET X509Store (`~/.dotnet/corefx/cryptography/x509stores/my/`). `StoreName.My` enumeration on Linux constructs `X509Certificate2(path, /* password */ null)` and has no per-file password channel, so the on-disk file there has to be passwordless — copying your passworded PFX into that location would silently strip its password and leave the private key plain-text-equivalent on disk.
+
+If you specifically need `X509Store(StoreName.My, StoreLocation.CurrentUser)` enumeration to find your user certs (for example, because some code reads `StoreName.My` directly), set:
+
+```json
+{
+    "devcontainerDevCerts.installUserCertsToDotNetStore": true
+}
+```
+
+Setting this acknowledges that the in-container PFX copy is passwordless. The original source file on the host is untouched, and the password-preserving copies still flow to extra destinations.
+
+To exempt an individual entry from the global setting (e.g., keep most of your user certs in the store but carve out one sensitive cert), add `"excludeFromDotNetStore": true` to that `userCertificates` entry. Has no effect when the global setting is `false` (no user certs go to the store anyway).
+
+The auto-generated dotnet-dev cert is always installed to the store regardless of these settings — it's intrinsically passwordless and the store IS its canonical location.
+
 ## Extra destinations
 
 `extraCertDestinations` writes cert artifacts into additional directories inside the container — useful for non-.NET workloads (nginx, Java keystores, Python requests bundles, etc.). Each entry is a directory; every synced cert gets a set of files under it named after the cert. Formats:
@@ -182,8 +204,10 @@ User-managed certs are **never** added to the host OS trust store; the assumptio
 | `pem` | `{name}.pem` (cert only) |
 | `key` | `{name}.key` (private key; skipped when no key is available) |
 | `pem-bundle` | `{name}-bundle.pem` (cert + key concatenated) |
-| `pfx` | `{name}.pfx` (skipped when no key is available) |
+| `pfx` | `{name}.pfx` (skipped when no private key is available) |
 | `all` *(default)* | all of the above |
+
+For PFX-sourced user certs the destination `.pfx` is the original file bytes verbatim — openable with the same `pfxPassword` you configured. For PEM-sourced user certs the `.pfx` is synthesized from the PEM key material; `pfxPassword` (if set) becomes its encryption password, otherwise it's passwordless.
 
 After every cert has been written, OpenSSL's `c_rehash` runs once per unique destination directory (not once per cert and not once per write), so adding more synced certs doesn't multiply the rehash cost.
 

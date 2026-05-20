@@ -8,16 +8,18 @@ import {
 } from "./certInstaller";
 import { parseExtraCertDestinations } from "./util/destinations";
 import { ensureSslCertDir } from "./util/sslCertDir";
+import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
 import { initLogger, log } from "@devcontainer-dev-certs/shared";
 import type {
   CertBundle,
+  CertBundleV3,
   CertMaterial,
-  CertMaterialV2,
 } from "@devcontainer-dev-certs/shared";
 
 const UI_EXTENSION_ID = "dnegstad.devcontainer-dev-certs-host";
 const GET_CERT_COMMAND = "devcontainer-dev-certs.getCertMaterial";
 const GET_BUNDLE_COMMAND = "devcontainer-dev-certs.getAllCertMaterial";
+const GET_BUNDLE_V3_COMMAND = "devcontainer-dev-certs.getAllCertMaterialV3";
 
 function isTruthyEnv(val: string | undefined, defaultVal: boolean): boolean {
   if (val === undefined || val === "") return defaultVal;
@@ -153,28 +155,60 @@ async function injectCertificate(): Promise<void> {
 async function tryGetBundle(
   includeDotNetDev: boolean,
   includeUserCerts: boolean
-): Promise<CertBundle | null> {
-  // Prefer the v2 multi-cert command.
+): Promise<CertBundleV3 | null> {
+  // Prefer V3. Older host extensions don't know this command; on
+  // "command not found" we fall through to V2 (which they do speak).
   try {
-    log("Calling getAllCertMaterial on UI extension...");
+    log("Calling getAllCertMaterialV3 on UI extension...");
+    const bundle = await vscode.commands.executeCommand<CertBundleV3>(
+      GET_BUNDLE_V3_COMMAND,
+      { includeDotNetDev, includeUserCerts }
+    );
+    if (bundle) return bundle;
+    log(
+      "getAllCertMaterialV3 returned no bundle; falling back to V2 command."
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes(`command '${GET_BUNDLE_V3_COMMAND}' not found`)) {
+      log(
+        "getAllCertMaterialV3 not available; falling back to V2 command."
+      );
+    } else {
+      log(`Error retrieving cert bundle (V3) from host: ${message}`);
+      vscode.window.showErrorMessage(
+        vscode.l10n.t(
+          "Dev Certs: Failed to obtain certificates from the host machine. Check the Dev Container Dev Certs output on the host for details."
+        )
+      );
+      return null;
+    }
+  }
+
+  // V2 fallback: passwordless pfxBase64, no installToDotNetStore flag.
+  // The host runs this when it's pinned to a pre-V3 version. We upmap each
+  // cert to V3 with conservative defaults — always install to the .NET
+  // store, since that was the V2 wire contract's implicit behavior.
+  try {
+    log("Calling getAllCertMaterial (V2) on UI extension...");
     const bundle = await vscode.commands.executeCommand<CertBundle>(
       GET_BUNDLE_COMMAND,
       { includeDotNetDev, includeUserCerts }
     );
-    if (bundle) return bundle;
-    log("getAllCertMaterial returned no bundle; falling back to legacy command.");
+    if (bundle) {
+      return { certs: bundle.certs.map(upmapV2ToV3) };
+    }
+    log(
+      "getAllCertMaterial returned no bundle; falling back to legacy command."
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes(`command '${GET_BUNDLE_COMMAND}' not found`)) {
-      // Either the UI extension isn't installed at all or it's pinned to an
-      // older version without v2. Let the legacy fallback sort out which —
-      // if the UI ext isn't installed, the legacy executeCommand will throw
-      // the same "not found" and its handler will prompt to install.
       log(
         "getAllCertMaterial not available; falling back to legacy single-cert command."
       );
     } else {
-      log(`Error retrieving cert bundle from host: ${message}`);
+      log(`Error retrieving cert bundle (V2) from host: ${message}`);
       vscode.window.showErrorMessage(
         vscode.l10n.t(
           "Dev Certs: Failed to obtain certificates from the host machine. Check the Dev Container Dev Certs output on the host for details."
@@ -223,17 +257,7 @@ async function tryGetBundle(
     return null;
   }
 
-  const v2: CertMaterialV2 = {
-    kind: "dotnet-dev",
-    name: "aspnetcore-dev",
-    thumbprint: legacy.thumbprint,
-    pfxBase64: legacy.pfxBase64,
-    pemCertBase64: legacy.pemCertBase64,
-    pemKeyBase64: legacy.pemKeyBase64,
-    rootPfxBase64: legacy.rootPfxBase64,
-    trustInContainer: true,
-  };
-  return { certs: [v2] };
+  return { certs: [upmapV1ToV3(legacy)] };
 }
 
 async function promptInstallUiExtension(): Promise<void> {

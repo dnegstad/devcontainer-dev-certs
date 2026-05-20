@@ -4,7 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import { writeExtraDestination } from "../src/certInstaller";
 import { parseExtraCertDestinations } from "../src/util/destinations";
-import type { CertMaterialV2 } from "@devcontainer-dev-certs/shared";
+import type { CertMaterialV3 } from "@devcontainer-dev-certs/shared";
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-ws-test-"));
@@ -18,7 +18,7 @@ afterEach(() => {
   cleanupDirs.length = 0;
 });
 
-function fakeMaterial(name: string): CertMaterialV2 {
+function fakeMaterial(name: string): CertMaterialV3 {
   const pemCert = "-----BEGIN CERTIFICATE-----\nFAKECERT\n-----END CERTIFICATE-----\n";
   const pemKey = "-----BEGIN RSA PRIVATE KEY-----\nFAKEKEY\n-----END RSA PRIVATE KEY-----\n";
   return {
@@ -29,6 +29,7 @@ function fakeMaterial(name: string): CertMaterialV2 {
     pemKeyBase64: Buffer.from(pemKey).toString("base64"),
     pfxBase64: Buffer.from("PFXBYTES").toString("base64"),
     trustInContainer: true,
+    installToDotNetStore: false,
   };
 }
 
@@ -79,7 +80,7 @@ describe.skipIf(process.platform === "win32")("writeExtraDestination", () => {
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    const material: CertMaterialV2 = {
+    const material: CertMaterialV3 = {
       ...fakeMaterial("ca-only"),
       pemKeyBase64: undefined,
       pfxBase64: undefined,
@@ -98,7 +99,7 @@ describe.skipIf(process.platform === "win32")("writeExtraDestination", () => {
     const dir = tmpDir();
     cleanupDirs.push(dir);
 
-    const material: CertMaterialV2 = {
+    const material: CertMaterialV3 = {
       ...fakeMaterial("../evil"),
     };
     const { destinations } = parseExtraCertDestinations(dir);

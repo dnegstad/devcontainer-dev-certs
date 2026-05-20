@@ -38,7 +38,13 @@ export interface CertMaterialV2 {
    * defines "thumbprint" as SHA-1 so the wire-protocol field has to match.
    */
   thumbprint: string;
-  /** Omitted when no private key is available (CA-only user certs). */
+  /**
+   * Passwordless PFX bytes. The V2 IPC contract assumes any cert that
+   * carries a PFX is openable with the empty password — the .NET X509Store
+   * on Linux can't accept per-file passwords, and V2 consumers wrote these
+   * bytes directly to it. Omitted when no private key is available
+   * (CA-only user certs).
+   */
   pfxBase64?: string;
   pemCertBase64: string;
   /** Omitted for CA-only user certs. */
@@ -50,4 +56,54 @@ export interface CertMaterialV2 {
 
 export interface CertBundle {
   certs: CertMaterialV2[];
+}
+
+/**
+ * V3 certificate material. Adds a deliberate split between the
+ * password-preserving payload for "elsewhere" destinations and the
+ * passwordless payload for the .NET X509Store, gated by an explicit
+ * per-cert install flag. V3 consumers (new workspace extension) read
+ * these fields directly; older workspaces continue speaking V2 via the
+ * downmap on the host side.
+ */
+export interface CertMaterialV3 {
+  kind: CertKind;
+  name: string;
+  thumbprint: string;
+  /**
+   * PFX bytes with the user's password preserved. For PFX-sourced user
+   * entries these are the original file bytes verbatim. For PEM-sourced
+   * entries this is a freshly-built PFX encrypted with `pfxPassword` from
+   * the user's settings, or with an empty password if `pfxPassword` was
+   * unset (matching the source PEM key file's on-disk posture). For the
+   * auto-generated dotnet-dev cert these are intrinsically passwordless.
+   * V3 consumers must NOT write these bytes to the .NET X509Store — they
+   * may carry a password the store-enumeration code can't supply.
+   */
+  pfxBase64?: string;
+  pemCertBase64: string;
+  pemKeyBase64?: string;
+  rootPfxBase64?: string;
+  trustInContainer: boolean;
+  /**
+   * True when the cert should be installed into ~/.dotnet/corefx/cryptography/
+   * x509stores/my/. Always true for the dotnet-dev cert. For user certs this
+   * reflects the resolved opt-in: global `installUserCertsToDotNetStore` AND
+   * not the per-cert `excludeFromDotNetStore`. The workspace extension MUST
+   * NOT write to the store when this is false, and MUST sweep any prior
+   * store copy keyed by this cert's thumbprint.
+   */
+  installToDotNetStore: boolean;
+  /**
+   * Passwordless PFX bytes — populated ONLY when `installToDotNetStore` is
+   * true. The deliberate side-effect of opting into the store: the bytes
+   * here have the user's password stripped so .NET's null-password
+   * enumeration can open them. NEVER write these bytes anywhere other than
+   * the X509Store directory.
+   */
+  dotNetStorePfxBase64?: string;
+}
+
+export interface CertBundleV3 {
+  certs: CertMaterialV3[];
 }
