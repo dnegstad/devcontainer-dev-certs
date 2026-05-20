@@ -256,16 +256,13 @@ export function writeExtraDestination(
     writeText(pathFor("-bundle.pem"), content, 0o600);
   };
 
-  // Distinguish "user explicitly asked for a .pfx but the host couldn't
-  // provide one" (warn-worthy) from "format=all, no PFX available because
-  // it's a CA-only cert" (silently skipped). Both branches reach writePfx,
-  // but only the explicit-pfx case surfaces a diagnostic.
+  // For format=pfx specifically, the user asked for a .pfx but the cert has
+  // no private key to put in one (CA-only entry). Surface that as a warning
+  // rather than silently skipping. For format=all the same skip is normal.
   if (dest.format === "pfx" && !pfx) {
     errors.push(
-      `Cert '${material.name}' has no PFX available — skipping .pfx ` +
-        `destination '${dest.path}'. For PEM-sourced user certs, set ` +
-        `pfxPassword (use "" for an explicit empty password) to opt into ` +
-        `.pfx synthesis.`
+      `Cert '${material.name}' has no private key — skipping .pfx ` +
+        `destination '${dest.path}'.`
     );
   }
 

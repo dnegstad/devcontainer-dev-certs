@@ -78,7 +78,7 @@
               },
               "pfxPassword": {
                 "type": "string",
-                "description": "Password for the certificate's PFX form. For pfxPath sources, the password used to open the file. For pemCertPath sources, the password used to encrypt the synthesized .pfx written to extra destinations — if unset, no .pfx is produced and only PEM artifacts reach destinations. Set to an empty string (\"\") to explicitly opt into a passwordless .pfx."
+                "description": "Password for the certificate's PFX form. For pfxPath sources, the password used to open the file (preserved end-to-end — the .pfx written to extra destinations opens with this same password). For pemCertPath sources, the encryption password applied to the .pfx synthesized for extra destinations; if unset, the synthesized .pfx is passwordless (matching the source PEM key file's on-disk posture)."
               },
               "pemCertPath": {
                 "type": "string",

@@ -175,7 +175,7 @@ User-managed certs are **never** added to the host OS trust store; the assumptio
 
 ### Password handling
 
-The user's PFX password is preserved end-to-end. For `pfxPath` sources, the original file bytes are sent to the container verbatim — no decrypt-then-reencrypt round trip strips the password on the wire or on disk. For `pemCertPath` sources, the `pfxPassword` field doubles as the encryption password used to synthesize a `.pfx` for extra destinations: if `pfxPassword` is unset on a PEM-sourced entry, no `.pfx` is produced. Set `pfxPassword: ""` (the empty string) to explicitly opt into a passwordless `.pfx`.
+The user's PFX password is preserved end-to-end. For `pfxPath` sources, the original file bytes are sent to the container verbatim — no decrypt-then-reencrypt round trip strips the password on the wire or on disk. For `pemCertPath` sources, the `pfxPassword` field doubles as the encryption password used to synthesize a `.pfx` for extra destinations; if unset, the synthesized `.pfx` is passwordless (matching the source PEM key file's on-disk posture — neither carries a password, so there's nothing to strip).
 
 ### .NET X509Store install (opt-in)
 
@@ -204,10 +204,10 @@ The auto-generated dotnet-dev cert is always installed to the store regardless o
 | `pem` | `{name}.pem` (cert only) |
 | `key` | `{name}.key` (private key; skipped when no key is available) |
 | `pem-bundle` | `{name}-bundle.pem` (cert + key concatenated) |
-| `pfx` | `{name}.pfx` (skipped when no PFX is available — see below) |
+| `pfx` | `{name}.pfx` (skipped when no private key is available) |
 | `all` *(default)* | all of the above |
 
-For PFX-sourced user certs the destination `.pfx` is the original file bytes verbatim — openable with the same `pfxPassword` you configured. For PEM-sourced user certs the `.pfx` is synthesized only when `pfxPassword` is set on the entry (use `""` for an explicit empty password); without it the `.pfx` is skipped and a warning is logged. CA-only entries (no private key) never produce a `.pfx`.
+For PFX-sourced user certs the destination `.pfx` is the original file bytes verbatim — openable with the same `pfxPassword` you configured. For PEM-sourced user certs the `.pfx` is synthesized from the PEM key material; `pfxPassword` (if set) becomes its encryption password, otherwise it's passwordless.
 
 After every cert has been written, OpenSSL's `c_rehash` runs once per unique destination directory (not once per cert and not once per write), so adding more synced certs doesn't multiply the rehash cost.
 

@@ -6,7 +6,7 @@ import { CertProvider } from "../src/certProvider";
 import type { UserCertificateConfig } from "../src/certProvider";
 import { exportPem } from "../src/cert/exporter";
 import { generateCertificate } from "../src/cert/generator";
-import { buildPfx } from "../src/cert/pfx";
+import { buildPfx, parsePfx } from "../src/cert/pfx";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 import type { CertManager } from "../src/cert/manager";
 import { type DevCert, type DevKey } from "../src/cert/types";
@@ -122,9 +122,6 @@ describe("CertProvider.getAllCertMaterial", () => {
         name: "corp-ca",
         pemCertPath: tmp.certPath,
         pemKeyPath: tmp.keyPath,
-        // Explicit empty string opts into a passwordless PFX, matching the
-        // new "no pfxPassword → no .pfx" contract for PEM-sourced entries.
-        pfxPassword: "",
       },
     ];
     __setConfig("devcontainerDevCerts", { userCertificates: userConfigs });
@@ -285,14 +282,18 @@ describe("CertProvider.getAllCertMaterial", () => {
     expect(first.certs[0]).toBe(second.certs[0]);
   });
 
-  it("omits pfxBase64 for PEM-source certs with no pfxPassword", async () => {
+  it("synthesizes a passwordless PFX for PEM-source certs with no pfxPassword", async () => {
+    // The source PEM key file is unencrypted on disk; emitting a passwordless
+    // PFX from it doesn't reduce the security posture (nothing to strip).
+    // This differs from the PFX-source path, where an unset password would
+    // mean the source file itself is passwordless.
     const { cert, key } = await makeValidCert();
     const tmp = writeCertFiles(cert, key);
     cleanupDirs.push(tmp.dir);
 
     __setConfig("devcontainerDevCerts", {
       userCertificates: [
-        { name: "no-pfx", pemCertPath: tmp.certPath, pemKeyPath: tmp.keyPath },
+        { name: "synth", pemCertPath: tmp.certPath, pemKeyPath: tmp.keyPath },
       ] satisfies UserCertificateConfig[],
     });
 
@@ -303,8 +304,12 @@ describe("CertProvider.getAllCertMaterial", () => {
     });
 
     expect(bundle.certs).toHaveLength(1);
-    expect(bundle.certs[0].pfxBase64).toBeUndefined();
-    expect(bundle.certs[0].pemKeyBase64).toBeTruthy();
+    expect(bundle.certs[0].pfxBase64).toBeTruthy();
+    const wireBytes = Buffer.from(bundle.certs[0].pfxBase64!, "base64");
+    // Sanity: the bytes are a real PFX that opens with the empty password.
+    const parsed = await parsePfx(wireBytes, "");
+    expect(parsed.cert).toBeTruthy();
+    expect(parsed.key).toBeTruthy();
   });
 
   it("respects installUserCertsToDotNetStore=true for user certs", async () => {

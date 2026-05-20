@@ -274,8 +274,7 @@ export class CertProvider {
       this.cachedUser.set(cacheKey, material);
       log(
         `User cert '${config.name}' ready. Thumbprint: ${material.thumbprint}; ` +
-          `installToDotNetStore=${installToDotNetStore}; ` +
-          `pfxBase64=${pfxBase64 ? "present" : "omitted"}`
+          `installToDotNetStore=${installToDotNetStore}`
       );
       return material;
     } finally {
@@ -286,11 +285,13 @@ export class CertProvider {
   /**
    * Build the password-preserving PFX bytes for a user cert. PFX-sourced
    * entries pass through their original file bytes verbatim — no decrypt /
-   * re-encrypt round-trip, so the user's password (including its absence)
-   * survives untouched. PEM-sourced entries are synthesized only when the
-   * user provided `pfxPassword`; without it we omit `pfxBase64` rather than
-   * silently producing a passwordless PFX. Empty string is treated as a
-   * deliberate "I want a passwordless PFX" signal and produces one.
+   * re-encrypt round-trip, so the user's password survives untouched (this
+   * is the consent contract: we never strip a password the user supplied).
+   * PEM-sourced entries get a fresh PFX built around their existing PEM
+   * material. If `pfxPassword` is set we use it as the encryption password;
+   * if it's unset we encode with an empty password, which matches the on-
+   * disk security posture of the source PEM key file (unencrypted either
+   * way — nothing to strip).
    */
   private async buildUserPfxBase64(
     loaded: LoadedCert,
@@ -300,18 +301,10 @@ export class CertProvider {
       return fs.readFileSync(config.pfxPath).toString("base64");
     }
     if (!loaded.key) return undefined;
-    if (config.pfxPassword === undefined) {
-      log(
-        `User cert '${config.name}': pemCertPath source with no pfxPassword; ` +
-          `omitting pfxBase64. Set pfxPassword (use "" for an explicit empty ` +
-          `password) to opt into PFX synthesis for extra destinations.`
-      );
-      return undefined;
-    }
     const bytes = await buildPfx({
       cert: loaded.cert,
       key: loaded.key,
-      password: config.pfxPassword,
+      password: config.pfxPassword ?? "",
     });
     return bytes.toString("base64");
   }
