@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("exportLoadedCert", () => {
-  it("writes pem, key, pfx, and root pfx when includeRootPfx is true", async () => {
+  it("writes pem, key, and root pfx when includeRootPfx is true", async () => {
     const { cert, key } = await makeTestCert();
     const exportDir = tmpDir();
     cleanupDirs.push(exportDir);
@@ -43,15 +43,16 @@ describe("exportLoadedCert", () => {
 
     expect(result.pemCertPath).toBe(path.join(outDir, "corp-ca.pem"));
     expect(result.pemKeyPath).toBe(path.join(outDir, "corp-ca.key"));
-    expect(result.pfxPath).toBe(path.join(outDir, "corp-ca.pfx"));
     expect(result.rootPfxPath).toBe(path.join(outDir, "corp-ca-root.pfx"));
     expect(fs.existsSync(result.pemCertPath)).toBe(true);
     expect(fs.existsSync(result.pemKeyPath!)).toBe(true);
-    expect(fs.existsSync(result.pfxPath!)).toBe(true);
     expect(fs.existsSync(result.rootPfxPath!)).toBe(true);
+    // PFX-with-key synthesis intentionally moved out of exportLoadedCert
+    // so the password decision lives next to pfxPassword in certProvider.
+    expect(fs.existsSync(path.join(outDir, "corp-ca.pfx"))).toBe(false);
   });
 
-  it("skips PFX artifacts when the loaded cert has no private key", async () => {
+  it("skips PEM key when the loaded cert has no private key", async () => {
     const { cert, key } = await makeTestCert();
     const exportDir = tmpDir();
     cleanupDirs.push(exportDir);
@@ -64,12 +65,11 @@ describe("exportLoadedCert", () => {
 
     expect(result.pemCertPath).toBe(path.join(outDir, "ca-only.pem"));
     expect(result.pemKeyPath).toBeNull();
-    expect(result.pfxPath).toBeNull();
     expect(result.rootPfxPath).toBeNull();
     expect(fs.existsSync(result.pemCertPath)).toBe(true);
   });
 
-  it("round-trips an EC-keyed user cert", async () => {
+  it("writes the PEM artifacts for an EC-keyed cert", async () => {
     const now = new Date();
     const expiry = new Date(now.getTime() + VALIDITY_DAYS * 86400 * 1000);
     const { cert, key } = await generateCertificate(now, expiry, {
@@ -86,6 +86,7 @@ describe("exportLoadedCert", () => {
     cleanupDirs.push(outDir);
     const result = await exportLoadedCert(loaded, "ec-cert", outDir);
 
-    expect(fs.existsSync(result.pfxPath!)).toBe(true);
+    expect(fs.existsSync(result.pemCertPath)).toBe(true);
+    expect(fs.existsSync(result.pemKeyPath!)).toBe(true);
   });
 });

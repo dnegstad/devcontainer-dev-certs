@@ -38,7 +38,15 @@ export interface CertMaterialV2 {
    * defines "thumbprint" as SHA-1 so the wire-protocol field has to match.
    */
   thumbprint: string;
-  /** Omitted when no private key is available (CA-only user certs). */
+  /**
+   * PFX bytes with the user's password preserved. For PFX-sourced user
+   * entries these are the original file bytes verbatim. For PEM-sourced
+   * entries this is a freshly-built PFX encrypted with `pfxPassword` from
+   * the user's settings, or omitted if no password was provided. For the
+   * auto-generated dotnet-dev cert these are intrinsically passwordless
+   * (no password to preserve). Consumers that don't have the password
+   * cannot open these — that's the point.
+   */
   pfxBase64?: string;
   pemCertBase64: string;
   /** Omitted for CA-only user certs. */
@@ -46,6 +54,24 @@ export interface CertMaterialV2 {
   /** Public-cert-only PFX for the .NET Root store. Only present when trustInContainer = true. */
   rootPfxBase64?: string;
   trustInContainer: boolean;
+  /**
+   * True when the cert should be installed into ~/.dotnet/corefx/cryptography/
+   * x509stores/my/ — the .NET CurrentUser\My store on Linux. Always true for
+   * the dotnet-dev cert (canonical location). For user certs this reflects
+   * the resolved opt-in: global `installUserCertsToDotNetStore` AND not the
+   * per-cert `excludeFromDotNetStore`. The workspace extension MUST NOT write
+   * to the store when this is false, and MUST sweep any prior store copy.
+   */
+  installToDotNetStore: boolean;
+  /**
+   * Passwordless PFX bytes — populated ONLY when `installToDotNetStore` is
+   * true. For the dotnet-dev cert this is the same payload as `pfxBase64`
+   * (no password either way). For user certs this is a separate passwordless
+   * re-encode of the same cert+key, kept distinct from `pfxBase64` so we
+   * don't strip the user's password from artifacts written elsewhere. NEVER
+   * write these bytes to any location other than the X509Store directory.
+   */
+  dotNetStorePfxBase64?: string;
 }
 
 export interface CertBundle {

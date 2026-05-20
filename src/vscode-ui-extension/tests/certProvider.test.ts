@@ -6,6 +6,7 @@ import { CertProvider } from "../src/certProvider";
 import type { UserCertificateConfig } from "../src/certProvider";
 import { exportPem } from "../src/cert/exporter";
 import { generateCertificate } from "../src/cert/generator";
+import { buildPfx } from "../src/cert/pfx";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 import type { CertManager } from "../src/cert/manager";
 import { type DevCert, type DevKey } from "../src/cert/types";
@@ -121,6 +122,9 @@ describe("CertProvider.getAllCertMaterial", () => {
         name: "corp-ca",
         pemCertPath: tmp.certPath,
         pemKeyPath: tmp.keyPath,
+        // Explicit empty string opts into a passwordless PFX, matching the
+        // new "no pfxPassword → no .pfx" contract for PEM-sourced entries.
+        pfxPassword: "",
       },
     ];
     __setConfig("devcontainerDevCerts", { userCertificates: userConfigs });
@@ -138,6 +142,8 @@ describe("CertProvider.getAllCertMaterial", () => {
     expect(bundle.certs[0].pfxBase64).toBeTruthy();
     expect(bundle.certs[0].pemKeyBase64).toBeTruthy();
     expect(bundle.certs[0].rootPfxBase64).toBeTruthy();
+    expect(bundle.certs[0].installToDotNetStore).toBe(false);
+    expect(bundle.certs[0].dotNetStorePfxBase64).toBeUndefined();
   });
 
   it("returns both dotnet-dev and user certs when both enabled", async () => {
@@ -277,6 +283,166 @@ describe("CertProvider.getAllCertMaterial", () => {
       includeUserCerts: true,
     });
     expect(first.certs[0]).toBe(second.certs[0]);
+  });
+
+  it("omits pfxBase64 for PEM-source certs with no pfxPassword", async () => {
+    const { cert, key } = await makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    __setConfig("devcontainerDevCerts", {
+      userCertificates: [
+        { name: "no-pfx", pemCertPath: tmp.certPath, pemKeyPath: tmp.keyPath },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    expect(bundle.certs).toHaveLength(1);
+    expect(bundle.certs[0].pfxBase64).toBeUndefined();
+    expect(bundle.certs[0].pemKeyBase64).toBeTruthy();
+  });
+
+  it("respects installUserCertsToDotNetStore=true for user certs", async () => {
+    const { cert, key } = await makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    __setConfig("devcontainerDevCerts", {
+      installUserCertsToDotNetStore: true,
+      userCertificates: [
+        {
+          name: "kept",
+          pemCertPath: tmp.certPath,
+          pemKeyPath: tmp.keyPath,
+          pfxPassword: "secret",
+        },
+        {
+          name: "exempt",
+          pemCertPath: tmp.certPath,
+          pemKeyPath: tmp.keyPath,
+          pfxPassword: "secret",
+          excludeFromDotNetStore: true,
+        },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    const kept = bundle.certs.find((c) => c.name === "kept")!;
+    const exempt = bundle.certs.find((c) => c.name === "exempt")!;
+
+    expect(kept.installToDotNetStore).toBe(true);
+    expect(kept.dotNetStorePfxBase64).toBeTruthy();
+    // The store copy MUST be distinct from pfxBase64 — the latter preserves
+    // the user's password; the former is the consented passwordless copy.
+    expect(kept.dotNetStorePfxBase64).not.toBe(kept.pfxBase64);
+
+    expect(exempt.installToDotNetStore).toBe(false);
+    expect(exempt.dotNetStorePfxBase64).toBeUndefined();
+  });
+
+  it("ignores excludeFromDotNetStore when the global setting is off", async () => {
+    const { cert, key } = await makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    __setConfig("devcontainerDevCerts", {
+      installUserCertsToDotNetStore: false,
+      userCertificates: [
+        {
+          name: "noop",
+          pemCertPath: tmp.certPath,
+          pemKeyPath: tmp.keyPath,
+          pfxPassword: "secret",
+          excludeFromDotNetStore: true,
+        },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    expect(bundle.certs[0].installToDotNetStore).toBe(false);
+    expect(bundle.certs[0].dotNetStorePfxBase64).toBeUndefined();
+  });
+
+  it("rebuilds cached material when the global store opt-in toggles", async () => {
+    const { cert, key } = await makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    const userCertificates: UserCertificateConfig[] = [
+      {
+        name: "toggled",
+        pemCertPath: tmp.certPath,
+        pemKeyPath: tmp.keyPath,
+        pfxPassword: "secret",
+      },
+    ];
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+
+    __setConfig("devcontainerDevCerts", {
+      installUserCertsToDotNetStore: false,
+      userCertificates,
+    });
+    const off = await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+    expect(off.certs[0].installToDotNetStore).toBe(false);
+    expect(off.certs[0].dotNetStorePfxBase64).toBeUndefined();
+
+    __setConfig("devcontainerDevCerts", {
+      installUserCertsToDotNetStore: true,
+      userCertificates,
+    });
+    const on = await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+    expect(on.certs[0].installToDotNetStore).toBe(true);
+    expect(on.certs[0].dotNetStorePfxBase64).toBeTruthy();
+  });
+
+  it("transmits PFX-source bytes verbatim without re-encoding", async () => {
+    // Use a real PFX with a known password so we can prove the bytes
+    // round-trip the IPC unchanged — no decrypt/re-encrypt strip.
+    const { cert, key } = await makeValidCert();
+    const password = "round-trip-secret";
+    const sourceBytes = await buildPfx({ cert, key, password });
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-cp-pfx-"));
+    cleanupDirs.push(dir);
+    const pfxPath = path.join(dir, "source.pfx");
+    fs.writeFileSync(pfxPath, sourceBytes);
+
+    __setConfig("devcontainerDevCerts", {
+      userCertificates: [
+        { name: "verbatim", pfxPath, pfxPassword: password },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    const wireBytes = Buffer.from(bundle.certs[0].pfxBase64!, "base64");
+    expect(wireBytes.equals(sourceBytes)).toBe(true);
   });
 
   it("supports user certs with ECDSA keys", async () => {

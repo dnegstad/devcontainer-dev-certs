@@ -232,6 +232,10 @@ async function tryGetBundle(
     pemKeyBase64: legacy.pemKeyBase64,
     rootPfxBase64: legacy.rootPfxBase64,
     trustInContainer: true,
+    // The legacy IPC only ever returned the dotnet-dev cert, which always
+    // installs to the .NET store (canonical location, no password to strip).
+    installToDotNetStore: true,
+    dotNetStorePfxBase64: legacy.pfxBase64,
   };
   return { certs: [v2] };
 }

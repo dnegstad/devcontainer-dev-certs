@@ -29,6 +29,7 @@ function fakeMaterial(name: string): CertMaterialV2 {
     pemKeyBase64: Buffer.from(pemKey).toString("base64"),
     pfxBase64: Buffer.from("PFXBYTES").toString("base64"),
     trustInContainer: true,
+    installToDotNetStore: false,
   };
 }
 

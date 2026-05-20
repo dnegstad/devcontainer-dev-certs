@@ -118,13 +118,24 @@ export function installUserCert(material: CertMaterialV2): void {
   fs.mkdirSync(dotNetRootStoreDir, { recursive: true });
   fs.mkdirSync(trustDir, { recursive: true });
 
-  if (material.pfxBase64) {
-    const pfxPath = path.join(
-      dotNetStoreDir,
-      getPfxFileName(material.thumbprint)
+  const storePath = path.join(
+    dotNetStoreDir,
+    getPfxFileName(material.thumbprint)
+  );
+  if (material.installToDotNetStore && material.dotNetStorePfxBase64) {
+    // The user opted into a plain-text-equivalent copy in the store. The
+    // bytes here are the host-built passwordless re-encode; pfxBase64 (with
+    // the user's password preserved) is for other destinations only.
+    fs.writeFileSync(
+      storePath,
+      Buffer.from(material.dotNetStorePfxBase64, "base64")
     );
-    fs.writeFileSync(pfxPath, Buffer.from(material.pfxBase64, "base64"));
-    chmodSafe(pfxPath, 0o600);
+    chmodSafe(storePath, 0o600);
+  } else {
+    // Sweep stale state — if the user previously opted in and now opted out
+    // (global setting flipped off, or `excludeFromDotNetStore` added), remove
+    // the cached plain-text copy rather than orphaning it.
+    fs.rmSync(storePath, { force: true });
   }
 
   if (material.trustInContainer) {
@@ -179,7 +190,7 @@ export function isCertInstalled(material: CertMaterialV2): boolean {
     );
   }
 
-  if (material.pfxBase64) {
+  if (material.installToDotNetStore) {
     const pfxPath = path.join(
       getDotNetStorePath(),
       getPfxFileName(material.thumbprint)
@@ -244,6 +255,19 @@ export function writeExtraDestination(
     const content = pemKey ? `${pemCert}${pemKey}` : pemCert;
     writeText(pathFor("-bundle.pem"), content, 0o600);
   };
+
+  // Distinguish "user explicitly asked for a .pfx but the host couldn't
+  // provide one" (warn-worthy) from "format=all, no PFX available because
+  // it's a CA-only cert" (silently skipped). Both branches reach writePfx,
+  // but only the explicit-pfx case surfaces a diagnostic.
+  if (dest.format === "pfx" && !pfx) {
+    errors.push(
+      `Cert '${material.name}' has no PFX available — skipping .pfx ` +
+        `destination '${dest.path}'. For PEM-sourced user certs, set ` +
+        `pfxPassword (use "" for an explicit empty password) to opt into ` +
+        `.pfx synthesis.`
+    );
+  }
 
   try {
     switch (dest.format) {
