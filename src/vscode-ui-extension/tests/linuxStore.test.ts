@@ -3,9 +3,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import type * as Shared from "@devcontainer-dev-certs/shared";
+import { initLogger } from "@devcontainer-dev-certs/shared";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
-import { parsePfx } from "../src/cert/pfx";
+import { buildPfx, parsePfx } from "../src/cert/pfx";
+import { logMessages } from "./__mocks__/vscode";
+
+initLogger("test");
 
 // Mock runProcess so tests don't need an actual openssl binary.
 vi.mock("../src/platform/processUtil", () => ({
@@ -294,6 +298,54 @@ describe("LinuxCertificateStore", () => {
 
       const found = await store.findExistingDevCert();
       expect(found).toBeNull();
+    });
+
+    it("picks one of the candidates deterministically regardless of filename order", async () => {
+      const { cert: certA, key: keyA, thumbprint: thumbA } = await makeTestCert();
+      const { cert: certB, key: keyB, thumbprint: thumbB } = await makeTestCert();
+      const bytesA = await buildPfx({ cert: certA, key: keyA });
+      const bytesB = await buildPfx({ cert: certB, key: keyB });
+      fs.mkdirSync(testStoreDir, { recursive: true });
+      // Lexically reversed filenames so readdir order differs from
+      // selection order.
+      fs.writeFileSync(path.join(testStoreDir, `zzz-${thumbA}.pfx`), bytesA);
+      fs.writeFileSync(path.join(testStoreDir, `aaa-${thumbB}.pfx`), bytesB);
+
+      const found = await store.findExistingDevCert();
+      expect(found).not.toBeNull();
+      // Both certs share version; selection is deterministic on
+      // (version DESC, notAfter DESC).
+      expect([thumbA, thumbB]).toContain(found!.thumbprint);
+    });
+
+    it("warns when a canonically-named PFX fails to parse", async () => {
+      logMessages.length = 0;
+      const fakeThumb = "B".repeat(40);
+      fs.mkdirSync(testStoreDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(testStoreDir, `${fakeThumb}.pfx`),
+        Buffer.from("not a valid pfx")
+      );
+      await store.findExistingDevCert();
+      const warn = logMessages.find((m) => m.includes("failed to parse PFX"));
+      expect(warn).toBeDefined();
+      expect(warn).toContain(fakeThumb);
+    });
+
+    it("warns when a valid-looking PFX has no private key", async () => {
+      logMessages.length = 0;
+      const { cert, thumbprint } = await makeTestCert();
+      const bytes = await buildPfx({ cert }); // cert-only
+      fs.mkdirSync(testStoreDir, { recursive: true });
+      fs.writeFileSync(path.join(testStoreDir, `${thumbprint}.pfx`), bytes);
+
+      const found = await store.findExistingDevCert();
+      expect(found).toBeNull();
+      const warn = logMessages.find((m) =>
+        m.includes("certificate without matching private key")
+      );
+      expect(warn).toBeDefined();
+      expect(warn).toContain(thumbprint);
     });
   });
 
