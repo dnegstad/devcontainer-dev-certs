@@ -256,6 +256,14 @@ async function cleanupCommand(): Promise<void> {
     return;
   }
 
+  // Log the full candidate list before prompting — the modal caps rows
+  // per location, so this gives the user a complete audit trail to
+  // inspect before they confirm.
+  log(`Cleanup: ${stale.length} candidate(s) for removal:`);
+  for (const s of stale) {
+    log(`  ${s.location} cert ${s.identifier} (${s.fullPath})`);
+  }
+
   const remove = vscode.l10n.t("Remove");
   const detail = formatStaleDetail(stale);
   const confirm = await vscode.window.showWarningMessage(
@@ -271,11 +279,14 @@ async function cleanupCommand(): Promise<void> {
   const result = cleanupStaleDevCertArtifacts(managed);
 
   for (const r of result.removed) {
-    log(`Cleanup: removed ${r.location} ${r.fullPath}`);
+    log(
+      `Cleanup: removed ${r.location} cert ${r.identifier} (${r.fullPath})`
+    );
   }
   for (const f of result.failed) {
     log(
-      `Cleanup: failed to remove ${f.artifact.location} ${f.artifact.fullPath}: ${f.error}`
+      `Cleanup: failed to remove ${f.artifact.location} cert ` +
+        `${f.artifact.identifier} (${f.artifact.fullPath}): ${f.error}`
     );
   }
 
@@ -311,13 +322,18 @@ function formatStaleSummary(stale: StaleArtifact[]): string {
   );
 }
 
+// Cap per-location rows in the modal so a pathological store (someone with
+// dozens of accumulated dev certs) stays scannable. Anything beyond the cap
+// is summarised; the full enumeration still goes to the output channel.
+const MAX_MODAL_ROWS_PER_LOCATION = 8;
+
 function formatStaleDetail(stale: StaleArtifact[]): string {
-  const groups: Record<ArtifactLocation, string[]> = {
+  const groups: Record<ArtifactLocation, StaleArtifact[]> = {
     "my-store": [],
     "root-store": [],
     "trust-dir": [],
   };
-  for (const s of stale) groups[s.location].push(s.fullPath);
+  for (const s of stale) groups[s.location].push(s);
 
   const labels: Record<ArtifactLocation, string> = {
     "my-store": "Container .NET My store",
@@ -327,9 +343,24 @@ function formatStaleDetail(stale: StaleArtifact[]): string {
 
   const sections: string[] = [];
   for (const loc of Object.keys(groups) as ArtifactLocation[]) {
-    const paths = groups[loc];
-    if (paths.length === 0) continue;
-    sections.push(`${labels[loc]}:\n${paths.map((p) => `  ${p}`).join("\n")}`);
+    const items = groups[loc];
+    if (items.length === 0) continue;
+    const shown = items.slice(0, MAX_MODAL_ROWS_PER_LOCATION);
+    // PFX `identifier` is the 40-hex SHA-1 thumbprint (matches what
+    // `dotnet dev-certs https --check --verbose` reports); PEM
+    // `identifier` is the full `aspnetcore-localhost-{thumb}.pem`
+    // filename. Both are scannable and tie back to the underlying file
+    // without needing to embed the full path.
+    const lines = shown.map((s) => `  ${s.identifier}`);
+    if (items.length > shown.length) {
+      lines.push(
+        vscode.l10n.t(
+          "  …and {0} more (see the Dev Container Dev Certs output for the full list)",
+          items.length - shown.length
+        )
+      );
+    }
+    sections.push(`${labels[loc]}:\n${lines.join("\n")}`);
   }
   return sections.join("\n\n");
 }
