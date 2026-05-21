@@ -8,6 +8,7 @@ import {
 } from "./certInstaller";
 import {
   buildManagedSets,
+  bundleHasManagedDevCert,
   cleanupStaleDevCertArtifacts,
   findStaleDevCertArtifacts,
   type ArtifactLocation,
@@ -175,6 +176,12 @@ async function detectStaleAndPromptCleanup(
   const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
   if (!config.get<boolean>(WARN_STALE_CONFIG_KEY, true)) return;
 
+  // Nothing is "other" when nothing is "ours" — silently skip the toast
+  // when the extension isn't managing a dev cert (generation disabled or
+  // host didn't supply one). Surfacing a cleanup prompt in that state
+  // would offer to delete every dev cert in the container.
+  if (!bundleHasManagedDevCert(bundle)) return;
+
   const stale = findStaleDevCertArtifacts(buildManagedSets(bundle));
   if (stale.length === 0) return;
 
@@ -219,6 +226,20 @@ async function cleanupCommand(): Promise<void> {
     vscode.window.showWarningMessage(
       vscode.l10n.t(
         "Dev Certs: Unable to determine the managed certificate set — aborting cleanup."
+      )
+    );
+    return;
+  }
+
+  // The cleanup is built around preserving the extension-managed dev cert.
+  // If the user has disabled dev-cert generation (or the host couldn't
+  // supply one), there's no "managed" cert to preserve and every dev cert
+  // on disk would otherwise be removed — refuse with an explanation
+  // instead.
+  if (!bundleHasManagedDevCert(bundle)) {
+    vscode.window.showWarningMessage(
+      vscode.l10n.t(
+        "Dev Certs: This dev container isn't managing a dev certificate (generation disabled via DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET, or the host extension didn't provide one). The cleanup command preserves the extension-managed certificate and won't run when none exists."
       )
     );
     return;

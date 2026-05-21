@@ -51,6 +51,18 @@ export interface ManagedSets {
  * code path is added that writes a new artifact, that artifact's identifier
  * must be reflected here or the cleanup command will treat it as stale.
  */
+/**
+ * The cleanup command's premise is "remove dev cert artifacts that aren't
+ * the one this extension manages". When the bundle carries no dotnet-dev
+ * cert (generation disabled via DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET, or
+ * the host couldn't provide one), there is nothing to preserve and every
+ * dev cert on disk would otherwise be classified as "other" — callers must
+ * refuse to operate in that state.
+ */
+export function bundleHasManagedDevCert(bundle: CertBundleV3): boolean {
+  return bundle.certs.some((c) => c.kind === "dotnet-dev");
+}
+
 export function buildManagedSets(bundle: CertBundleV3): ManagedSets {
   const myStore = new Set<string>();
   const rootStore = new Set<string>();

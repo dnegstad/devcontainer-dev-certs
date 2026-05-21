@@ -22,6 +22,7 @@ vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
 
 import {
   buildManagedSets,
+  bundleHasManagedDevCert,
   cleanupStaleDevCertArtifacts,
   findStaleDevCertArtifacts,
 } from "../src/cleanupCerts";
@@ -76,6 +77,49 @@ function managedBundle(): CertBundleV3 {
   };
   return { certs: [dev] };
 }
+
+describe("bundleHasManagedDevCert", () => {
+  it("is true when the bundle contains a dotnet-dev cert", () => {
+    expect(bundleHasManagedDevCert(managedBundle())).toBe(true);
+  });
+
+  it("is false for an empty bundle (e.g., host failed to return anything)", () => {
+    expect(bundleHasManagedDevCert({ certs: [] })).toBe(false);
+  });
+
+  it("is false when the bundle only carries user certs", () => {
+    const userOnly: CertBundleV3 = {
+      certs: [
+        {
+          kind: "user",
+          name: "corp",
+          thumbprint: STALE_THUMB,
+          pemCertBase64: Buffer.from("PEM").toString("base64"),
+          trustInContainer: true,
+          installToDotNetStore: false,
+        },
+      ],
+    };
+    expect(bundleHasManagedDevCert(userOnly)).toBe(false);
+  });
+
+  // Regression guard for the "generation disabled" scenario: without this
+  // check, the cleanup command would classify every dev cert on disk as
+  // "other" because nothing is "ours" and would offer to delete them all.
+  // The two cases below codify why the guard is needed — both expectations
+  // assert findStaleDevCertArtifacts's CURRENT behavior so a regression in
+  // either the helper OR the scanner is visible.
+  it("guards against the bug it exists for: empty-managed scan would flag every dev cert", () => {
+    fs.writeFileSync(path.join(storeDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
+    fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
+    const empty = buildManagedSets({ certs: [] });
+    // Without the bundleHasManagedDevCert guard wired into the caller, the
+    // scanner happily flags BOTH PFXes as stale — including the one a
+    // generation-disabled user might actually be relying on.
+    const stale = findStaleDevCertArtifacts(empty);
+    expect(stale.length).toBe(2);
+  });
+});
 
 describe.skipIf(process.platform === "win32")("buildManagedSets", () => {
   it("includes the dotnet-dev cert in all three locations", () => {
