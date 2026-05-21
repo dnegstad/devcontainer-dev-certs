@@ -74,7 +74,7 @@ export function installDotNetDevCert(material: CertMaterialV3): void {
 
   // Targeted symlink — only touches the slot for our PEM. PEMs from
   // prior rotations and their hash symlinks are deliberately left in
-  // place; the user-invoked "Clean Up Other Dev Certificates in
+  // place; the user-invoked "Clean Up Other Dev Certificates in Dev
   // Container" command is the only path that mutates adjacent files.
   ensureHashSymlink(trustDir, pemFileName, pemContent);
 }

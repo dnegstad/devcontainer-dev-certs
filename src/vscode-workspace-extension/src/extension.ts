@@ -191,7 +191,7 @@ async function detectStaleAndPromptCleanup(
   const dismiss = vscode.l10n.t("Don't Show Again");
   const choice = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Detected {0} other dev certificate(s) alongside the extension-managed certificate in this dev container. Cleaning them up preserves the extension-managed certificate so .NET/Aspire reliably pick it for TLS.",
+      "Dev Certs: Detected {0} other dev certificate(s) alongside the extension-managed certificate in this Dev Container. Cleaning them up preserves the extension-managed certificate so .NET/Aspire reliably pick it for TLS.",
       uniqueDevCertCount(stale)
     ),
     cleanup,
@@ -239,7 +239,7 @@ async function cleanupCommand(): Promise<void> {
   if (!bundleHasManagedDevCert(bundle)) {
     vscode.window.showWarningMessage(
       vscode.l10n.t(
-        "Dev Certs: This dev container isn't managing a dev certificate (generation disabled via DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET, or the host extension didn't provide one). The cleanup command preserves the extension-managed certificate and won't run when none exists."
+        "Dev Certs: This Dev Container isn't managing a dev certificate (generation disabled via DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET, or the host extension didn't provide one). The cleanup command preserves the extension-managed certificate and won't run when none exists."
       )
     );
     return;
@@ -250,7 +250,7 @@ async function cleanupCommand(): Promise<void> {
   if (stale.length === 0) {
     vscode.window.showInformationMessage(
       vscode.l10n.t(
-        "Dev Certs: Only the extension-managed dev certificate is present in this dev container — nothing to clean up."
+        "Dev Certs: Only the extension-managed dev certificate is present in this Dev Container — nothing to clean up."
       )
     );
     return;
@@ -268,7 +268,7 @@ async function cleanupCommand(): Promise<void> {
   const detail = formatStaleDetail(stale);
   const confirm = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Remove {0} other dev certificate(s) from this dev container, preserving the extension-managed certificate?",
+      "Dev Certs: Remove {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate?",
       uniqueDevCertCount(stale)
     ),
     { modal: true, detail },
@@ -291,7 +291,7 @@ async function cleanupCommand(): Promise<void> {
   }
 
   const summary = vscode.l10n.t(
-    "Dev Certs: Removed {0} other dev certificate(s) from this dev container, preserving the extension-managed certificate{1}{2}.",
+    "Dev Certs: Removed {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate{1}{2}.",
     uniqueDevCertCount(result.removed),
     result.failed.length
       ? vscode.l10n.t(" ({0} file(s) failed)", result.failed.length)
