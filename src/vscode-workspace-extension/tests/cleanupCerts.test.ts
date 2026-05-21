@@ -198,11 +198,8 @@ describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
   });
 
   it("gathers associated files even when the producer used lowercase thumbprint filenames", () => {
-    // Some producers / older tooling write the thumbprint in lowercase
-    // hex. The case-insensitive PFX filename regex matches, but path
-    // lookups for the Root PFX and trust-dir PEM have to preserve the
-    // on-disk casing — otherwise the orphans would never be cleaned up
-    // on a case-sensitive filesystem.
+    // Sibling lookups must preserve on-disk casing or they'll miss
+    // lowercase artifacts on a case-sensitive filesystem.
     const lower = STALE_THUMB.toLowerCase();
     fs.writeFileSync(path.join(storeDir, `${lower}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(rootStoreDir, `${lower}.pfx`), devCertPfx());
@@ -286,15 +283,12 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
     expect(fs.existsSync(path.join(trustDir, managedPem))).toBe(true);
   });
 
-  // Regression for the orphan-on-partial-failure bug: if a downstream file
-  // (Root PFX or trust-dir PEM) can't be unlinked, the My-store PFX MUST
-  // survive so the cert stays discoverable on the next cleanup attempt.
-  // Otherwise the orphan keeps .NET-trusting (Root) / OpenSSL-trusting
-  // (trust dir) the legacy cert with no in-extension recovery path.
+  // If a downstream file can't be unlinked, the My PFX must survive so
+  // the cert is re-discoverable on the next attempt.
   it("keeps the My PFX when a downstream Root unlink fails — cert remains discoverable", () => {
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
-    // Make the Root candidate a non-empty directory so `unlinkSync` throws
-    // (EISDIR / ENOTEMPTY) without needing chmod permissions — works as
+    // Non-empty directory at the Root path → unlinkSync throws
+    // (EISDIR / ENOTEMPTY) without needing chmod tricks that don't work as
     // root in CI test containers.
     const rootCandidate = path.join(rootStoreDir, `${STALE_THUMB}.pfx`);
     fs.mkdirSync(rootCandidate);
@@ -314,11 +308,8 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
     expect(result.failed[0].thumbprint).toBe(STALE_THUMB);
     expect(result.failed[0].artifact.location).toBe("root-store");
 
-    // The trust-dir PEM DID unlink successfully (downstream files are
-    // attempted independently). It must show up in `removed` so the
-    // output-channel log accurately reflects partial state — otherwise
-    // a future change to the deletion order could silently drop the
-    // record.
+    // Trust-dir PEM unlink succeeded — must show up in `removed` so the
+    // log reflects partial state.
     expect(
       result.removed.some(
         (r) => r.artifact.location === "trust-dir" && r.thumbprint === STALE_THUMB

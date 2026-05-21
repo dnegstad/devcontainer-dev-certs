@@ -89,13 +89,8 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
   });
 
   it("reclaims a dangling hash symlink whose target PEM was deleted externally", () => {
-    // Setup: a previous install (or external rehash) created
-    // `{hash}.0 -> aspnetcore-localhost-OLD.pem`, then OLD was deleted
-    // out of the trust dir without removing the symlink. Without this
-    // case handled, the next install would skip `{hash}.0` (because
-    // `existsSync` follows symlinks and a dangling link looks like
-    // "doesn't exist", but `symlinkSync` throws EEXIST), consume
-    // `{hash}.1`, and leave the dangling `{hash}.0` wasting a slot.
+    // Prior install created {hash}.0 → OLD; the PEM was then deleted
+    // externally, leaving a dangling symlink at slot 0.
     const dir = tmp();
     fs.writeFileSync(path.join(dir, "old.pem"), SAMPLE_PEM_A);
     ensureHashSymlink(dir, "old.pem", SAMPLE_PEM_A);
@@ -155,15 +150,10 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
   });
 
   it("returns silently when all 10 hash slots are taken by different PEMs", () => {
-    // The loop is a defensive bound; in practice you'd never see more than
-    // a couple of collisions on the same subject hash. But the cap is
-    // observable: when it's hit, the function no-ops without throwing and
-    // doesn't allocate slot 10+ (there's no slot 10 in c_rehash). Codify
-    // the contract.
+    // Defensive bound check: 11th install must not throw and must not
+    // allocate slot 10+ (there's no slot 10 in c_rehash).
     const dir = tmp();
-    // Build 10 distinct PEM files whose c_rehash slot we don't control
-    // directly. Use the same content so they collide on subject hash; vary
-    // only the filename.
+    // Same content under 10 distinct filenames → same subject hash.
     for (let i = 0; i < 10; i++) {
       const name = `collide${i}.pem`;
       fs.writeFileSync(path.join(dir, name), SAMPLE_PEM_A);

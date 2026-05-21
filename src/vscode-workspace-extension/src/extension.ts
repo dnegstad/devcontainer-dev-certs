@@ -171,21 +171,15 @@ async function injectCertificate(): Promise<void> {
   }
 }
 
-/**
- * Post-install detection path. Surfaces a single warning toast offering
- * to clean up, alongside the output-channel detail we just logged. No
- * second confirmation: clicking "Clean Up" runs the sweep immediately.
- */
+/** Post-install detection path. Single prompt; "Clean Up" runs the
+ *  sweep immediately. */
 async function detectStaleAndPromptCleanup(
   bundle: CertBundleV3
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
   if (!config.get<boolean>(WARN_STALE_CONFIG_KEY, true)) return;
 
-  // Nothing is "other" when nothing is "ours" — silently skip the toast
-  // when the extension isn't managing a dev cert (generation disabled or
-  // host didn't supply one). Surfacing a cleanup prompt in that state
-  // would offer to delete every dev cert in the container.
+  // Skip when we have no managed cert to preserve — see cleanupCommand.
   if (!bundleHasManagedDevCert(bundle)) return;
 
   const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
@@ -216,11 +210,8 @@ async function detectStaleAndPromptCleanup(
   }
 }
 
-/**
- * Command-palette entry point. Re-resolves the bundle (so a stale
- * post-install snapshot can't drive a destructive command), then
- * presents the same single prompt + cleanup flow as the detection path.
- */
+/** Command-palette entry. Re-resolves the bundle so a stale snapshot
+ *  can't drive deletion, then runs the same prompt + sweep as detection. */
 async function cleanupCommand(): Promise<void> {
   const includeDotNetDev = isTruthyEnv(
     process.env["DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET"],
@@ -231,8 +222,7 @@ async function cleanupCommand(): Promise<void> {
     true
   );
 
-  // Refuse to run blind: without the live bundle we can't tell stale from
-  // legitimately-installed and would risk deleting in-use artifacts.
+  // Without the live bundle we can't distinguish stale from managed.
   const bundle = await tryGetBundle(includeDotNetDev, includeUserCerts);
   if (!bundle) {
     vscode.window.showWarningMessage(
@@ -243,11 +233,8 @@ async function cleanupCommand(): Promise<void> {
     return;
   }
 
-  // The cleanup is built around preserving the extension-managed dev cert.
-  // If the user has disabled dev-cert generation (or the host couldn't
-  // supply one), there's no "managed" cert to preserve and every dev cert
-  // on disk would otherwise be removed — refuse with an explanation
-  // instead.
+  // No managed cert → nothing to preserve, so the sweep would delete
+  // every dev cert on disk. Refuse with an explanation.
   if (!bundleHasManagedDevCert(bundle)) {
     vscode.window.showWarningMessage(
       vscode.l10n.t(
@@ -283,11 +270,8 @@ async function cleanupCommand(): Promise<void> {
   performCleanup(stale);
 }
 
-/**
- * Shared finisher used by both the detection toast and the command
- * palette entry: run the sweep, log per-file outcomes, surface a summary
- * toast. Assumes the caller already logged the candidate list.
- */
+/** Run the sweep, log per-file outcomes, surface a summary toast.
+ *  Caller is responsible for logging the candidate list beforehand. */
 function performCleanup(stale: readonly StaleDevCert[]): void {
   const result = cleanupStaleDevCerts(stale);
 
@@ -310,9 +294,7 @@ function performCleanup(stale: readonly StaleDevCert[]): void {
     vscode.window.showInformationMessage(summary);
   }
 
-  // Mirror the candidate log: when a result has any content, reveal the
-  // output channel so the user can see what happened without hunting for
-  // it. Idempotent if the panel is already visible.
+  // Re-reveal the output channel so per-file outcomes are visible.
   if (result.removed.length > 0 || result.failed.length > 0) {
     revealLogger();
   }
@@ -331,11 +313,7 @@ function logStaleCandidates(stale: readonly StaleDevCert[]): void {
   }
 }
 
-/**
- * Render the user-visible summary line for a completed cleanup. Pure —
- * extracted so unit tests can drive the singular/plural and conditional
- * suffix branches without spinning up the prompt flow.
- */
+/** User-visible summary line for a completed cleanup. */
 export function formatCleanupSummary(result: CleanupResult): string {
   return vscode.l10n.t(
     "Dev Certs: Removed {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate{1}{2}.",

@@ -109,10 +109,8 @@ describe.skipIf(!ready)(
 
       const positives = candidates.filter((f) => {
         const bytes = fs.readFileSync(path.join(dotnetMyStore, f));
-        // Modern .NET encrypts the cert bag (PBES2/AES). Log it when a
-        // candidate happens to carry the OID in plaintext — we still
-        // pass via the fast path, but the decrypt path didn't actually
-        // run on this runner.
+        // Surface when a candidate matches via the fast path — modern
+        // .NET shouldn't, so this is a diagnostic for future changes.
         if (bytes.includes(ASPNET_HTTPS_OID_DER)) {
           console.log(
             `[note] PFX ${f} carried the OID in plaintext — scanner took ` +

@@ -181,11 +181,6 @@ describe.skipIf(process.platform === "win32")("installDotNetDevCert", () => {
   });
 
   it("is idempotent when called twice with the same thumbprint", () => {
-    // Reload-of-window flow: `isCertInstalled` may already short-circuit
-    // upstream, but the install function itself must not corrupt state
-    // when invoked twice in a row — same single PFX in each store, exactly
-    // one PEM in the trust dir, exactly one {hash}.0 symlink pointing at
-    // it.
     installDotNetDevCert(devMaterial("DEADBEEF"));
     installDotNetDevCert(devMaterial("DEADBEEF"));
 
@@ -204,9 +199,7 @@ describe.skipIf(process.platform === "win32")("installDotNetDevCert", () => {
   });
 
   // The "leaves pre-existing hash symlinks for unrelated PEMs untouched"
-  // invariant is covered at the unit level in
-  // `tests/rehash.test.ts > leaves pre-existing hash symlinks for OTHER
-  // PEMs untouched`. Don't duplicate it here.
+  // invariant is covered at the unit level in `tests/rehash.test.ts`.
 });
 
 describe.skipIf(process.platform === "win32")("isCertInstalled", () => {

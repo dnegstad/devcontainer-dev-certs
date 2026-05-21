@@ -2,27 +2,19 @@ import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 
 /**
  * Scan a PKCS#12 (PFX) file for the ASP.NET Core HTTPS dev cert custom-OID
- * extension `1.3.6.1.4.1.311.84.1.1` — works for cert bags that are
+ * extension `1.3.6.1.4.1.311.84.1.1`. Handles two cert-bag shapes:
  *
- *   a) plaintext (`id-data` ContentInfo, rare),
- *   b) PBES2-encrypted (PBKDF2-SHA-{1,256,384,512} + AES-{128,192,256}-CBC)
- *      — what this extension's host emits, and what modern .NET's
- *      `Pkcs12Builder` writes into `~/.dotnet/corefx/cryptography/x509stores`
- *      on .NET 9+.
+ *   - plaintext (`id-data` ContentInfo, rare)
+ *   - PBES2-encrypted (PBKDF2-SHA-{1,256,384,512} + AES-{128,192,256}-CBC)
  *
- * The scan tries each layer with the supplied password (empty by default,
- * which matches every dev cert PFX we care about) and is fail-closed: any
- * parse, decrypt, or unsupported-algorithm error returns `false`, so we
- * never delete a file we couldn't positively identify.
+ * Fail-closed: any parse, decrypt, or unsupported-algorithm error returns
+ * false, so unidentifiable files are never deleted.
  *
- * Legacy PBE-SHA1-* schemes (3DES, 2-key 3DES, RC2-40) — the default
- * `Pkcs12Builder` cert-bag encryption on .NET ≤8 — are intentionally NOT
- * supported. A pre-existing dev cert PFX from an older SDK fails closed
- * here and gets left in place, but .NET / Aspire still pick this
- * extension's certificate over it because the legacy CLI scaffolded an
- * older generation version in the dev-cert OID extension byte; selection
- * prefers the higher version, so trust-bloat without trust-confusion is
- * the acceptable trade.
+ * Legacy PBE-SHA1-* schemes (3DES, 2-key 3DES, RC2-40 — the default on
+ * .NET ≤8) aren't supported. Those PFXes carry an older dev-cert
+ * generation version, so .NET / Aspire already prefer this extension's
+ * cert over them; we accept the trust bloat rather than wire up obsolete
+ * ciphers.
  */
 
 export const ASPNET_HTTPS_OID_DER = Buffer.from([

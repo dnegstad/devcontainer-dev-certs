@@ -30,23 +30,15 @@ export interface StaleArtifact {
 }
 
 /**
- * A foreign dev cert discovered in the .NET CurrentUser\My store, plus every
- * on-disk file that belongs to its thumbprint and would be removed by
- * cleanup. The My store is the discovery driver because .NET / Aspire
- * enumerate certs from there — anything found there shapes what users
- * actually experience. Root-store PFXes and trust-dir PEMs are only
- * surfaced as downstream "associated files" of a thumbprint we've already
- * decided is foreign in My; we never proactively scan those directories.
+ * A foreign dev cert discovered in the .NET CurrentUser\My store, plus
+ * every on-disk file that shares its thumbprint. My is the discovery
+ * driver — Root and the trust dir are only swept by association.
  */
 export interface StaleDevCert {
   /** Uppercase SHA-1 thumbprint (the My-store PFX filename stem). */
   thumbprint: string;
-  /**
-   * All on-disk files that belong to this thumbprint and would be removed.
-   * Always includes the My-store PFX (that's how it was discovered); the
-   * Root-store PFX and trust-dir PEM appear only when the file actually
-   * exists.
-   */
+  /** My-store PFX (always), plus the Root PFX and trust-dir PEM when
+   *  those files exist on disk. */
   artifacts: StaleArtifact[];
 }
 
@@ -111,9 +103,8 @@ export function findStaleDevCerts(
   for (const entry of entries) {
     const match = PFX_FILENAME_RE.exec(entry);
     if (!match) continue;
-    // Preserve on-disk casing for sibling-file lookups (case-sensitive
-    // filesystems won't match across variants); normalize separately for
-    // the managed-set comparison and the user-visible identifier.
+    // Preserve on-disk casing for sibling lookups (case-sensitive FS);
+    // normalize separately for the managed-set check + display.
     const onDiskThumb = match[1];
     const normalThumb = onDiskThumb.toUpperCase();
     if (managedMyStoreThumbprints.has(normalThumb)) continue;
@@ -125,20 +116,13 @@ export function findStaleDevCerts(
     } catch {
       continue;
     }
-    // Dev cert PFXes in the store dirs are passwordless; the scanner
-    // decrypts the PBES2/AES cert bag and looks for the ASP.NET HTTPS
-    // OID in the plaintext. Fail-closed means anything we can't
-    // identify stays put.
+    // Fail-closed: only delete files we positively identify as dev certs.
     if (!scanPfxForDevCertOid(bytes, "")) continue;
 
     const artifacts: StaleArtifact[] = [
       { location: "my-store", fullPath: myPath, identifier: normalThumb },
     ];
 
-    // Associated Root-store PFX and trust-dir PEM. A producer that wrote
-    // the My entry in lowercase will have written its siblings in the
-    // same casing — using `onDiskThumb` keeps the lookups aligned with
-    // whatever convention the original tool followed.
     const rootCandidate = path.join(
       rootStoreDir,
       getPfxFileName(onDiskThumb)
@@ -168,40 +152,23 @@ export function findStaleDevCerts(
 }
 
 export interface CleanupResult {
-  /**
-   * Certs whose CurrentUser\My PFX was successfully removed AND every
-   * downstream file (Root PFX, trust-dir PEM) was either removed or
-   * absent. `.NET` / Aspire enumerate from My, so this is the count
-   * users actually care about. A cert with any unlink failure is NOT
-   * in this list — its My PFX stays on disk so the cleanup is
-   * re-discoverable on retry (see `cleanupStaleDevCerts` jsdoc).
-   */
+  /** Certs whose every artifact was successfully removed. Drives the
+   *  user-visible "removed N certs" count. */
   removedCerts: StaleDevCert[];
-  /**
-   * Per-file detail of every successful unlink, tagged with the owning
-   * thumbprint. Includes partial-success cases — a cert whose Root
-   * unlink failed but whose trust-dir PEM unlinked successfully has an
-   * entry here for the PEM, an entry in `failed` for the Root, and is
-   * absent from `removedCerts`.
-   */
+  /** Per-file successful unlinks, tagged with the owning thumbprint.
+   *  Includes partial-success entries from certs not in `removedCerts`. */
   removed: { thumbprint: string; artifact: StaleArtifact }[];
-  /** Per-file unlink failures across every location, tagged with thumbprint. */
+  /** Per-file unlink failures, tagged with thumbprint. */
   failed: { thumbprint: string; artifact: StaleArtifact; error: string }[];
   rehashedTrustDir: boolean;
 }
 
 /**
- * Delete every artifact for every stale dev cert. The My-store PFX is the
- * discovery sentinel for `findStaleDevCerts` — if it's gone, the cert is
- * invisible to subsequent runs. To keep partial-failure recoverable, we
- * unlink the Root and trust-dir files FIRST and only remove the My PFX
- * once every downstream file is gone (or was absent). If any downstream
- * unlink fails (read-only mount, EACCES, etc.) the cert keeps its My
- * entry on disk and remains discoverable on the next retry — at worst
- * .NET / Aspire still see the legacy cert, never an orphan trust entry
- * with no on-disk source of truth.
- *
- * Rehashes the trust dir at the end if any PEM was actually removed.
+ * Delete every artifact for every stale dev cert. The My-store PFX is
+ * unlinked LAST and only when every downstream file (Root PFX, trust-dir
+ * PEM) was removed or absent, so a partial failure leaves the cert
+ * discoverable on the next run. Rehashes the trust dir if any PEM was
+ * removed.
  */
 export function cleanupStaleDevCerts(
   stale: readonly StaleDevCert[]

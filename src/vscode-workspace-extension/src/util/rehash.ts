@@ -69,11 +69,8 @@ export function rehashDirectory(directory: string): void {
  * duplicate `{hash}.0`/`{hash}.1` pairs. Allocates the next free slot
  * (`{hash}.0` … `{hash}.9`) on a real collision with a different target.
  *
- * Unlike `rehashDirectory`, this never touches symlinks belonging to PEMs
- * we didn't write — the install paths use this so a pre-existing
- * `aspnetcore-localhost-{oldThumb}.pem` (or any unrelated PEM the user
- * left in the trust dir) keeps its hash symlinks intact until the user
- * explicitly runs the cleanup command.
+ * Unlike `rehashDirectory`, this only touches the slot for our PEM —
+ * other PEMs' hash symlinks are left alone.
  */
 export function ensureHashSymlink(
   directory: string,
@@ -84,55 +81,38 @@ export function ensureHashSymlink(
   if (!hash) return;
   // Slot 0-9 covers any realistic number of collisions in a dev trust dir.
   // Catch EEXIST so a concurrent rehash from another process doesn't crash
-  // the caller — lstatSync()/symlinkSync() isn't atomic on its own.
+  // the caller.
   for (let i = 0; i < 10; i++) {
     const linkName = `${hash}.${i}`;
     const linkPath = path.join(directory, linkName);
 
-    // Use lstat (NOT existsSync) so a dangling symlink — a slot whose
-    // target PEM was deleted out from under us by an external tool or a
-    // prior rotation — is detected as "something is here" instead of
-    // misclassified as "free" and then bouncing off symlinkSync with
-    // EEXIST. Misclassifying it would leave the broken `{hash}.0`
-    // wasting the slot indefinitely.
+    // Use lstat (instead of existsSync) so dangling symlinks are detected
+    // as "occupied" and can be reclaimed.
     let existing: fs.Stats | undefined;
     try {
       existing = fs.lstatSync(linkPath);
     } catch {
-      // ENOENT — slot is free, fall through to symlinkSync below.
+      // ENOENT — slot is free.
     }
 
     if (existing) {
-      if (!existing.isSymbolicLink()) {
-        // Regular file / directory at this slot — not ours to touch.
-        continue;
-      }
+      if (!existing.isSymbolicLink()) continue; // not ours; skip
       let target: string;
       try {
         target = fs.readlinkSync(linkPath);
       } catch {
-        // Race or odd state — try next slot rather than guess.
         continue;
       }
-      if (target === pemFileName) return; // already pointing at the right PEM
+      if (target === pemFileName) return; // already correct
       const targetPath = path.isAbsolute(target)
         ? target
         : path.join(directory, target);
-      if (fs.existsSync(targetPath)) {
-        // Live collision with another PEM that shares this subject hash —
-        // leave it alone and try the next slot.
-        continue;
-      }
-      // Dangling symlink: the slot is occupied but the target PEM is
-      // gone. Hash symlinks in the trust dir are written exclusively by
-      // this extension (`ensureHashSymlink` / `rehashDirectory`), so a
-      // dangling one is leftover state we wrote ourselves — reclaim the
-      // slot rather than spending the next one and leaving the broken
-      // entry behind.
+      if (fs.existsSync(targetPath)) continue; // live collision; next slot
+      // Dangling — reclaim the slot. Hash symlinks are written exclusively
+      // by this extension, so a dangling one is leftover state we own.
       try {
         fs.unlinkSync(linkPath);
       } catch {
-        // Couldn't reclaim — try next slot.
         continue;
       }
     }
