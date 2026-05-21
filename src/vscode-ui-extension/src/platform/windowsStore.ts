@@ -362,8 +362,12 @@ function metadataLooksLikeValidDevCert(sk: PsSkipped): boolean {
   // for clearly-unrelated certs (e.g. expired or differently-named) that
   // happened to carry the same OID. We can't check the version byte from
   // TS without parsing the cert, so we skip that gate here.
-  if (!sk.subjectCN) return false;
-  if (sk.subjectCN.toLowerCase() !== "localhost") return false;
+  //
+  // CN comparison is intentionally exact-match to mirror isValidDevCert
+  // (see cert/generator.ts:isValidDevCert) — staying loose here while the
+  // canonical gate is strict would just produce warnings for certs we'd
+  // never accept downstream anyway.
+  if (sk.subjectCN !== "localhost") return false;
   const nbf = parseDateOrNull(sk.notBefore);
   const exp = parseDateOrNull(sk.notAfter);
   if (!nbf || !exp) return false;
