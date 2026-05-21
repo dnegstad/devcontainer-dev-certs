@@ -141,11 +141,10 @@ describe.skipIf(!ready)(
     });
 
     it("usually exercises the decrypt path, not the plaintext fast path", () => {
-      // The historical .NET PFX export encrypts the cert bag (PBE-SHA1-3DES
-      // on legacy, PBES2/AES on modern). If a future runtime stops
-      // encrypting it, the fast path catches the OID directly — still a
-      // pass, but we want a log so the test author knows the decrypt path
-      // wasn't actually exercised on this runner.
+      // Modern .NET's PFX export encrypts the cert bag with PBES2/AES. If a
+      // future runtime stops encrypting it, the fast path catches the OID
+      // directly — still a pass, but we want a log so the test author knows
+      // the decrypt path wasn't actually exercised on this runner.
       const candidates = listPfxes(dotnetMyStore);
       const pick = candidates[0];
       if (!pick) return;

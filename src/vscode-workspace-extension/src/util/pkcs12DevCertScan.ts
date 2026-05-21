@@ -1,4 +1,4 @@
-import { createDecipheriv, createHash, pbkdf2Sync } from "node:crypto";
+import { createDecipheriv, pbkdf2Sync } from "node:crypto";
 
 /**
  * Scan a PKCS#12 (PFX) file for the ASP.NET Core HTTPS dev cert custom-OID
@@ -8,21 +8,21 @@ import { createDecipheriv, createHash, pbkdf2Sync } from "node:crypto";
  *   b) PBES2-encrypted (PBKDF2-SHA-{1,256,384,512} + AES-{128,192,256}-CBC)
  *      — what this extension's host emits, and what modern .NET's
  *      `Pkcs12Builder` writes into `~/.dotnet/corefx/cryptography/x509stores`
- *      on .NET 9+,
- *   c) PBE-SHA1-3DES encrypted (the historical `Pkcs12Builder` default on
- *      .NET ≤8 — still the format any pre-existing `dotnet dev-certs --trust`
- *      run from an older SDK would have left in the .NET store).
+ *      on .NET 9+.
  *
  * The scan tries each layer with the supplied password (empty by default,
  * which matches every dev cert PFX we care about) and is fail-closed: any
  * parse, decrypt, or unsupported-algorithm error returns `false`, so we
  * never delete a file we couldn't positively identify.
  *
- * Older legacy schemes (PBE-SHA1-RC2-40, PBE-SHA1-2-key-3DES) are
- * intentionally NOT supported — Node's `crypto` doesn't expose RC2, and
- * 2-key 3DES hasn't been a `Pkcs12Builder` default for years. A file
- * encrypted with one of those schemes will fail closed and be left in
- * place rather than touched on guesswork.
+ * Legacy PBE-SHA1-* schemes (3DES, 2-key 3DES, RC2-40) — the default
+ * `Pkcs12Builder` cert-bag encryption on .NET ≤8 — are intentionally NOT
+ * supported. A pre-existing dev cert PFX from an older SDK fails closed
+ * here and gets left in place, but .NET / Aspire still pick this
+ * extension's certificate over it because the legacy CLI scaffolded an
+ * older generation version in the dev-cert OID extension byte; selection
+ * prefers the higher version, so trust-bloat without trust-confusion is
+ * the acceptable trade.
  */
 
 export const ASPNET_HTTPS_OID_DER = Buffer.from([
@@ -34,7 +34,6 @@ const OID = {
   encryptedData: "1.2.840.113549.1.7.6",
   pbes2: "1.2.840.113549.1.5.13",
   pbkdf2: "1.2.840.113549.1.5.12",
-  pbeSha1_3Des: "1.2.840.113549.1.12.1.3",
   aes128Cbc: "2.16.840.1.101.3.4.1.2",
   aes192Cbc: "2.16.840.1.101.3.4.1.22",
   aes256Cbc: "2.16.840.1.101.3.4.1.42",
@@ -143,74 +142,9 @@ function decodeOid(buf: Buffer, start: number, len: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// PKCS#12 B.2 KDF (RFC 7292 §B.2) — the legacy KDF used by PBE-SHA1-*.
-// Ported from the host extension's identical implementation in
-// `src/vscode-ui-extension/src/cert/pfx.ts`, parameterized over SHA-1 vs
-// SHA-256 so callers can derive keys for either PBE-SHA1-* or PKCS#12 MAC
-// SHA-256 if we ever need that here.
-// ---------------------------------------------------------------------------
-
-function pkcs12B2Kdf(
-  password: string,
-  salt: Buffer,
-  purpose: 1 | 2 | 3,
-  iterations: number,
-  outputLength: number,
-  hashAlg: "sha1" | "sha256"
-): Buffer {
-  const u = hashAlg === "sha1" ? 20 : 32;
-  const v = 64;
-
-  const passwordBmp = bmpStringWithNullTerminator(password);
-  const D = Buffer.alloc(v, purpose);
-  const S = repeatToBlock(salt, v);
-  const P = repeatToBlock(passwordBmp, v);
-  const I = Buffer.concat([S, P]);
-
-  const c = Math.ceil(outputLength / u);
-  const A = Buffer.alloc(c * u);
-  for (let i = 0; i < c; i++) {
-    let Ai = createHash(hashAlg).update(D).update(I).digest();
-    for (let j = 1; j < iterations; j++) {
-      Ai = createHash(hashAlg).update(Ai).digest();
-    }
-    Ai.copy(A, i * u);
-
-    if (i < c - 1) {
-      const B = repeatToBlock(Ai, v);
-      for (let off = 0; off < I.length; off += v) {
-        let carry = 1;
-        for (let pos = v - 1; pos >= 0; pos--) {
-          const sum = I[off + pos] + B[pos] + carry;
-          I[off + pos] = sum & 0xff;
-          carry = sum >>> 8;
-        }
-      }
-    }
-  }
-  return A.subarray(0, outputLength);
-}
-
-function bmpStringWithNullTerminator(s: string): Buffer {
-  const buf = Buffer.alloc((s.length + 1) * 2);
-  for (let i = 0; i < s.length; i++) {
-    buf.writeUInt16BE(s.charCodeAt(i), i * 2);
-  }
-  return buf;
-}
-
-function repeatToBlock(src: Buffer, blockSize: number): Buffer {
-  if (src.length === 0) return Buffer.alloc(0);
-  const len = blockSize * Math.ceil(src.length / blockSize);
-  const out = Buffer.alloc(len);
-  for (let i = 0; i < len; i++) out[i] = src[i % src.length];
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Decryptors — each takes the ciphertext and the params SEQUENCE bytes
-// (starting at the SEQUENCE tag itself) and returns plaintext, or null on
-// any failure.
+// Decryptor — takes the ciphertext and the params SEQUENCE bytes (starting
+// at the SEQUENCE tag itself) and returns plaintext, or null on any
+// failure.
 // ---------------------------------------------------------------------------
 
 function decryptPbes2(encrypted: Buffer, params: Buffer, password: string): Buffer | null {
@@ -298,30 +232,6 @@ function decryptPbes2(encrypted: Buffer, params: Buffer, password: string): Buff
   }
 }
 
-function decryptPkcs12Pbe3Des(
-  encrypted: Buffer,
-  params: Buffer,
-  password: string
-): Buffer | null {
-  // pkcs-12PbeParams SEQUENCE { salt OCTET STRING, iterations INTEGER }
-  const outer = expectTag(params, 0, TAG_SEQUENCE);
-  if (!outer) return null;
-  const saltTlv = readOctetString(params, outer.contentStart);
-  if (!saltTlv) return null;
-  const iterTlv = readIntegerSmall(params, outer.contentStart + saltTlv.totalLength);
-  if (!iterTlv || iterTlv.value <= 0) return null;
-
-  const key = pkcs12B2Kdf(password, saltTlv.content, 1, iterTlv.value, 24, "sha1");
-  const iv = pkcs12B2Kdf(password, saltTlv.content, 2, iterTlv.value, 8, "sha1");
-
-  try {
-    const decipher = createDecipheriv("des-ede3-cbc", key, iv);
-    return Buffer.concat([decipher.update(encrypted), decipher.final()]);
-  } catch {
-    return null;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // PKCS#12 walker
 // ---------------------------------------------------------------------------
@@ -359,14 +269,10 @@ function decryptAuthSafeEntry(
   if (encTlv.tag !== TAG_CONTEXT_0_IMPLICIT_PRIMITIVE) return null;
   const encrypted = buf.subarray(encTlv.contentStart, encTlv.contentStart + encTlv.contentLength);
 
-  switch (algOid.oid) {
-    case OID.pbes2:
-      return decryptPbes2(encrypted, paramsBuf, password);
-    case OID.pbeSha1_3Des:
-      return decryptPkcs12Pbe3Des(encrypted, paramsBuf, password);
-    default:
-      return null;
+  if (algOid.oid === OID.pbes2) {
+    return decryptPbes2(encrypted, paramsBuf, password);
   }
+  return null;
 }
 
 /**
