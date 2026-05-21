@@ -88,6 +88,39 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
     expect(targets).toEqual(new Set(["mycert.pem", "other.pem"]));
   });
 
+  it("reclaims a dangling hash symlink whose target PEM was deleted externally", () => {
+    // Setup: a previous install (or external rehash) created
+    // `{hash}.0 -> aspnetcore-localhost-OLD.pem`, then OLD was deleted
+    // out of the trust dir without removing the symlink. Without this
+    // case handled, the next install would skip `{hash}.0` (because
+    // `existsSync` follows symlinks and a dangling link looks like
+    // "doesn't exist", but `symlinkSync` throws EEXIST), consume
+    // `{hash}.1`, and leave the dangling `{hash}.0` wasting a slot.
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, "old.pem"), SAMPLE_PEM_A);
+    ensureHashSymlink(dir, "old.pem", SAMPLE_PEM_A);
+    const slotsBefore = listHashSymlinks(dir);
+    expect(slotsBefore).toHaveLength(1);
+    expect(slotsBefore[0].endsWith(".0")).toBe(true);
+
+    // External tool removes the PEM but not the symlink — `{hash}.0` is
+    // now a dangling symlink.
+    fs.unlinkSync(path.join(dir, "old.pem"));
+    expect(fs.existsSync(path.join(dir, slotsBefore[0]))).toBe(false); // follows symlink
+    expect(fs.lstatSync(path.join(dir, slotsBefore[0])).isSymbolicLink()).toBe(true);
+
+    // Next install writes a new PEM with the same subject (so the same
+    // hash). We expect the broken `{hash}.0` to be reclaimed, not
+    // bypassed.
+    fs.writeFileSync(path.join(dir, "new.pem"), SAMPLE_PEM_A);
+    ensureHashSymlink(dir, "new.pem", SAMPLE_PEM_A);
+
+    const slotsAfter = listHashSymlinks(dir);
+    expect(slotsAfter).toHaveLength(1);
+    expect(slotsAfter[0]).toBe(slotsBefore[0]); // same {hash}.0 path
+    expect(fs.readlinkSync(path.join(dir, slotsAfter[0]))).toBe("new.pem");
+  });
+
   it("leaves pre-existing hash symlinks for OTHER PEMs untouched", () => {
     const dir = tmp();
     // Pre-existing PEM the user (or a prior rotation) put in the trust dir,

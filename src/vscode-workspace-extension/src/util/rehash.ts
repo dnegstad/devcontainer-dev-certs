@@ -84,19 +84,59 @@ export function ensureHashSymlink(
   if (!hash) return;
   // Slot 0-9 covers any realistic number of collisions in a dev trust dir.
   // Catch EEXIST so a concurrent rehash from another process doesn't crash
-  // the caller — existsSync()/symlinkSync() isn't atomic on its own.
+  // the caller — lstatSync()/symlinkSync() isn't atomic on its own.
   for (let i = 0; i < 10; i++) {
     const linkName = `${hash}.${i}`;
     const linkPath = path.join(directory, linkName);
-    if (fs.existsSync(linkPath)) {
-      // Already-correct slot — bail out without writing anything.
-      try {
-        if (fs.readlinkSync(linkPath) === pemFileName) return;
-      } catch {
-        // Not a usable match (broken slot, not a symlink, race) — try next.
-      }
-      continue;
+
+    // Use lstat (NOT existsSync) so a dangling symlink — a slot whose
+    // target PEM was deleted out from under us by an external tool or a
+    // prior rotation — is detected as "something is here" instead of
+    // misclassified as "free" and then bouncing off symlinkSync with
+    // EEXIST. Misclassifying it would leave the broken `{hash}.0`
+    // wasting the slot indefinitely.
+    let existing: fs.Stats | undefined;
+    try {
+      existing = fs.lstatSync(linkPath);
+    } catch {
+      // ENOENT — slot is free, fall through to symlinkSync below.
     }
+
+    if (existing) {
+      if (!existing.isSymbolicLink()) {
+        // Regular file / directory at this slot — not ours to touch.
+        continue;
+      }
+      let target: string;
+      try {
+        target = fs.readlinkSync(linkPath);
+      } catch {
+        // Race or odd state — try next slot rather than guess.
+        continue;
+      }
+      if (target === pemFileName) return; // already pointing at the right PEM
+      const targetPath = path.isAbsolute(target)
+        ? target
+        : path.join(directory, target);
+      if (fs.existsSync(targetPath)) {
+        // Live collision with another PEM that shares this subject hash —
+        // leave it alone and try the next slot.
+        continue;
+      }
+      // Dangling symlink: the slot is occupied but the target PEM is
+      // gone. Hash symlinks in the trust dir are written exclusively by
+      // this extension (`ensureHashSymlink` / `rehashDirectory`), so a
+      // dangling one is leftover state we wrote ourselves — reclaim the
+      // slot rather than spending the next one and leaving the broken
+      // entry behind.
+      try {
+        fs.unlinkSync(linkPath);
+      } catch {
+        // Couldn't reclaim — try next slot.
+        continue;
+      }
+    }
+
     try {
       fs.symlinkSync(pemFileName, linkPath);
       return;
