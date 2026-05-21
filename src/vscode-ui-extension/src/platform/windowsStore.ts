@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 import {
   BaseCertificateStore,
   classifyCandidate,
@@ -42,17 +43,29 @@ export interface PsCandidate {
   notAfter: string;
 }
 
+/** Classification of why the PS script couldn't export a cert. */
+export type PsSkipReason =
+  | "no-private-key"
+  | "not-exportable"
+  | "export-failed";
+
 /**
  * Shape of one entry in the PowerShell enumeration script's `skipped`
  * array — a cert that matched the dev-cert OID but couldn't be exported
  * (no private key, or key not exportable).
+ *
+ * `reasonDetail` carries the underlying exception message for the
+ * "export-failed" code (we can't classify it more precisely without
+ * reaching into .NET-specific types). TS-side maps the code to a
+ * localized human-readable reason; details get appended verbatim.
  */
 export interface PsSkipped {
   thumbprint: string;
   subjectCN: string | null;
   notBefore: string;
   notAfter: string;
-  reason: string;
+  reasonCode: PsSkipReason;
+  reasonDetail?: string;
 }
 
 export interface PsEnumeration {
@@ -105,7 +118,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
         $nbf = $cert.NotBefore.ToUniversalTime().ToString('o')
         $exp = $cert.NotAfter.ToUniversalTime().ToString('o')
         if (-not $cert.HasPrivateKey) {
-          $skipped += @{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reason = 'no private key in store' }
+          $skipped += @{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reasonCode = 'no-private-key' }
           continue
         }
         try {
@@ -119,16 +132,15 @@ export class WindowsCertificateStore extends BaseCertificateStore {
         } catch {
           # No CNG / RSA-specific introspection here — that would mean
           # touching .NET types beyond what the cert provider already
-          # surfaces. Message-string matching is intentionally coarse;
-          # the TS-side warning still names the underlying error when
-          # we can't classify it.
+          # surfaces. Coarse message-string matching distinguishes the
+          # "key locked" case from everything else; TS-side maps the code
+          # to a localized human-readable reason.
           $msg = $_.Exception.Message
           if ($msg -match 'not exportable' -or $msg -match 'cannot be exported') {
-            $reason = 'private key not exportable'
+            $skipped += @{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reasonCode = 'not-exportable' }
           } else {
-            $reason = "Export-PfxCertificate failed: $msg"
+            $skipped += @{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reasonCode = 'export-failed'; reasonDetail = $msg }
           }
-          $skipped += @{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reason = $reason }
         }
       }
       $payload = @{ candidates = $candidates; skipped = $skipped }
@@ -161,8 +173,9 @@ export class WindowsCertificateStore extends BaseCertificateStore {
           classifyCandidate({
             kind: "forcedSkip",
             source: storeContext,
-            reason:
-              "Export-PfxCertificate produced a PFX that could not be parsed",
+            reason: vscode.l10n.t(
+              "Export-PfxCertificate produced a PFX that could not be parsed"
+            ),
             metadata: {
               thumbprint: cand.thumbprint,
               subjectCN: cand.subjectCN,
@@ -190,7 +203,7 @@ export class WindowsCertificateStore extends BaseCertificateStore {
         classifyCandidate({
           kind: "forcedSkip",
           source: storeContext,
-          reason: sk.reason,
+          reason: localizeSkipReason(sk),
           metadata: {
             thumbprint: sk.thumbprint,
             subjectCN: sk.subjectCN,
@@ -367,6 +380,20 @@ function parseDateOrNull(s: string | null | undefined): Date | null {
   if (!s) return null;
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function localizeSkipReason(sk: PsSkipped): string {
+  switch (sk.reasonCode) {
+    case "no-private-key":
+      return vscode.l10n.t("no private key in store");
+    case "not-exportable":
+      return vscode.l10n.t("private key not exportable");
+    case "export-failed":
+      return vscode.l10n.t(
+        "Export-PfxCertificate failed: {0}",
+        sk.reasonDetail ?? ""
+      );
+  }
 }
 
 function metadataLooksLikeValidDevCert(sk: PsSkipped): boolean {

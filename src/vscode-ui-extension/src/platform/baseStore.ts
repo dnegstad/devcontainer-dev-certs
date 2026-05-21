@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import * as vscode from "vscode";
 import { type PlatformCertificateStore, type CertificateStatus } from "./types";
 import { isValidDevCert, getCertificateVersion } from "../cert/generator";
 import { type DevCert, type DevKey } from "../cert/types";
@@ -92,7 +93,9 @@ export function classifyCandidate(
     }
 
     if (!key) {
-      const reason = "PFX contains certificate without matching private key";
+      const reason = vscode.l10n.t(
+        "PFX contains certificate without matching private key"
+      );
       logSkipReason(thumbprint, input.source, reason, {
         subjectCN: cert.subjectCN,
         version: getCertificateVersion(cert),
@@ -111,12 +114,15 @@ export function classifyCandidate(
     // the extracted hint). Generic .pfx files in a shared directory aren't
     // ours to worry about.
     if (!input.thumbprintHint) return null;
-    const reason = "failed to parse PFX (corrupt or wrong password)";
+    const reason = vscode.l10n.t(
+      "failed to parse PFX (corrupt or wrong password)"
+    );
     logSkipReason(input.thumbprintHint, input.source, reason, {});
     return { kind: "skipped", thumbprint: input.thumbprintHint, reason };
   }
 
-  // forcedSkip
+  // forcedSkip — the reason has already been localized by the caller (the
+  // platform-specific store) since the wording is platform-specific.
   logSkipReason(
     input.metadata?.thumbprint ?? null,
     input.source,
@@ -156,13 +162,27 @@ export function selectBestDevCert(
   const selected = sorted[0];
 
   if (sorted.length > 1) {
+    const header = vscode.l10n.t(
+      "Multiple valid ASP.NET dev certs found in {0}; selected {1}.",
+      context,
+      selected.thumbprint
+    );
+    const candidatesHeader = vscode.l10n.t("  Candidates:");
+    const selectedTag = vscode.l10n.t("[selected]");
+    const skippedTag = vscode.l10n.t("[skipped] ");
     const lines = [
-      `Multiple valid ASP.NET dev certs found in ${context}; selected ${selected.thumbprint}.`,
-      `  Candidates:`,
-      ...sorted.map((c, i) => {
-        const tag = i === 0 ? "[selected]" : "[skipped] ";
-        return `    ${tag} thumbprint=${c.thumbprint} version=${getCertificateVersion(c.cert)} notBefore=${c.cert.notBefore.toISOString()} notAfter=${c.cert.notAfter.toISOString()}`;
-      }),
+      header,
+      candidatesHeader,
+      ...sorted.map((c, i) =>
+        vscode.l10n.t(
+          "    {0} thumbprint={1} version={2} notBefore={3} notAfter={4}",
+          i === 0 ? selectedTag : skippedTag,
+          c.thumbprint,
+          getCertificateVersion(c.cert),
+          c.cert.notBefore.toISOString(),
+          c.cert.notAfter.toISOString()
+        )
+      ),
     ];
     log(lines.join("\n"));
   }
@@ -176,18 +196,25 @@ function logSkipReason(
   reason: string,
   meta: CandidateMetadata
 ): void {
-  const subjectCN = meta.subjectCN ?? "(unknown)";
+  const unknown = vscode.l10n.t("(unknown)");
+  const subjectCN = meta.subjectCN ?? unknown;
   const version =
     meta.version === undefined || meta.version === null
-      ? "(unknown)"
+      ? unknown
       : String(meta.version);
-  const notBefore = meta.notBefore
-    ? meta.notBefore.toISOString()
-    : "(unknown)";
-  const notAfter = meta.notAfter ? meta.notAfter.toISOString() : "(unknown)";
+  const notBefore = meta.notBefore ? meta.notBefore.toISOString() : unknown;
+  const notAfter = meta.notAfter ? meta.notAfter.toISOString() : unknown;
   log(
-    `Skipping ASP.NET dev cert ${thumbprint ?? "(unknown)"} (${source}): ${reason}.\n` +
-      `  subjectCN=${subjectCN} version=${version} notBefore=${notBefore} notAfter=${notAfter}`
+    vscode.l10n.t(
+      "Skipping ASP.NET dev cert {0} ({1}): {2}.\n  subjectCN={3} version={4} notBefore={5} notAfter={6}",
+      thumbprint ?? unknown,
+      source,
+      reason,
+      subjectCN,
+      version,
+      notBefore,
+      notAfter
+    )
   );
 }
 

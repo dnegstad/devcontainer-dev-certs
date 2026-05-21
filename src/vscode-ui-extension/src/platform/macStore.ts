@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 import {
   BaseCertificateStore,
   classifyCandidate,
@@ -84,8 +85,9 @@ export class MacCertificateStore extends BaseCertificateStore {
           classifyCandidate({
             kind: "forcedSkip",
             source: pfxPath,
-            reason:
-              "PFX present on disk but matching certificate not in macOS login keychain (orphaned cache file)",
+            reason: vscode.l10n.t(
+              "PFX present on disk but matching certificate not in macOS login keychain (orphaned cache file)"
+            ),
             metadata: {
               thumbprint: classified.thumbprint,
               subjectCN: classified.cert.subjectCN,
@@ -112,8 +114,10 @@ export class MacCertificateStore extends BaseCertificateStore {
       classifyCandidate({
         kind: "forcedSkip",
         source: context,
-        reason:
-          `present in keychain but no matching PFX in ${this.devCertsDir}/aspnetcore-localhost-${entry.thumbprint}.pfx`,
+        reason: vscode.l10n.t(
+          "present in keychain but no matching PFX in {0}",
+          `${this.devCertsDir}/aspnetcore-localhost-${entry.thumbprint}.pfx`
+        ),
         metadata: {
           thumbprint: entry.thumbprint,
           subjectCN: entry.cert.subjectCN,

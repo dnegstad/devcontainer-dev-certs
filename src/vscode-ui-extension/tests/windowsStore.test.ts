@@ -165,7 +165,7 @@ describe("WindowsCertificateStore.findExistingDevCert", () => {
           subjectCN: "localhost",
           notBefore: now.toISOString(),
           notAfter: exp.toISOString(),
-          reason: "private key not exportable",
+          reasonCode: "not-exportable",
         },
         {
           // Expired — should NOT warn (silent skip).
@@ -173,7 +173,7 @@ describe("WindowsCertificateStore.findExistingDevCert", () => {
           subjectCN: "localhost",
           notBefore: new Date(now.getTime() - 365 * 86400 * 1000).toISOString(),
           notAfter: new Date(now.getTime() - 1 * 86400 * 1000).toISOString(),
-          reason: "no private key in store",
+          reasonCode: "no-private-key",
         },
         {
           // Wrong CN — should NOT warn.
@@ -181,7 +181,7 @@ describe("WindowsCertificateStore.findExistingDevCert", () => {
           subjectCN: "other.example.com",
           notBefore: now.toISOString(),
           notAfter: exp.toISOString(),
-          reason: "no private key in store",
+          reasonCode: "no-private-key",
         },
       ],
     });
@@ -208,7 +208,7 @@ describe("WindowsCertificateStore.findExistingDevCert", () => {
           subjectCN: "localhost",
           notBefore: now.toISOString(),
           notAfter: exp.toISOString(),
-          reason: "private key not exportable",
+          reasonCode: "not-exportable",
         },
       ],
     });
