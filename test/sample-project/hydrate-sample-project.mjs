@@ -15,7 +15,7 @@
 //   - CLI for manual testing
 //   - CI for automated testing
 
-import { cpSync, rmSync, mkdirSync } from "fs";
+import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -39,6 +39,35 @@ cpSync(scriptDir, outDir, {
 });
 
 // Copy feature into .devcontainer/
-cpSync(featureDir, join(outDir, ".devcontainer", "devcontainer-dev-certs"), { recursive: true });
+const stagedFeatureDir = join(outDir, ".devcontainer", "devcontainer-dev-certs");
+cpSync(featureDir, stagedFeatureDir, { recursive: true });
+
+// Strip the marketplace-pinned dev-cert extension IDs from the staged
+// feature config. Local end-to-end testing relies on:
+//   - the workspace-extension VSIX that `stage-test-vsix` drops into
+//     .devcontainer/ and the sample devcontainer.json then installs, and
+//   - the host extension loaded via the Extension Development Host (F5).
+// Leaving the marketplace IDs in place causes the dev-containers CLI to
+// install the published stable versions alongside, which then shadow
+// whatever we just built (Extensions panel ends up showing the
+// marketplace version, not the local one — and any new commands /
+// settings introduced since the last release won't appear). The
+// published `devcontainer-feature.json` keeps the IDs; we only filter
+// them out of the hydrated copy.
+const featureManifestPath = join(stagedFeatureDir, "devcontainer-feature.json");
+const featureManifest = JSON.parse(readFileSync(featureManifestPath, "utf-8"));
+const vscodeCustomizations = featureManifest.customizations?.vscode;
+if (Array.isArray(vscodeCustomizations?.extensions)) {
+  vscodeCustomizations.extensions = vscodeCustomizations.extensions.filter(
+    (id) => !id.startsWith("dnegstad.devcontainer-dev-certs-")
+  );
+  if (vscodeCustomizations.extensions.length === 0) {
+    delete vscodeCustomizations.extensions;
+  }
+}
+writeFileSync(
+  featureManifestPath,
+  JSON.stringify(featureManifest, null, 2) + "\n"
+);
 
 console.log(`Test project hydrated at: ${outDir}`);
