@@ -191,8 +191,8 @@ async function detectStaleAndPromptCleanup(
   const dismiss = vscode.l10n.t("Don't Show Again");
   const choice = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Detected {0} other dev certificate artifact(s) alongside the extension-managed certificate in this dev container's .NET My/Root stores and OpenSSL trust dir. Cleaning them up preserves the extension-managed certificate so .NET/Aspire reliably pick it for TLS.",
-      stale.length
+      "Dev Certs: Detected {0} other dev certificate(s) alongside the extension-managed certificate in this dev container. Cleaning them up preserves the extension-managed certificate so .NET/Aspire reliably pick it for TLS.",
+      uniqueDevCertCount(stale)
     ),
     cleanup,
     dismiss
@@ -256,20 +256,20 @@ async function cleanupCommand(): Promise<void> {
     return;
   }
 
-  // Log the full candidate list before prompting — the modal caps rows
-  // per location, so this gives the user a complete audit trail to
-  // inspect before they confirm.
-  log(`Cleanup: ${stale.length} candidate(s) for removal:`);
+  // Log the full per-file candidate list before prompting — the dialog
+  // shows a cert-centric (deduped-by-thumbprint) view, but the output
+  // channel keeps every underlying file for engineering audit.
+  log(`Cleanup: ${stale.length} file(s) to remove across the dev cert stores:`);
   for (const s of stale) {
-    log(`  ${s.location} cert ${s.identifier} (${s.fullPath})`);
+    log(`  ${logLocationLabel(s.location)} ${s.identifier} (${s.fullPath})`);
   }
 
   const remove = vscode.l10n.t("Remove");
   const detail = formatStaleDetail(stale);
   const confirm = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Remove {0} other dev certificate artifact(s) from this dev container, preserving the extension-managed certificate?",
-      stale.length
+      "Dev Certs: Remove {0} other dev certificate(s) from this dev container, preserving the extension-managed certificate?",
+      uniqueDevCertCount(stale)
     ),
     { modal: true, detail },
     remove
@@ -280,21 +280,21 @@ async function cleanupCommand(): Promise<void> {
 
   for (const r of result.removed) {
     log(
-      `Cleanup: removed ${r.location} cert ${r.identifier} (${r.fullPath})`
+      `Cleanup: removed ${logLocationLabel(r.location)} ${r.identifier} (${r.fullPath})`
     );
   }
   for (const f of result.failed) {
     log(
-      `Cleanup: failed to remove ${f.artifact.location} cert ` +
+      `Cleanup: failed to remove ${logLocationLabel(f.artifact.location)} ` +
         `${f.artifact.identifier} (${f.artifact.fullPath}): ${f.error}`
     );
   }
 
   const summary = vscode.l10n.t(
-    "Dev Certs: Removed {0} other dev certificate artifact(s) from this dev container, preserving the extension-managed certificate{1}{2}.",
-    result.removed.length,
+    "Dev Certs: Removed {0} other dev certificate(s) from this dev container, preserving the extension-managed certificate{1}{2}.",
+    uniqueDevCertCount(result.removed),
     result.failed.length
-      ? vscode.l10n.t(" ({0} failed)", result.failed.length)
+      ? vscode.l10n.t(" ({0} file(s) failed)", result.failed.length)
       : "",
     result.rehashedTrustDir
       ? vscode.l10n.t(", container trust directory rehashed")
@@ -304,6 +304,20 @@ async function cleanupCommand(): Promise<void> {
     vscode.window.showWarningMessage(summary);
   } else {
     vscode.window.showInformationMessage(summary);
+  }
+}
+
+// Output-channel labels keep per-location detail (the engineering audit
+// trail), with the trust-dir disambiguated from generic OpenSSL trust
+// directories. The internal `ArtifactLocation` strings stay unchanged.
+function logLocationLabel(loc: ArtifactLocation): string {
+  switch (loc) {
+    case "my-store":
+      return "my-store";
+    case "root-store":
+      return "root-store";
+    case "trust-dir":
+      return "aspnet-dev-certs-trust";
   }
 }
 
@@ -318,51 +332,60 @@ function formatStaleSummary(stale: StaleArtifact[]): string {
     `Multiple dev certs detected alongside the extension-managed cert in container: ` +
     `my-store=${counts["my-store"]}, ` +
     `root-store=${counts["root-store"]}, ` +
-    `trust-dir=${counts["trust-dir"]}`
+    `aspnet-dev-certs-trust=${counts["trust-dir"]}`
   );
 }
 
-// Cap per-location rows in the modal so a pathological store (someone with
-// dozens of accumulated dev certs) stays scannable. Anything beyond the cap
-// is summarised; the full enumeration still goes to the output channel.
-const MAX_MODAL_ROWS_PER_LOCATION = 8;
+// Extract the dev cert thumbprint embedded in a trust-dir PEM filename
+// (`aspnetcore-localhost-{thumbprint}.pem`). Returns null for filenames
+// that don't match — those entries fall back to displaying their raw
+// identifier so we never silently lose them from the modal.
+const PEM_THUMBPRINT_RE = /^aspnetcore-localhost-([A-F0-9]{40})\.pem$/i;
+function trustDirPemThumbprint(filename: string): string | null {
+  const m = PEM_THUMBPRINT_RE.exec(filename);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/**
+ * Dedup-by-thumbprint view of the candidate / removed artifact set. The
+ * cleanup walks three locations under the hood but the dialog speaks in
+ * certificates — each thumbprint counts once regardless of whether it
+ * has a PFX in `my`, a PFX in `root`, and a PEM in the trust dir.
+ */
+function uniqueDevCertIds(artifacts: readonly StaleArtifact[]): string[] {
+  const ids = new Set<string>();
+  for (const a of artifacts) {
+    if (a.location === "trust-dir") {
+      ids.add(trustDirPemThumbprint(a.identifier) ?? a.identifier);
+    } else {
+      ids.add(a.identifier);
+    }
+  }
+  return Array.from(ids).sort();
+}
+
+function uniqueDevCertCount(artifacts: readonly StaleArtifact[]): number {
+  return uniqueDevCertIds(artifacts).length;
+}
+
+// Cap the modal at a single flat list of thumbprints. Pathological
+// stores (dozens of accumulated dev certs) get an "+N more" footer
+// pointing at the output channel for the full enumeration.
+const MAX_MODAL_ROWS = 12;
 
 function formatStaleDetail(stale: StaleArtifact[]): string {
-  const groups: Record<ArtifactLocation, StaleArtifact[]> = {
-    "my-store": [],
-    "root-store": [],
-    "trust-dir": [],
-  };
-  for (const s of stale) groups[s.location].push(s);
-
-  const labels: Record<ArtifactLocation, string> = {
-    "my-store": "Container .NET My store",
-    "root-store": "Container .NET Root store",
-    "trust-dir": "Container OpenSSL trust directory",
-  };
-
-  const sections: string[] = [];
-  for (const loc of Object.keys(groups) as ArtifactLocation[]) {
-    const items = groups[loc];
-    if (items.length === 0) continue;
-    const shown = items.slice(0, MAX_MODAL_ROWS_PER_LOCATION);
-    // PFX `identifier` is the 40-hex SHA-1 thumbprint (matches what
-    // `dotnet dev-certs https --check --verbose` reports); PEM
-    // `identifier` is the full `aspnetcore-localhost-{thumb}.pem`
-    // filename. Both are scannable and tie back to the underlying file
-    // without needing to embed the full path.
-    const lines = shown.map((s) => `  ${s.identifier}`);
-    if (items.length > shown.length) {
-      lines.push(
-        vscode.l10n.t(
-          "  …and {0} more (see the Dev Container Dev Certs output for the full list)",
-          items.length - shown.length
-        )
-      );
-    }
-    sections.push(`${labels[loc]}:\n${lines.join("\n")}`);
+  const ids = uniqueDevCertIds(stale);
+  const shown = ids.slice(0, MAX_MODAL_ROWS);
+  const lines = shown.map((id) => `  ${id}`);
+  if (ids.length > shown.length) {
+    lines.push(
+      vscode.l10n.t(
+        "  …and {0} more (see the Dev Container Dev Certs output for the full list)",
+        ids.length - shown.length
+      )
+    );
   }
-  return sections.join("\n\n");
+  return lines.join("\n");
 }
 
 async function tryGetBundle(
