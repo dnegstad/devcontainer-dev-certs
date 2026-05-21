@@ -184,7 +184,7 @@ async function detectStaleAndPromptCleanup(
   const dismiss = vscode.l10n.t("Don't Show Again");
   const choice = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Detected {0} stale ASP.NET dev certificate artifact(s) across the .NET My/Root stores and OpenSSL trust dir. Leftovers can cause .NET/Aspire to pick the wrong certificate.",
+      "Dev Certs: Detected {0} stale dev certificate artifact(s) across the .NET My/Root stores and OpenSSL trust dir. Leftovers can cause .NET/Aspire to pick the wrong certificate.",
       stale.length
     ),
     cleanup,
@@ -229,7 +229,7 @@ async function cleanupCommand(): Promise<void> {
   if (stale.length === 0) {
     vscode.window.showInformationMessage(
       vscode.l10n.t(
-        "Dev Certs: No stale ASP.NET dev certificate artifacts were found."
+        "Dev Certs: No stale dev certificate artifacts were found."
       )
     );
     return;
@@ -239,7 +239,7 @@ async function cleanupCommand(): Promise<void> {
   const detail = formatStaleDetail(stale);
   const confirm = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Remove {0} stale ASP.NET dev certificate artifact(s)?",
+      "Dev Certs: Remove {0} stale dev certificate artifact(s)?",
       stale.length
     ),
     { modal: true, detail },
