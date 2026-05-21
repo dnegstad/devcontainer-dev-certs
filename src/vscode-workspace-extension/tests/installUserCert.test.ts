@@ -180,6 +180,29 @@ describe.skipIf(process.platform === "win32")("installDotNetDevCert", () => {
     expect(fs.existsSync(stalePath)).toBe(true);
   });
 
+  it("is idempotent when called twice with the same thumbprint", () => {
+    // Reload-of-window flow: `isCertInstalled` may already short-circuit
+    // upstream, but the install function itself must not corrupt state
+    // when invoked twice in a row — same single PFX in each store, exactly
+    // one PEM in the trust dir, exactly one {hash}.0 symlink pointing at
+    // it.
+    installDotNetDevCert(devMaterial("DEADBEEF"));
+    installDotNetDevCert(devMaterial("DEADBEEF"));
+
+    expect(fs.readdirSync(storeDir)).toEqual(["DEADBEEF.pfx"]);
+    expect(fs.readdirSync(rootStoreDir)).toEqual(["DEADBEEF.pfx"]);
+
+    const trustEntries = fs.readdirSync(trustDir);
+    const pems = trustEntries.filter((f) => f.endsWith(".pem"));
+    const links = trustEntries.filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+    expect(pems).toEqual(["aspnetcore-localhost-DEADBEEF.pem"]);
+    expect(links).toHaveLength(1);
+    expect(links[0].endsWith(".0")).toBe(true);
+    expect(fs.readlinkSync(path.join(trustDir, links[0]))).toBe(
+      "aspnetcore-localhost-DEADBEEF.pem"
+    );
+  });
+
   // The "leaves pre-existing hash symlinks for unrelated PEMs untouched"
   // invariant is covered at the unit level in
   // `tests/rehash.test.ts > leaves pre-existing hash symlinks for OTHER

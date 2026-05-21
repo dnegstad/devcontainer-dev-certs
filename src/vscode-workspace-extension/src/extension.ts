@@ -12,6 +12,7 @@ import {
   cleanupStaleDevCerts,
   findStaleDevCerts,
   type ArtifactLocation,
+  type CleanupResult,
   type StaleDevCert,
 } from "./cleanupCerts";
 import { parseExtraCertDestinations } from "./util/destinations";
@@ -302,16 +303,7 @@ function performCleanup(stale: readonly StaleDevCert[]): void {
     );
   }
 
-  const summary = vscode.l10n.t(
-    "Dev Certs: Removed {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate{1}{2}.",
-    result.removedCerts.length,
-    result.failed.length
-      ? vscode.l10n.t(" ({0} file(s) failed)", result.failed.length)
-      : "",
-    result.rehashedTrustDir
-      ? vscode.l10n.t(", container trust directory rehashed")
-      : ""
-  );
+  const summary = formatCleanupSummary(result);
   if (result.failed.length > 0) {
     vscode.window.showWarningMessage(summary);
   } else {
@@ -337,6 +329,24 @@ function logStaleCandidates(stale: readonly StaleDevCert[]): void {
       log(`  ${s.thumbprint} ${logLocationLabel(a.location)}: ${a.fullPath}`);
     }
   }
+}
+
+/**
+ * Render the user-visible summary line for a completed cleanup. Pure —
+ * extracted so unit tests can drive the singular/plural and conditional
+ * suffix branches without spinning up the prompt flow.
+ */
+export function formatCleanupSummary(result: CleanupResult): string {
+  return vscode.l10n.t(
+    "Dev Certs: Removed {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate{1}{2}.",
+    result.removedCerts.length,
+    result.failed.length
+      ? vscode.l10n.t(" ({0} file(s) failed)", result.failed.length)
+      : "",
+    result.rehashedTrustDir
+      ? vscode.l10n.t(", container trust directory rehashed")
+      : ""
+  );
 }
 
 // Output-channel labels keep per-location detail (the engineering audit

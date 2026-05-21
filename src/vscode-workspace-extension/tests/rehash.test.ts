@@ -121,6 +121,67 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
     expect(fs.readlinkSync(path.join(dir, slotsAfter[0]))).toBe("new.pem");
   });
 
+  it("skips a slot occupied by a non-symlink and uses the next one", () => {
+    // A regular file sitting at {hash}.0 — not ours, never ours to delete.
+    // Function must move on, allocate {hash}.1 for our PEM, and leave the
+    // squatter intact.
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, "mycert.pem"), SAMPLE_PEM_A);
+    // We don't know the exact hash without exposing computeSubjectHash, so
+    // pre-allocate the slot indirectly: install once, read the slot name,
+    // delete the symlink, drop a regular file in its place.
+    ensureHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A);
+    const slot0 = listHashSymlinks(dir)[0];
+    expect(slot0.endsWith(".0")).toBe(true);
+    fs.unlinkSync(path.join(dir, slot0));
+    fs.writeFileSync(path.join(dir, slot0), "not-a-symlink");
+
+    ensureHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A);
+
+    // {hash}.0 stays as our planted regular file; the new symlink lands
+    // in {hash}.1. `listHashSymlinks` filters by filename only, so further
+    // narrow to entries that are actually symbolic links to avoid
+    // counting the squatter.
+    expect(fs.lstatSync(path.join(dir, slot0)).isFile()).toBe(true);
+    expect(fs.lstatSync(path.join(dir, slot0)).isSymbolicLink()).toBe(false);
+    const actualSymlinks = listHashSymlinks(dir).filter((f) =>
+      fs.lstatSync(path.join(dir, f)).isSymbolicLink()
+    );
+    expect(actualSymlinks).toHaveLength(1);
+    expect(actualSymlinks[0]).toBe(slot0.replace(/\.0$/, ".1"));
+    expect(fs.readlinkSync(path.join(dir, actualSymlinks[0]))).toBe(
+      "mycert.pem"
+    );
+  });
+
+  it("returns silently when all 10 hash slots are taken by different PEMs", () => {
+    // The loop is a defensive bound; in practice you'd never see more than
+    // a couple of collisions on the same subject hash. But the cap is
+    // observable: when it's hit, the function no-ops without throwing and
+    // doesn't allocate slot 10+ (there's no slot 10 in c_rehash). Codify
+    // the contract.
+    const dir = tmp();
+    // Build 10 distinct PEM files whose c_rehash slot we don't control
+    // directly. Use the same content so they collide on subject hash; vary
+    // only the filename.
+    for (let i = 0; i < 10; i++) {
+      const name = `collide${i}.pem`;
+      fs.writeFileSync(path.join(dir, name), SAMPLE_PEM_A);
+      ensureHashSymlink(dir, name, SAMPLE_PEM_A);
+    }
+    const before = listHashSymlinks(dir);
+    expect(before).toHaveLength(10);
+
+    // 11th attempt — must NOT throw and must NOT create an 11th symlink.
+    fs.writeFileSync(path.join(dir, "overflow.pem"), SAMPLE_PEM_A);
+    expect(() =>
+      ensureHashSymlink(dir, "overflow.pem", SAMPLE_PEM_A)
+    ).not.toThrow();
+
+    const after = listHashSymlinks(dir);
+    expect(after).toEqual(before);
+  });
+
   it("leaves pre-existing hash symlinks for OTHER PEMs untouched", () => {
     const dir = tmp();
     // Pre-existing PEM the user (or a prior rotation) put in the trust dir,
