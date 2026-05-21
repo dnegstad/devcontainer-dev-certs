@@ -165,7 +165,7 @@ describe("WindowsCertificateStore.findExistingDevCert", () => {
           subjectCN: "localhost",
           notBefore: now.toISOString(),
           notAfter: exp.toISOString(),
-          reason: "private key not exportable (KeyExportPolicy=NonExportable)",
+          reason: "private key not exportable",
         },
         {
           // Expired — should NOT warn (silent skip).

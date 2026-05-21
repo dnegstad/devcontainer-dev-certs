@@ -78,22 +78,34 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     // Enumerate every dev-cert candidate in the configured My store, then
     // attempt to export each as a PBES2/AES PFX. We hand selection back to
     // shared TS so the version-byte tiebreaker logic stays in one place.
+    //
+    // The script stays inside the PS cert-provider surface and built-in
+    // cmdlets — no `New-Object System.*`, no explicit [System.X.Y.Z] type
+    // references, no .NET-specific property paths (e.g. CNG-only
+    // PrivateKey.Key.ExportPolicy). Properties accessed on the
+    // X509Certificate2 objects yielded by `Cert:\…` are the same surface
+    // the rest of the codebase already relies on (Thumbprint, Subject,
+    // NotBefore/NotAfter, HasPrivateKey, Extensions).
     const script = `
       $ErrorActionPreference = 'Stop'
       $oid = '${ASPNET_HTTPS_OID}'
-      $candidates = New-Object System.Collections.ArrayList
-      $skipped = New-Object System.Collections.ArrayList
+      $candidates = @()
+      $skipped = @()
       $certs = Get-ChildItem Cert:\\${this.storeLocation}\\My | Where-Object {
         $_.Extensions | Where-Object { $_.Oid.Value -eq $oid }
       }
       foreach ($cert in $certs) {
         $thumb = $cert.Thumbprint
+        # Subject is a comma-separated RDN string ("CN=localhost, O=..."). Pull
+        # the first CN out via regex instead of GetNameInfo, which would need
+        # an explicit [System.Security.Cryptography.X509Certificates.X509NameType]
+        # type reference.
         $cn = $null
-        try { $cn = $cert.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } catch {}
+        if ($cert.Subject -match 'CN=([^,]+)') { $cn = $matches[1].Trim() }
         $nbf = $cert.NotBefore.ToUniversalTime().ToString('o')
         $exp = $cert.NotAfter.ToUniversalTime().ToString('o')
         if (-not $cert.HasPrivateKey) {
-          [void]$skipped.Add(@{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reason = 'no private key in store' })
+          $skipped += @{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reason = 'no private key in store' }
           continue
         }
         try {
@@ -103,24 +115,20 @@ export class WindowsCertificateStore extends BaseCertificateStore {
           # produces a legacy PKCS#12 PBE format that our pkijs-based parser
           # deliberately rejects (see cert/pfx.ts).
           Export-PfxCertificate -Cert $cert -FilePath $tmpPfx -Password $pwd -CryptoAlgorithmOption AES256_SHA256 | Out-Null
-          [void]$candidates.Add(@{ thumbprint = $thumb; pfxPath = $tmpPfx; subjectCN = $cn; notBefore = $nbf; notAfter = $exp })
+          $candidates += @{ thumbprint = $thumb; pfxPath = $tmpPfx; subjectCN = $cn; notBefore = $nbf; notAfter = $exp }
         } catch {
+          # No CNG / RSA-specific introspection here — that would mean
+          # touching .NET types beyond what the cert provider already
+          # surfaces. Message-string matching is intentionally coarse;
+          # the TS-side warning still names the underlying error when
+          # we can't classify it.
           $msg = $_.Exception.Message
-          # $cert.PrivateKey.Key.ExportPolicy resolves only for RSA/CNG-backed
-          # keys. Legacy CAPI keys and non-RSA algorithms surface the policy
-          # at a different path (or not at all) — we treat the lookup as
-          # best-effort and fall back to message-string matching when it
-          # throws or returns null.
-          $policy = $null
-          try { $policy = $cert.PrivateKey.Key.ExportPolicy } catch {}
-          if ($policy) {
-            $reason = "private key not exportable (KeyExportPolicy=$policy)"
-          } elseif ($msg -match 'not exportable' -or $msg -match 'cannot be exported') {
+          if ($msg -match 'not exportable' -or $msg -match 'cannot be exported') {
             $reason = 'private key not exportable'
           } else {
             $reason = "Export-PfxCertificate failed: $msg"
           }
-          [void]$skipped.Add(@{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reason = $reason })
+          $skipped += @{ thumbprint = $thumb; subjectCN = $cn; notBefore = $nbf; notAfter = $exp; reason = $reason }
         }
       }
       $payload = @{ candidates = $candidates; skipped = $skipped }
