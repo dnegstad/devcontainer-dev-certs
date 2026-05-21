@@ -1,8 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { execFileSync, spawnSync } from "child_process";
+import {
+  getDotNetRootStorePath,
+  getDotNetStorePath,
+} from "@devcontainer-dev-certs/shared";
 import {
   ASPNET_HTTPS_OID_DER,
   scanPfxForDevCertOid,
@@ -16,18 +19,19 @@ import {
  * about (alongside this extension's own `buildPfx`).
  *
  * Gated to CI:
- *   - `--trust` mutates the host's `~/.dotnet/corefx/cryptography/x509stores`
- *     and `~/.aspnet/dev-certs/trust` directories, so we don't want to
- *     stomp on a developer's real config when they `npm test` locally.
+ *   - `--trust` mutates the host's .NET store and OpenSSL trust
+ *     directories, so we don't want to stomp on a developer's real
+ *     config when they `npm test` locally.
  *   - `CI=true` is the GitHub Actions convention; the CI workflow
  *     installs .NET 10 SDK ahead of `npm test`.
  *
  * Exit-code handling:
- *   - `dotnet dev-certs https --trust` returns 4 on Linux when SSL_CERT_DIR
- *     doesn't include `~/.aspnet/dev-certs/trust` — "partial trust", but
- *     the .NET store + trust dir writes still happened. That's the only
- *     state we need for this scan, so 4 is treated as success here. Any
- *     other non-zero exit is a real failure and surfaces.
+ *   - `dotnet dev-certs https --trust` returns 4 on Linux when
+ *     SSL_CERT_DIR doesn't include the OpenSSL trust dir — "partial
+ *     trust", but the .NET store + trust dir writes still happened.
+ *     That's the only state we need for this scan, so 4 is treated as
+ *     success here. Any other non-zero exit is a real failure and
+ *     surfaces.
  */
 const inCi = process.env["CI"] === "true";
 
@@ -47,22 +51,10 @@ if (inCi) {
 }
 const ready = inCi && dotnetMajor >= 9;
 
-const dotnetMyStore = path.join(
-  os.homedir(),
-  ".dotnet",
-  "corefx",
-  "cryptography",
-  "x509stores",
-  "my"
-);
-const dotnetRootStore = path.join(
-  os.homedir(),
-  ".dotnet",
-  "corefx",
-  "cryptography",
-  "x509stores",
-  "root"
-);
+// Use the same path helpers production code uses so any future change
+// to the canonical .NET store locations propagates here automatically.
+const dotnetMyStore = getDotNetStorePath();
+const dotnetRootStore = getDotNetRootStorePath();
 
 const PFX_RE = /^[A-F0-9]{40}\.pfx$/i;
 
@@ -108,7 +100,7 @@ afterAll(() => {
 describe.skipIf(!ready)(
   "scanPfxForDevCertOid against PFXes produced by `dotnet dev-certs https --trust`",
   () => {
-    it("identifies the dev cert PFX in ~/.dotnet/.../x509stores/my/", () => {
+    it("identifies the dev cert PFX in the CurrentUser/My .NET store", () => {
       const candidates = listPfxes(dotnetMyStore);
       expect(
         candidates.length,
@@ -126,7 +118,7 @@ describe.skipIf(!ready)(
       ).toBeGreaterThan(0);
     });
 
-    it("identifies the dev cert PFX in ~/.dotnet/.../x509stores/root/", () => {
+    it("identifies the dev cert PFX in the CurrentUser/Root .NET store", () => {
       const candidates = listPfxes(dotnetRootStore);
       expect(
         candidates.length,
