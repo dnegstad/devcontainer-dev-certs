@@ -6,10 +6,12 @@ import { createDecipheriv, createHash, pbkdf2Sync } from "node:crypto";
  *
  *   a) plaintext (`id-data` ContentInfo, rare),
  *   b) PBES2-encrypted (PBKDF2-SHA-{1,256,384,512} + AES-{128,192,256}-CBC)
- *      — what this extension's host emits, and what modern `dotnet
- *      dev-certs https --export-path` emits on .NET 9+,
- *   c) PBE-SHA1-3DES encrypted (the historical `dotnet dev-certs https` /
- *      `Pkcs12Builder` default on .NET ≤8).
+ *      — what this extension's host emits, and what modern .NET's
+ *      `Pkcs12Builder` writes into `~/.dotnet/corefx/cryptography/x509stores`
+ *      on .NET 9+,
+ *   c) PBE-SHA1-3DES encrypted (the historical `Pkcs12Builder` default on
+ *      .NET ≤8 — still the format any pre-existing `dotnet dev-certs --trust`
+ *      run from an older SDK would have left in the .NET store).
  *
  * The scan tries each layer with the supplied password (empty by default,
  * which matches every dev cert PFX we care about) and is fail-closed: any
@@ -18,9 +20,9 @@ import { createDecipheriv, createHash, pbkdf2Sync } from "node:crypto";
  *
  * Older legacy schemes (PBE-SHA1-RC2-40, PBE-SHA1-2-key-3DES) are
  * intentionally NOT supported — Node's `crypto` doesn't expose RC2, and
- * 2-key 3DES hasn't been a modern `dotnet dev-certs` default for years.
- * A file encrypted with one of those schemes will fail closed and be
- * left in place rather than touched on guesswork.
+ * 2-key 3DES hasn't been a `Pkcs12Builder` default for years. A file
+ * encrypted with one of those schemes will fail closed and be left in
+ * place rather than touched on guesswork.
  */
 
 export const ASPNET_HTTPS_OID_DER = Buffer.from([
