@@ -4,7 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import type * as Shared from "@devcontainer-dev-certs/shared";
 import type { CertBundleV3, CertMaterialV3 } from "@devcontainer-dev-certs/shared";
-import { ASPNET_HTTPS_OID_DER } from "../src/util/devCertDetect";
+import { ASPNET_HTTPS_OID_DER } from "../src/util/pkcs12DevCertScan";
 
 let storeDir: string;
 let rootStoreDir: string;

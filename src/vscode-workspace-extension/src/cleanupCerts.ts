@@ -8,7 +8,7 @@ import {
   getPemFileNameForUser,
 } from "@devcontainer-dev-certs/shared";
 import type { CertBundleV3 } from "@devcontainer-dev-certs/shared";
-import { isDotNetDevCertPfx } from "./util/devCertDetect";
+import { scanPfxForDevCertOid } from "./util/pkcs12DevCertScan";
 import { rehashDirectory } from "./util/rehash";
 
 /**
@@ -121,7 +121,11 @@ function scanPfxStore(ctx: PfxScanContext): StaleArtifact[] {
     } catch {
       continue;
     }
-    if (!isDotNetDevCertPfx(bytes)) continue;
+    // Dev cert PFXes in the store dirs are passwordless; the scanner
+    // decrypts the cert bag (PBES2 or PBE-SHA1-3DES) and looks for the
+    // ASP.NET HTTPS OID in the plaintext. Fail-closed means anything
+    // we can't identify stays put.
+    if (!scanPfxForDevCertOid(bytes, "")) continue;
     stale.push({ location: ctx.location, fullPath, identifier: thumb });
   }
   return stale;
