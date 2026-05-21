@@ -122,9 +122,9 @@ export function findStaleDevCerts(
       continue;
     }
     // Dev cert PFXes in the store dirs are passwordless; the scanner
-    // decrypts the cert bag (PBES2 or PBE-SHA1-3DES) and looks for the
-    // ASP.NET HTTPS OID in the plaintext. Fail-closed means anything we
-    // can't identify stays put.
+    // decrypts the PBES2/AES cert bag and looks for the ASP.NET HTTPS
+    // OID in the plaintext. Fail-closed means anything we can't
+    // identify stays put.
     if (!scanPfxForDevCertOid(bytes, "")) continue;
 
     const artifacts: StaleArtifact[] = [
