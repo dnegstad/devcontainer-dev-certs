@@ -262,4 +262,41 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
     expect(result.rehashedTrustDir).toBe(false);
     expect(fs.existsSync(path.join(trustDir, managedPem))).toBe(true);
   });
+
+  // Regression for the orphan-on-partial-failure bug: if a downstream file
+  // (Root PFX or trust-dir PEM) can't be unlinked, the My-store PFX MUST
+  // survive so the cert stays discoverable on the next cleanup attempt.
+  // Otherwise the orphan keeps .NET-trusting (Root) / OpenSSL-trusting
+  // (trust dir) the legacy cert with no in-extension recovery path.
+  it("keeps the My PFX when a downstream Root unlink fails — cert remains discoverable", () => {
+    fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
+    // Make the Root candidate a non-empty directory so `unlinkSync` throws
+    // (EISDIR / ENOTEMPTY) without needing chmod permissions — works as
+    // root in CI test containers.
+    const rootCandidate = path.join(rootStoreDir, `${STALE_THUMB}.pfx`);
+    fs.mkdirSync(rootCandidate);
+    fs.writeFileSync(path.join(rootCandidate, "blocker"), "x");
+    const stalePem = `aspnetcore-localhost-${STALE_THUMB}.pem`;
+    fs.writeFileSync(
+      path.join(trustDir, stalePem),
+      "-----BEGIN CERTIFICATE-----\nSTALE\n-----END CERTIFICATE-----\n"
+    );
+
+    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    expect(stale).toHaveLength(1);
+    const result = cleanupStaleDevCerts(stale);
+
+    expect(result.removedCerts).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].artifact.location).toBe("root-store");
+
+    // My PFX is preserved → next cleanup pass can re-discover the cert and
+    // retry the downstream sweep after the user fixes the failing path.
+    expect(fs.existsSync(path.join(storeDir, `${STALE_THUMB}.pfx`))).toBe(true);
+    // Pre-My downstream files we did manage to delete are gone (PEM removed
+    // before the Root failure was discovered in iteration order doesn't
+    // matter — what matters is that the My sentinel is preserved).
+    // The blocker dir is still there because the unlink failed.
+    expect(fs.existsSync(rootCandidate)).toBe(true);
+  });
 });

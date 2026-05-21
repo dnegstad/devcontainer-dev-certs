@@ -172,8 +172,17 @@ export interface CleanupResult {
 }
 
 /**
- * Delete every artifact for every stale dev cert. Rehashes the trust dir
- * if any PEM was actually removed.
+ * Delete every artifact for every stale dev cert. The My-store PFX is the
+ * discovery sentinel for `findStaleDevCerts` — if it's gone, the cert is
+ * invisible to subsequent runs. To keep partial-failure recoverable, we
+ * unlink the Root and trust-dir files FIRST and only remove the My PFX
+ * once every downstream file is gone (or was absent). If any downstream
+ * unlink fails (read-only mount, EACCES, etc.) the cert keeps its My
+ * entry on disk and remains discoverable on the next retry — at worst
+ * .NET / Aspire still see the legacy cert, never an orphan trust entry
+ * with no on-disk source of truth.
+ *
+ * Rehashes the trust dir at the end if any PEM was actually removed.
  */
 export function cleanupStaleDevCerts(
   stale: readonly StaleDevCert[]
@@ -183,18 +192,36 @@ export function cleanupStaleDevCerts(
   let removedAnyTrustPem = false;
 
   for (const cert of stale) {
-    let myStoreRemoved = false;
-    for (const artifact of cert.artifacts) {
+    let myArtifact: StaleArtifact | null = null;
+    const downstream: StaleArtifact[] = [];
+    for (const a of cert.artifacts) {
+      if (a.location === "my-store") myArtifact = a;
+      else downstream.push(a);
+    }
+
+    let downstreamOk = true;
+    for (const artifact of downstream) {
       try {
         fs.unlinkSync(artifact.fullPath);
-        if (artifact.location === "my-store") myStoreRemoved = true;
         if (artifact.location === "trust-dir") removedAnyTrustPem = true;
       } catch (err: unknown) {
+        downstreamOk = false;
         const message = err instanceof Error ? err.message : String(err);
         failed.push({ artifact, error: message });
       }
     }
-    if (myStoreRemoved) removedCerts.push(cert);
+
+    // Skip My deletion when any downstream file remains — the cert must
+    // stay discoverable on the next run.
+    if (!downstreamOk || !myArtifact) continue;
+
+    try {
+      fs.unlinkSync(myArtifact.fullPath);
+      removedCerts.push(cert);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      failed.push({ artifact: myArtifact, error: message });
+    }
   }
 
   let rehashedTrustDir = false;
