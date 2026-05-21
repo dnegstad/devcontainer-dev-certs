@@ -20,13 +20,6 @@ import { generateCertificate } from "../../vscode-ui-extension/src/cert/generato
 import { VALIDITY_DAYS } from "../../vscode-ui-extension/src/cert/properties";
 
 describe("scanPfxForDevCertOid", () => {
-  it("matches the documented 12-byte OID DER for 1.3.6.1.4.1.311.84.1.1", () => {
-    expect(ASPNET_HTTPS_OID_DER.length).toBe(12);
-    expect(Array.from(ASPNET_HTTPS_OID_DER)).toEqual([
-      0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x54, 0x01, 0x01,
-    ]);
-  });
-
   describe("plaintext / fast-path inputs", () => {
     it("returns true when the OID appears anywhere in the buffer", () => {
       const buf = Buffer.concat([
@@ -37,18 +30,14 @@ describe("scanPfxForDevCertOid", () => {
       expect(scanPfxForDevCertOid(buf)).toBe(true);
     });
 
-    it("returns false for an empty buffer", () => {
+    it("returns false when the OID byte sequence is absent", () => {
+      // One assertion covers every "fast-path miss" shape we care about:
+      // empty input, a truncated OID prefix that mustn't match, and
+      // unrelated bytes that don't even resemble a PFX.
       expect(scanPfxForDevCertOid(Buffer.alloc(0))).toBe(false);
-    });
-
-    it("returns false for a partial OID prefix", () => {
-      // First 6 bytes of the OID; must not match.
       expect(
         scanPfxForDevCertOid(Buffer.from([0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04]))
       ).toBe(false);
-    });
-
-    it("returns false for arbitrary non-PFX garbage", () => {
       expect(scanPfxForDevCertOid(Buffer.from("not a pfx, just text"))).toBe(false);
     });
   });

@@ -109,6 +109,16 @@ describe.skipIf(!ready)(
 
       const positives = candidates.filter((f) => {
         const bytes = fs.readFileSync(path.join(dotnetMyStore, f));
+        // Modern .NET encrypts the cert bag (PBES2/AES). Log it when a
+        // candidate happens to carry the OID in plaintext — we still
+        // pass via the fast path, but the decrypt path didn't actually
+        // run on this runner.
+        if (bytes.includes(ASPNET_HTTPS_OID_DER)) {
+          console.log(
+            `[note] PFX ${f} carried the OID in plaintext — scanner took ` +
+              `the fast path, not the decrypt path.`
+          );
+        }
         return scanPfxForDevCertOid(bytes);
       });
       expect(
@@ -130,24 +140,6 @@ describe.skipIf(!ready)(
         return scanPfxForDevCertOid(bytes);
       });
       expect(positives.length).toBeGreaterThan(0);
-    });
-
-    it("usually exercises the decrypt path, not the plaintext fast path", () => {
-      // Modern .NET's PFX export encrypts the cert bag with PBES2/AES. If a
-      // future runtime stops encrypting it, the fast path catches the OID
-      // directly — still a pass, but we want a log so the test author knows
-      // the decrypt path wasn't actually exercised on this runner.
-      const candidates = listPfxes(dotnetMyStore);
-      const pick = candidates[0];
-      if (!pick) return;
-      const bytes = fs.readFileSync(path.join(dotnetMyStore, pick));
-      if (bytes.includes(ASPNET_HTTPS_OID_DER)) {
-        console.log(
-          `[note] PFX ${pick} in the .NET My store carried the OID in ` +
-            `plaintext — scanner took the fast path, not the decrypt path.`
-        );
-      }
-      expect(scanPfxForDevCertOid(bytes)).toBe(true);
     });
   }
 );

@@ -84,11 +84,7 @@ describe("bundleHasManagedDevCert", () => {
     expect(bundleHasManagedDevCert(managedBundle())).toBe(true);
   });
 
-  it("is false for an empty bundle (e.g., host failed to return anything)", () => {
-    expect(bundleHasManagedDevCert({ certs: [] })).toBe(false);
-  });
-
-  it("is false when the bundle only carries user certs", () => {
+  it("is false when no dotnet-dev cert is in the bundle (empty or user-cert-only)", () => {
     const userOnly: CertBundleV3 = {
       certs: [
         {
@@ -101,6 +97,7 @@ describe("bundleHasManagedDevCert", () => {
         },
       ],
     };
+    expect(bundleHasManagedDevCert({ certs: [] })).toBe(false);
     expect(bundleHasManagedDevCert(userOnly)).toBe(false);
   });
 
@@ -152,11 +149,10 @@ describe.skipIf(process.platform === "win32")("buildManagedMyStoreThumbprints", 
 });
 
 describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
-  it("returns empty when the My store is empty", () => {
+  it("returns empty when the My store directory is missing or empty", () => {
+    // beforeEach left us with an empty My store; first call exercises
+    // the "exists but contains nothing" branch.
     expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
-  });
-
-  it("returns empty when the My store directory is missing entirely", () => {
     fs.rmSync(storeDir, { recursive: true });
     expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
   });
