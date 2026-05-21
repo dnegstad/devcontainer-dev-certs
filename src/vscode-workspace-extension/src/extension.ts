@@ -7,12 +7,12 @@ import {
   writeExtraDestination,
 } from "./certInstaller";
 import {
-  buildManagedSets,
+  buildManagedMyStoreThumbprints,
   bundleHasManagedDevCert,
-  cleanupStaleDevCertArtifacts,
-  findStaleDevCertArtifacts,
+  cleanupStaleDevCerts,
+  findStaleDevCerts,
   type ArtifactLocation,
-  type StaleArtifact,
+  type StaleDevCert,
 } from "./cleanupCerts";
 import { parseExtraCertDestinations } from "./util/destinations";
 import { ensureSslCertDir } from "./util/sslCertDir";
@@ -182,17 +182,20 @@ async function detectStaleAndPromptCleanup(
   // would offer to delete every dev cert in the container.
   if (!bundleHasManagedDevCert(bundle)) return;
 
-  const stale = findStaleDevCertArtifacts(buildManagedSets(bundle));
+  const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
   if (stale.length === 0) return;
 
-  log(formatStaleSummary(stale));
+  log(
+    `Multiple dev certs detected alongside the extension-managed cert in ` +
+      `container's CurrentUser\\My store: ${stale.length}`
+  );
 
   const cleanup = vscode.l10n.t("Clean Up");
   const dismiss = vscode.l10n.t("Don't Show Again");
   const choice = await vscode.window.showWarningMessage(
     vscode.l10n.t(
       "Dev Certs: Detected {0} other dev certificate(s) alongside the extension-managed certificate in this Dev Container. Cleaning them up preserves the extension-managed certificate so .NET/Aspire reliably pick it for TLS.",
-      uniqueDevCertCount(stale)
+      stale.length
     ),
     cleanup,
     dismiss
@@ -245,8 +248,7 @@ async function cleanupCommand(): Promise<void> {
     return;
   }
 
-  const managed = buildManagedSets(bundle);
-  const stale = findStaleDevCertArtifacts(managed);
+  const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
   if (stale.length === 0) {
     vscode.window.showInformationMessage(
       vscode.l10n.t(
@@ -256,12 +258,18 @@ async function cleanupCommand(): Promise<void> {
     return;
   }
 
-  // Log the full per-file candidate list before prompting — the dialog
-  // shows a cert-centric (deduped-by-thumbprint) view, but the output
+  // Log the full per-cert/per-file candidate list before prompting — the
+  // dialog speaks in certificates (one row per thumbprint), but the output
   // channel keeps every underlying file for engineering audit.
-  log(`Cleanup: ${stale.length} file(s) to remove across the dev cert stores:`);
+  const totalFiles = stale.reduce((n, c) => n + c.artifacts.length, 0);
+  log(
+    `Cleanup: ${stale.length} other dev cert(s) in CurrentUser\\My; ` +
+      `${totalFiles} associated file(s) to remove:`
+  );
   for (const s of stale) {
-    log(`  ${logLocationLabel(s.location)} ${s.identifier} (${s.fullPath})`);
+    for (const a of s.artifacts) {
+      log(`  ${s.thumbprint} ${logLocationLabel(a.location)}: ${a.fullPath}`);
+    }
   }
 
   const remove = vscode.l10n.t("Remove");
@@ -269,19 +277,21 @@ async function cleanupCommand(): Promise<void> {
   const confirm = await vscode.window.showWarningMessage(
     vscode.l10n.t(
       "Dev Certs: Remove {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate?",
-      uniqueDevCertCount(stale)
+      stale.length
     ),
     { modal: true, detail },
     remove
   );
   if (confirm !== remove) return;
 
-  const result = cleanupStaleDevCertArtifacts(managed);
+  const result = cleanupStaleDevCerts(stale);
 
-  for (const r of result.removed) {
-    log(
-      `Cleanup: removed ${logLocationLabel(r.location)} ${r.identifier} (${r.fullPath})`
-    );
+  for (const cert of result.removedCerts) {
+    for (const a of cert.artifacts) {
+      log(
+        `Cleanup: removed ${cert.thumbprint} ${logLocationLabel(a.location)}: ${a.fullPath}`
+      );
+    }
   }
   for (const f of result.failed) {
     log(
@@ -292,7 +302,7 @@ async function cleanupCommand(): Promise<void> {
 
   const summary = vscode.l10n.t(
     "Dev Certs: Removed {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate{1}{2}.",
-    uniqueDevCertCount(result.removed),
+    result.removedCerts.length,
     result.failed.length
       ? vscode.l10n.t(" ({0} file(s) failed)", result.failed.length)
       : "",
@@ -321,67 +331,20 @@ function logLocationLabel(loc: ArtifactLocation): string {
   }
 }
 
-function formatStaleSummary(stale: StaleArtifact[]): string {
-  const counts: Record<ArtifactLocation, number> = {
-    "my-store": 0,
-    "root-store": 0,
-    "trust-dir": 0,
-  };
-  for (const s of stale) counts[s.location]++;
-  return (
-    `Multiple dev certs detected alongside the extension-managed cert in container: ` +
-    `my-store=${counts["my-store"]}, ` +
-    `root-store=${counts["root-store"]}, ` +
-    `aspnet-dev-certs-trust=${counts["trust-dir"]}`
-  );
-}
-
-// Extract the dev cert thumbprint embedded in a trust-dir PEM filename
-// (`aspnetcore-localhost-{thumbprint}.pem`). Returns null for filenames
-// that don't match — those entries fall back to displaying their raw
-// identifier so we never silently lose them from the modal.
-const PEM_THUMBPRINT_RE = /^aspnetcore-localhost-([A-F0-9]{40})\.pem$/i;
-function trustDirPemThumbprint(filename: string): string | null {
-  const m = PEM_THUMBPRINT_RE.exec(filename);
-  return m ? m[1].toUpperCase() : null;
-}
-
-/**
- * Dedup-by-thumbprint view of the candidate / removed artifact set. The
- * cleanup walks three locations under the hood but the dialog speaks in
- * certificates — each thumbprint counts once regardless of whether it
- * has a PFX in `my`, a PFX in `root`, and a PEM in the trust dir.
- */
-function uniqueDevCertIds(artifacts: readonly StaleArtifact[]): string[] {
-  const ids = new Set<string>();
-  for (const a of artifacts) {
-    if (a.location === "trust-dir") {
-      ids.add(trustDirPemThumbprint(a.identifier) ?? a.identifier);
-    } else {
-      ids.add(a.identifier);
-    }
-  }
-  return Array.from(ids).sort();
-}
-
-function uniqueDevCertCount(artifacts: readonly StaleArtifact[]): number {
-  return uniqueDevCertIds(artifacts).length;
-}
-
-// Cap the modal at a single flat list of thumbprints. Pathological
-// stores (dozens of accumulated dev certs) get an "+N more" footer
-// pointing at the output channel for the full enumeration.
+// Cap the modal at a flat list of thumbprints. Pathological My stores
+// (dozens of accumulated dev certs) get an "+N more" footer pointing at
+// the output channel for the full enumeration.
 const MAX_MODAL_ROWS = 12;
 
-function formatStaleDetail(stale: StaleArtifact[]): string {
-  const ids = uniqueDevCertIds(stale);
-  const shown = ids.slice(0, MAX_MODAL_ROWS);
-  const lines = shown.map((id) => `  ${id}`);
-  if (ids.length > shown.length) {
+function formatStaleDetail(stale: readonly StaleDevCert[]): string {
+  const thumbs = stale.map((s) => s.thumbprint).sort();
+  const shown = thumbs.slice(0, MAX_MODAL_ROWS);
+  const lines = shown.map((t) => `  ${t}`);
+  if (thumbs.length > shown.length) {
     lines.push(
       vscode.l10n.t(
         "  …and {0} more (see the Dev Container Dev Certs output for the full list)",
-        ids.length - shown.length
+        thumbs.length - shown.length
       )
     );
   }

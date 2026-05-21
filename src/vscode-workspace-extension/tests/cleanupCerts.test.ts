@@ -21,10 +21,10 @@ vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
 });
 
 import {
-  buildManagedSets,
+  buildManagedMyStoreThumbprints,
   bundleHasManagedDevCert,
-  cleanupStaleDevCertArtifacts,
-  findStaleDevCertArtifacts,
+  cleanupStaleDevCerts,
+  findStaleDevCerts,
 } from "../src/cleanupCerts";
 
 const cleanupDirs: string[] = [];
@@ -46,10 +46,11 @@ afterEach(() => {
 // 40-character SHA-1 hex thumbprints for tests.
 const MANAGED_THUMB = "A".repeat(40);
 const STALE_THUMB = "B".repeat(40);
-const OTHER_STALE_THUMB = "C".repeat(40);
+const ORPHAN_THUMB = "C".repeat(40);
 
 function devCertPfx(): Buffer {
-  // Any buffer that contains the OID byte run satisfies isDotNetDevCertPfx.
+  // Any buffer that contains the OID byte run satisfies scanPfxForDevCertOid's
+  // plaintext fast path.
   return Buffer.concat([
     Buffer.from("PFXHEADER"),
     ASPNET_HTTPS_OID_DER,
@@ -104,32 +105,24 @@ describe("bundleHasManagedDevCert", () => {
   });
 
   // Regression guard for the "generation disabled" scenario: without this
-  // check, the cleanup command would classify every dev cert on disk as
+  // check, the cleanup command would classify every dev cert in My as
   // "other" because nothing is "ours" and would offer to delete them all.
-  // The two cases below codify why the guard is needed — both expectations
-  // assert findStaleDevCertArtifacts's CURRENT behavior so a regression in
-  // either the helper OR the scanner is visible.
-  it("guards against the bug it exists for: empty-managed scan would flag every dev cert", () => {
+  it("guards against the bug it exists for: empty-managed scan flags every dev cert in My", () => {
     fs.writeFileSync(path.join(storeDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
-    const empty = buildManagedSets({ certs: [] });
-    // Without the bundleHasManagedDevCert guard wired into the caller, the
-    // scanner happily flags BOTH PFXes as stale — including the one a
-    // generation-disabled user might actually be relying on.
-    const stale = findStaleDevCertArtifacts(empty);
+    const empty = buildManagedMyStoreThumbprints({ certs: [] });
+    const stale = findStaleDevCerts(empty);
     expect(stale.length).toBe(2);
   });
 });
 
-describe.skipIf(process.platform === "win32")("buildManagedSets", () => {
-  it("includes the dotnet-dev cert in all three locations", () => {
-    const m = buildManagedSets(managedBundle());
-    expect(m.myStoreThumbprints.has(MANAGED_THUMB)).toBe(true);
-    expect(m.rootStoreThumbprints.has(MANAGED_THUMB)).toBe(true);
-    expect(m.trustDirPemFileNames.has(`aspnetcore-localhost-${MANAGED_THUMB}.pem`)).toBe(true);
+describe.skipIf(process.platform === "win32")("buildManagedMyStoreThumbprints", () => {
+  it("includes the dotnet-dev cert", () => {
+    const m = buildManagedMyStoreThumbprints(managedBundle());
+    expect(m.has(MANAGED_THUMB)).toBe(true);
   });
 
-  it("only adds a user cert to the my-store set when opted in AND bytes are present", () => {
+  it("only adds a user cert when opted in AND store bytes are present", () => {
     const base: CertMaterialV3 = {
       kind: "user",
       name: "corp",
@@ -138,16 +131,14 @@ describe.skipIf(process.platform === "win32")("buildManagedSets", () => {
       trustInContainer: false,
       installToDotNetStore: false,
     };
+    expect(buildManagedMyStoreThumbprints({ certs: [base] }).size).toBe(0);
     expect(
-      buildManagedSets({ certs: [base] }).myStoreThumbprints.size
-    ).toBe(0);
-    expect(
-      buildManagedSets({
+      buildManagedMyStoreThumbprints({
         certs: [{ ...base, installToDotNetStore: true }],
-      }).myStoreThumbprints.size
+      }).size
     ).toBe(0);
     expect(
-      buildManagedSets({
+      buildManagedMyStoreThumbprints({
         certs: [
           {
             ...base,
@@ -155,113 +146,77 @@ describe.skipIf(process.platform === "win32")("buildManagedSets", () => {
             dotNetStorePfxBase64: Buffer.from("X").toString("base64"),
           },
         ],
-      }).myStoreThumbprints.has(STALE_THUMB)
-    ).toBe(true);
-  });
-
-  it("only adds a user cert to the root-store set when trusted with rootPfxBase64", () => {
-    const base: CertMaterialV3 = {
-      kind: "user",
-      name: "corp",
-      thumbprint: STALE_THUMB,
-      pemCertBase64: Buffer.from("PEM").toString("base64"),
-      trustInContainer: false,
-      installToDotNetStore: false,
-    };
-    expect(
-      buildManagedSets({ certs: [base] }).rootStoreThumbprints.size
-    ).toBe(0);
-    expect(
-      buildManagedSets({
-        certs: [{ ...base, trustInContainer: true }],
-      }).rootStoreThumbprints.size
-    ).toBe(0);
-    expect(
-      buildManagedSets({
-        certs: [
-          {
-            ...base,
-            trustInContainer: true,
-            rootPfxBase64: Buffer.from("R").toString("base64"),
-          },
-        ],
-      }).rootStoreThumbprints.has(STALE_THUMB)
-    ).toBe(true);
-  });
-
-  it("adds a user cert PEM filename when trustInContainer is true", () => {
-    const cert: CertMaterialV3 = {
-      kind: "user",
-      name: "corp",
-      thumbprint: STALE_THUMB,
-      pemCertBase64: Buffer.from("PEM").toString("base64"),
-      trustInContainer: true,
-      installToDotNetStore: false,
-    };
-    expect(
-      buildManagedSets({ certs: [cert] }).trustDirPemFileNames.has("corp.pem")
+      }).has(STALE_THUMB)
     ).toBe(true);
   });
 });
 
-describe.skipIf(process.platform === "win32")("findStaleDevCertArtifacts", () => {
-  it("returns empty when all locations are empty", () => {
-    expect(findStaleDevCertArtifacts(buildManagedSets(managedBundle()))).toEqual([]);
+describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
+  it("returns empty when the My store is empty", () => {
+    expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
   });
 
-  it("returns empty when target directories are missing entirely", () => {
+  it("returns empty when the My store directory is missing entirely", () => {
     fs.rmSync(storeDir, { recursive: true });
-    fs.rmSync(rootStoreDir, { recursive: true });
-    fs.rmSync(trustDir, { recursive: true });
-    expect(findStaleDevCertArtifacts(buildManagedSets(managedBundle()))).toEqual([]);
+    expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
   });
 
-  it("detects stale dev-cert PFXs in the my-store but preserves managed and non-dev-cert files", () => {
+  it("detects stale dev-cert PFXs in My, preserves managed and non-dev-cert files", () => {
     fs.writeFileSync(path.join(storeDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
-    // Lacks the OID — must be left alone.
-    fs.writeFileSync(path.join(storeDir, `${OTHER_STALE_THUMB}.pfx`), nonDevCertPfx());
+    // Lacks the OID — must be left alone even though the filename matches.
+    fs.writeFileSync(path.join(storeDir, `${ORPHAN_THUMB}.pfx`), nonDevCertPfx());
     // Wrong filename pattern — must be left alone.
     fs.writeFileSync(path.join(storeDir, "random.pfx"), devCertPfx());
 
-    const stale = findStaleDevCertArtifacts(buildManagedSets(managedBundle()));
+    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
     expect(stale).toHaveLength(1);
-    expect(stale[0].location).toBe("my-store");
-    expect(stale[0].identifier).toBe(STALE_THUMB);
+    expect(stale[0].thumbprint).toBe(STALE_THUMB);
+    // No associated Root / trust files exist, so only the My PFX is gathered.
+    expect(stale[0].artifacts).toHaveLength(1);
+    expect(stale[0].artifacts[0].location).toBe("my-store");
   });
 
-  it("detects stale dev-cert PFXs in the root-store with the right location label", () => {
+  it("gathers associated Root-store and trust-dir files for a stale My-store cert", () => {
+    fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(rootStoreDir, `${STALE_THUMB}.pfx`), devCertPfx());
-    const stale = findStaleDevCertArtifacts(buildManagedSets(managedBundle()));
+    const stalePem = `aspnetcore-localhost-${STALE_THUMB}.pem`;
+    fs.writeFileSync(path.join(trustDir, stalePem), "stale");
+
+    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
     expect(stale).toHaveLength(1);
-    expect(stale[0].location).toBe("root-store");
+    const locations = stale[0].artifacts.map((a) => a.location).sort();
+    expect(locations).toEqual(["my-store", "root-store", "trust-dir"]);
   });
 
-  it("detects stale aspnetcore-localhost-*.pem in the trust dir but leaves generic *.pem alone", () => {
-    fs.writeFileSync(
-      path.join(trustDir, `aspnetcore-localhost-${MANAGED_THUMB}.pem`),
-      "managed"
-    );
+  it("does NOT proactively scan Root or the trust dir — a file only there is ignored", () => {
+    // Cert exists ONLY in Root + trust dir; nothing in My. Should be invisible
+    // to findStaleDevCerts — My is the discovery driver.
+    fs.writeFileSync(path.join(rootStoreDir, `${STALE_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(
       path.join(trustDir, `aspnetcore-localhost-${STALE_THUMB}.pem`),
-      "stale"
+      "orphan"
     );
-    // User cert with arbitrary name — leave alone.
-    fs.writeFileSync(path.join(trustDir, "corp.pem"), "user-cert");
 
-    const stale = findStaleDevCertArtifacts(buildManagedSets(managedBundle()));
+    expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
+  });
+
+  it("does not report associated files that don't exist on disk", () => {
+    // Stale PFX in My but no matching Root PFX and no matching PEM.
+    fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
+    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
     expect(stale).toHaveLength(1);
-    expect(stale[0].location).toBe("trust-dir");
-    expect(stale[0].identifier).toBe(`aspnetcore-localhost-${STALE_THUMB}.pem`);
+    expect(stale[0].artifacts).toHaveLength(1);
+    expect(stale[0].artifacts[0].location).toBe("my-store");
   });
 });
 
-describe.skipIf(process.platform === "win32")("cleanupStaleDevCertArtifacts", () => {
-  it("removes only stale entries across all three locations and rehashes when a PEM was removed", () => {
+describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
+  it("removes the My PFX and all associated Root/trust files, then rehashes", () => {
     fs.writeFileSync(path.join(storeDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(rootStoreDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
-    fs.writeFileSync(path.join(rootStoreDir, `${OTHER_STALE_THUMB}.pfx`), devCertPfx());
+    fs.writeFileSync(path.join(rootStoreDir, `${STALE_THUMB}.pfx`), devCertPfx());
 
     const managedPem = `aspnetcore-localhost-${MANAGED_THUMB}.pem`;
     const stalePem = `aspnetcore-localhost-${STALE_THUMB}.pem`;
@@ -275,61 +230,36 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCertArtifacts", ()
       "-----BEGIN CERTIFICATE-----\nSTALE\n-----END CERTIFICATE-----\n"
     );
 
-    const result = cleanupStaleDevCertArtifacts(buildManagedSets(managedBundle()));
+    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const result = cleanupStaleDevCerts(stale);
 
-    expect(result.removed.map((r) => r.identifier).sort()).toEqual(
-      [STALE_THUMB, OTHER_STALE_THUMB, stalePem].sort()
-    );
+    expect(result.removedCerts).toHaveLength(1);
+    expect(result.removedCerts[0].thumbprint).toBe(STALE_THUMB);
     expect(result.failed).toEqual([]);
     expect(result.rehashedTrustDir).toBe(true);
 
+    // Managed files untouched; stale cert's three files all gone.
     expect(fs.existsSync(path.join(storeDir, `${MANAGED_THUMB}.pfx`))).toBe(true);
     expect(fs.existsSync(path.join(storeDir, `${STALE_THUMB}.pfx`))).toBe(false);
-    expect(fs.existsSync(path.join(rootStoreDir, `${OTHER_STALE_THUMB}.pfx`))).toBe(false);
+    expect(fs.existsSync(path.join(rootStoreDir, `${MANAGED_THUMB}.pfx`))).toBe(true);
+    expect(fs.existsSync(path.join(rootStoreDir, `${STALE_THUMB}.pfx`))).toBe(false);
     expect(fs.existsSync(path.join(trustDir, managedPem))).toBe(true);
     expect(fs.existsSync(path.join(trustDir, stalePem))).toBe(false);
   });
 
   it("does not rehash when no trust-dir PEM was removed", () => {
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
+    // No PEM for the stale cert; managed PEM is unrelated.
     const managedPem = `aspnetcore-localhost-${MANAGED_THUMB}.pem`;
     fs.writeFileSync(
       path.join(trustDir, managedPem),
       "-----BEGIN CERTIFICATE-----\nMANAGED\n-----END CERTIFICATE-----\n"
     );
 
-    const result = cleanupStaleDevCertArtifacts(buildManagedSets(managedBundle()));
+    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const result = cleanupStaleDevCerts(stale);
+
     expect(result.rehashedTrustDir).toBe(false);
-    // managed PEM still in place
     expect(fs.existsSync(path.join(trustDir, managedPem))).toBe(true);
-  });
-
-  it("reports per-entry unlink failures without throwing when the target is undeletable", () => {
-    // Make the "stale PFX" actually be a non-empty directory at the expected
-    // path: findStaleDevCertArtifacts can't open it for the OID byte-scan, so
-    // it gets skipped — but if we instead seed a stale PEM whose parent we
-    // remove between scan and unlink, we exercise the per-entry catch.
-    const stalePem = `aspnetcore-localhost-${STALE_THUMB}.pem`;
-    fs.writeFileSync(
-      path.join(trustDir, stalePem),
-      "-----BEGIN CERTIFICATE-----\nSTALE\n-----END CERTIFICATE-----\n"
-    );
-
-    // Spy on findStaleDevCertArtifacts? We can't — it's a direct re-export.
-    // Instead: delete the PEM out-of-band first, then run cleanup. The
-    // scan finds nothing and there's no failure to report. To actually
-    // observe the catch we rely on the unit being trivial: confirm the
-    // function returns the right shape on a clean run.
-    const managed = buildManagedSets(managedBundle());
-    const result = cleanupStaleDevCertArtifacts(managed);
-    expect(result).toEqual({
-      removed: expect.arrayContaining([
-        expect.objectContaining({ identifier: stalePem }),
-      ]),
-      failed: [],
-      rehashedTrustDir: true,
-    });
-    // PEM is gone after removal.
-    expect(fs.existsSync(path.join(trustDir, stalePem))).toBe(false);
   });
 });

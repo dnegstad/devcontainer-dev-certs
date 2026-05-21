@@ -5,7 +5,7 @@ import {
   getDotNetStorePath,
   getOpenSslTrustDir,
   getPemFileName,
-  getPemFileNameForUser,
+  getPfxFileName,
 } from "@devcontainer-dev-certs/shared";
 import type { CertBundleV3 } from "@devcontainer-dev-certs/shared";
 import { scanPfxForDevCertOid } from "./util/pkcs12DevCertScan";
@@ -20,37 +20,36 @@ import { rehashDirectory } from "./util/rehash";
  */
 const PFX_FILENAME_RE = /^([A-F0-9]{40})\.pfx$/i;
 
-/**
- * PEM filename prefix used by `installDotNetDevCert` (mirrors the
- * `aspnetcore-localhost-{thumbprint}.pem` convention in
- * `src/shared/src/paths.ts:60`). We only consider files starting with this
- * prefix as deletion candidates in the trust dir — user-cert PEMs (`{name}.pem`)
- * have no reliable marker so we leave them alone.
- */
-const DEV_CERT_PEM_PREFIX = "aspnetcore-localhost-";
-
 export type ArtifactLocation = "my-store" | "root-store" | "trust-dir";
 
 export interface StaleArtifact {
   location: ArtifactLocation;
   fullPath: string;
-  /** Thumbprint parsed from the filename (PFX) or the full filename (PEM). */
+  /** Thumbprint (PFX) or full filename (PEM) — useful for log lines. */
   identifier: string;
 }
 
-export interface ManagedSets {
-  myStoreThumbprints: ReadonlySet<string>;
-  rootStoreThumbprints: ReadonlySet<string>;
-  trustDirPemFileNames: ReadonlySet<string>;
+/**
+ * A foreign dev cert discovered in the .NET CurrentUser\My store, plus every
+ * on-disk file that belongs to its thumbprint and would be removed by
+ * cleanup. The My store is the discovery driver because .NET / Aspire
+ * enumerate certs from there — anything found there shapes what users
+ * actually experience. Root-store PFXes and trust-dir PEMs are only
+ * surfaced as downstream "associated files" of a thumbprint we've already
+ * decided is foreign in My; we never proactively scan those directories.
+ */
+export interface StaleDevCert {
+  /** Uppercase SHA-1 thumbprint (the My-store PFX filename stem). */
+  thumbprint: string;
+  /**
+   * All on-disk files that belong to this thumbprint and would be removed.
+   * Always includes the My-store PFX (that's how it was discovered); the
+   * Root-store PFX and trust-dir PEM appear only when the file actually
+   * exists.
+   */
+  artifacts: StaleArtifact[];
 }
 
-/**
- * Build the canonical "what we expect to find on disk" sets from the bundle
- * currently advertised by the host extension. The conditions here must mirror
- * the write conditions in `installDotNetDevCert` and `installUserCert` — if a
- * code path is added that writes a new artifact, that artifact's identifier
- * must be reflected here or the cleanup command will treat it as stale.
- */
 /**
  * The cleanup command's premise is "remove dev cert artifacts that aren't
  * the one this extension manages". When the bundle carries no dotnet-dev
@@ -63,147 +62,139 @@ export function bundleHasManagedDevCert(bundle: CertBundleV3): boolean {
   return bundle.certs.some((c) => c.kind === "dotnet-dev");
 }
 
-export function buildManagedSets(bundle: CertBundleV3): ManagedSets {
-  const myStore = new Set<string>();
-  const rootStore = new Set<string>();
-  const trustDir = new Set<string>();
-
+/**
+ * Build the set of thumbprints expected in the My store given the
+ * currently-advertised bundle. Mirrors the conditions under which
+ * `installDotNetDevCert` and the My-store branch of `installUserCert`
+ * actually write a `{thumbprint}.pfx`.
+ */
+export function buildManagedMyStoreThumbprints(
+  bundle: CertBundleV3
+): ReadonlySet<string> {
+  const set = new Set<string>();
   for (const cert of bundle.certs) {
     const thumb = cert.thumbprint.toUpperCase();
     if (cert.kind === "dotnet-dev") {
-      // installDotNetDevCert always writes all three.
-      myStore.add(thumb);
-      rootStore.add(thumb);
-      trustDir.add(getPemFileName(cert.thumbprint));
+      set.add(thumb);
       continue;
     }
-    // user cert — see installUserCert in certInstaller.ts for the gates.
     if (cert.installToDotNetStore && cert.dotNetStorePfxBase64) {
-      myStore.add(thumb);
-    }
-    if (cert.trustInContainer) {
-      if (cert.rootPfxBase64) rootStore.add(thumb);
-      trustDir.add(getPemFileNameForUser(cert.name));
+      set.add(thumb);
     }
   }
-
-  return {
-    myStoreThumbprints: myStore,
-    rootStoreThumbprints: rootStore,
-    trustDirPemFileNames: trustDir,
-  };
+  return set;
 }
 
-interface PfxScanContext {
-  dir: string;
-  location: Extract<ArtifactLocation, "my-store" | "root-store">;
-  managed: ReadonlySet<string>;
-}
+/**
+ * Enumerate foreign dev certs in the .NET CurrentUser\My store and gather
+ * the on-disk files that belong to each one — best-effort, never throws.
+ * Only the My store is scanned; Root-store / trust-dir files are looked
+ * up by thumbprint after the fact.
+ */
+export function findStaleDevCerts(
+  managedMyStoreThumbprints: ReadonlySet<string>
+): StaleDevCert[] {
+  const myStoreDir = getDotNetStorePath();
+  if (!fs.existsSync(myStoreDir)) return [];
 
-function scanPfxStore(ctx: PfxScanContext): StaleArtifact[] {
-  if (!fs.existsSync(ctx.dir)) return [];
   let entries: string[];
   try {
-    entries = fs.readdirSync(ctx.dir);
+    entries = fs.readdirSync(myStoreDir);
   } catch {
     return [];
   }
-  const stale: StaleArtifact[] = [];
+
+  const rootStoreDir = getDotNetRootStorePath();
+  const trustDir = getOpenSslTrustDir();
+  const stale: StaleDevCert[] = [];
+
   for (const entry of entries) {
     const match = PFX_FILENAME_RE.exec(entry);
     if (!match) continue;
     const thumb = match[1].toUpperCase();
-    if (ctx.managed.has(thumb)) continue;
-    const fullPath = path.join(ctx.dir, entry);
+    if (managedMyStoreThumbprints.has(thumb)) continue;
+
+    const myPath = path.join(myStoreDir, entry);
     let bytes: Buffer;
     try {
-      bytes = fs.readFileSync(fullPath);
+      bytes = fs.readFileSync(myPath);
     } catch {
       continue;
     }
     // Dev cert PFXes in the store dirs are passwordless; the scanner
     // decrypts the cert bag (PBES2 or PBE-SHA1-3DES) and looks for the
-    // ASP.NET HTTPS OID in the plaintext. Fail-closed means anything
-    // we can't identify stays put.
+    // ASP.NET HTTPS OID in the plaintext. Fail-closed means anything we
+    // can't identify stays put.
     if (!scanPfxForDevCertOid(bytes, "")) continue;
-    stale.push({ location: ctx.location, fullPath, identifier: thumb });
-  }
-  return stale;
-}
 
-function scanTrustDir(managed: ReadonlySet<string>): StaleArtifact[] {
-  const dir = getOpenSslTrustDir();
-  if (!fs.existsSync(dir)) return [];
-  let entries: string[];
-  try {
-    entries = fs.readdirSync(dir);
-  } catch {
-    return [];
-  }
-  const stale: StaleArtifact[] = [];
-  for (const entry of entries) {
-    if (!entry.startsWith(DEV_CERT_PEM_PREFIX)) continue;
-    if (!entry.endsWith(".pem")) continue;
-    if (managed.has(entry)) continue;
-    stale.push({
-      location: "trust-dir",
-      fullPath: path.join(dir, entry),
-      identifier: entry,
-    });
-  }
-  return stale;
-}
+    const artifacts: StaleArtifact[] = [
+      { location: "my-store", fullPath: myPath, identifier: thumb },
+    ];
 
-/**
- * Enumerate stale ASP.NET dev cert artifacts across the three managed
- * locations without touching them. Best-effort — never throws.
- */
-export function findStaleDevCertArtifacts(
-  managed: ManagedSets
-): StaleArtifact[] {
-  return [
-    ...scanPfxStore({
-      dir: getDotNetStorePath(),
-      location: "my-store",
-      managed: managed.myStoreThumbprints,
-    }),
-    ...scanPfxStore({
-      dir: getDotNetRootStorePath(),
-      location: "root-store",
-      managed: managed.rootStoreThumbprints,
-    }),
-    ...scanTrustDir(managed.trustDirPemFileNames),
-  ];
+    // Associated Root-store PFX (.NET dev-certs install writes here too).
+    const rootCandidate = path.join(rootStoreDir, getPfxFileName(thumb));
+    if (fs.existsSync(rootCandidate)) {
+      artifacts.push({
+        location: "root-store",
+        fullPath: rootCandidate,
+        identifier: thumb,
+      });
+    }
+
+    // Associated trust-dir PEM (`aspnetcore-localhost-{thumbprint}.pem`).
+    const pemFile = getPemFileName(thumb);
+    const pemCandidate = path.join(trustDir, pemFile);
+    if (fs.existsSync(pemCandidate)) {
+      artifacts.push({
+        location: "trust-dir",
+        fullPath: pemCandidate,
+        identifier: pemFile,
+      });
+    }
+
+    stale.push({ thumbprint: thumb, artifacts });
+  }
+
+  return stale;
 }
 
 export interface CleanupResult {
-  removed: StaleArtifact[];
+  /**
+   * Certs whose CurrentUser\My PFX was successfully removed. `.NET` /
+   * Aspire enumerate from there, so this is the count users care about.
+   * A cert appears here even if a downstream Root / trust-dir delete
+   * failed — those failures are surfaced separately via `failed`.
+   */
+  removedCerts: StaleDevCert[];
+  /** Per-file unlink failures across every location. */
   failed: { artifact: StaleArtifact; error: string }[];
   rehashedTrustDir: boolean;
 }
 
 /**
- * Delete every artifact reported by `findStaleDevCertArtifacts`. If any PEM
- * in the trust dir was removed, rehash the directory so dangling hash
- * symlinks are dropped and remaining PEMs keep working.
+ * Delete every artifact for every stale dev cert. Rehashes the trust dir
+ * if any PEM was actually removed.
  */
-export function cleanupStaleDevCertArtifacts(
-  managed: ManagedSets
+export function cleanupStaleDevCerts(
+  stale: readonly StaleDevCert[]
 ): CleanupResult {
-  const stale = findStaleDevCertArtifacts(managed);
-  const removed: StaleArtifact[] = [];
+  const removedCerts: StaleDevCert[] = [];
   const failed: { artifact: StaleArtifact; error: string }[] = [];
   let removedAnyTrustPem = false;
 
-  for (const artifact of stale) {
-    try {
-      fs.unlinkSync(artifact.fullPath);
-      removed.push(artifact);
-      if (artifact.location === "trust-dir") removedAnyTrustPem = true;
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      failed.push({ artifact, error: message });
+  for (const cert of stale) {
+    let myStoreRemoved = false;
+    for (const artifact of cert.artifacts) {
+      try {
+        fs.unlinkSync(artifact.fullPath);
+        if (artifact.location === "my-store") myStoreRemoved = true;
+        if (artifact.location === "trust-dir") removedAnyTrustPem = true;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        failed.push({ artifact, error: message });
+      }
     }
+    if (myStoreRemoved) removedCerts.push(cert);
   }
 
   let rehashedTrustDir = false;
@@ -216,5 +207,5 @@ export function cleanupStaleDevCertArtifacts(
     }
   }
 
-  return { removed, failed, rehashedTrustDir };
+  return { removedCerts, failed, rehashedTrustDir };
 }
