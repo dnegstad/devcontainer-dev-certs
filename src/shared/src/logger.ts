@@ -19,3 +19,14 @@ export function initLogger(channelName: string): vscode.OutputChannel {
 export function log(message: string): void {
   channel?.appendLine(`[${new Date().toISOString()}] ${message}`);
 }
+
+/**
+ * Reveal the shared output channel so the user can read what we just
+ * logged. `preserveFocus = true` keeps the keyboard focus where it was
+ * (typically a modal we're about to show), which avoids the panel
+ * stealing focus mid-prompt. No-op when the logger hasn't been
+ * initialised.
+ */
+export function revealLogger(): void {
+  channel?.show(true);
+}

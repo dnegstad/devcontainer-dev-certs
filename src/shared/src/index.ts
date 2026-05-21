@@ -1,4 +1,4 @@
-export { initLogger, log } from "./logger";
+export { initLogger, log, revealLogger } from "./logger";
 export type {
   CertMaterial,
   CertKind,

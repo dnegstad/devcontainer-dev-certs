@@ -6,6 +6,9 @@ export const window = {
       appendLine(_msg: string) {
         // no-op in tests
       },
+      show(_preserveFocus?: boolean) {
+        // no-op in tests
+      },
     };
   },
   showWarningMessage() {

@@ -17,7 +17,7 @@ import {
 import { parseExtraCertDestinations } from "./util/destinations";
 import { ensureSslCertDir } from "./util/sslCertDir";
 import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
-import { initLogger, log } from "@devcontainer-dev-certs/shared";
+import { initLogger, log, revealLogger } from "@devcontainer-dev-certs/shared";
 import type {
   CertBundle,
   CertBundleV3,
@@ -170,6 +170,11 @@ async function injectCertificate(): Promise<void> {
   }
 }
 
+/**
+ * Post-install detection path. Surfaces a single warning toast offering
+ * to clean up, alongside the output-channel detail we just logged. No
+ * second confirmation: clicking "Clean Up" runs the sweep immediately.
+ */
 async function detectStaleAndPromptCleanup(
   bundle: CertBundleV3
 ): Promise<void> {
@@ -185,16 +190,14 @@ async function detectStaleAndPromptCleanup(
   const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
   if (stale.length === 0) return;
 
-  log(
-    `Multiple dev certs detected alongside the extension-managed cert in ` +
-      `container's CurrentUser\\My store: ${stale.length}`
-  );
+  logStaleCandidates(stale);
+  revealLogger();
 
   const cleanup = vscode.l10n.t("Clean Up");
   const dismiss = vscode.l10n.t("Don't Show Again");
   const choice = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Detected {0} other dev certificate(s) alongside the extension-managed certificate in this Dev Container. Cleaning them up preserves the extension-managed certificate so .NET/Aspire reliably pick it for TLS.",
+      "Dev Certs: Detected {0} other dev certificate(s) alongside the extension-managed certificate in this Dev Container. Cleaning them up preserves the extension-managed certificate so .NET/Aspire reliably pick it for TLS. See the Dev Container Dev Certs output for thumbprint details.",
       stale.length
     ),
     cleanup,
@@ -202,7 +205,7 @@ async function detectStaleAndPromptCleanup(
   );
 
   if (choice === cleanup) {
-    await vscode.commands.executeCommand(CLEANUP_COMMAND);
+    performCleanup(stale);
   } else if (choice === dismiss) {
     await config.update(
       WARN_STALE_CONFIG_KEY,
@@ -212,6 +215,11 @@ async function detectStaleAndPromptCleanup(
   }
 }
 
+/**
+ * Command-palette entry point. Re-resolves the bundle (so a stale
+ * post-install snapshot can't drive a destructive command), then
+ * presents the same single prompt + cleanup flow as the detection path.
+ */
 async function cleanupCommand(): Promise<void> {
   const includeDotNetDev = isTruthyEnv(
     process.env["DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET"],
@@ -258,32 +266,28 @@ async function cleanupCommand(): Promise<void> {
     return;
   }
 
-  // Log the full per-cert/per-file candidate list before prompting — the
-  // dialog speaks in certificates (one row per thumbprint), but the output
-  // channel keeps every underlying file for engineering audit.
-  const totalFiles = stale.reduce((n, c) => n + c.artifacts.length, 0);
-  log(
-    `Cleanup: ${stale.length} other dev cert(s) in CurrentUser\\My; ` +
-      `${totalFiles} associated file(s) to remove:`
-  );
-  for (const s of stale) {
-    for (const a of s.artifacts) {
-      log(`  ${s.thumbprint} ${logLocationLabel(a.location)}: ${a.fullPath}`);
-    }
-  }
+  logStaleCandidates(stale);
+  revealLogger();
 
   const remove = vscode.l10n.t("Remove");
-  const detail = formatStaleDetail(stale);
-  const confirm = await vscode.window.showWarningMessage(
+  const choice = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Remove {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate?",
+      "Dev Certs: Remove {0} other dev certificate(s) from this Dev Container, preserving the extension-managed certificate? See the Dev Container Dev Certs output for thumbprint details.",
       stale.length
     ),
-    { modal: true, detail },
     remove
   );
-  if (confirm !== remove) return;
+  if (choice !== remove) return;
 
+  performCleanup(stale);
+}
+
+/**
+ * Shared finisher used by both the detection toast and the command
+ * palette entry: run the sweep, log per-file outcomes, surface a summary
+ * toast. Assumes the caller already logged the candidate list.
+ */
+function performCleanup(stale: readonly StaleDevCert[]): void {
   const result = cleanupStaleDevCerts(stale);
 
   for (const r of result.removed) {
@@ -313,6 +317,26 @@ async function cleanupCommand(): Promise<void> {
   } else {
     vscode.window.showInformationMessage(summary);
   }
+
+  // Mirror the candidate log: when a result has any content, reveal the
+  // output channel so the user can see what happened without hunting for
+  // it. Idempotent if the panel is already visible.
+  if (result.removed.length > 0 || result.failed.length > 0) {
+    revealLogger();
+  }
+}
+
+function logStaleCandidates(stale: readonly StaleDevCert[]): void {
+  const totalFiles = stale.reduce((n, c) => n + c.artifacts.length, 0);
+  log(
+    `Cleanup: ${stale.length} other dev cert(s) in CurrentUser\\My; ` +
+      `${totalFiles} associated file(s) would be removed:`
+  );
+  for (const s of stale) {
+    for (const a of s.artifacts) {
+      log(`  ${s.thumbprint} ${logLocationLabel(a.location)}: ${a.fullPath}`);
+    }
+  }
 }
 
 // Output-channel labels keep per-location detail (the engineering audit
@@ -327,26 +351,6 @@ function logLocationLabel(loc: ArtifactLocation): string {
     case "trust-dir":
       return "aspnet-dev-certs-trust";
   }
-}
-
-// Cap the modal at a flat list of thumbprints. Pathological My stores
-// (dozens of accumulated dev certs) get an "+N more" footer pointing at
-// the output channel for the full enumeration.
-const MAX_MODAL_ROWS = 12;
-
-function formatStaleDetail(stale: readonly StaleDevCert[]): string {
-  const thumbs = stale.map((s) => s.thumbprint).sort();
-  const shown = thumbs.slice(0, MAX_MODAL_ROWS);
-  const lines = shown.map((t) => `  ${t}`);
-  if (thumbs.length > shown.length) {
-    lines.push(
-      vscode.l10n.t(
-        "  …and {0} more (see the Dev Container Dev Certs output for the full list)",
-        thumbs.length - shown.length
-      )
-    );
-  }
-  return lines.join("\n");
 }
 
 async function tryGetBundle(
