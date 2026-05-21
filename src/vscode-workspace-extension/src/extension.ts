@@ -184,7 +184,7 @@ async function detectStaleAndPromptCleanup(
   const dismiss = vscode.l10n.t("Don't Show Again");
   const choice = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Detected {0} stale dev certificate artifact(s) across the .NET My/Root stores and OpenSSL trust dir. Leftovers can cause .NET/Aspire to pick the wrong certificate.",
+      "Dev Certs: Found {0} duplicate dev certificate(s) in this dev container. Multiple dev certs in the container can cause .NET/Aspire to pick the wrong one for TLS.",
       stale.length
     ),
     cleanup,
@@ -229,7 +229,7 @@ async function cleanupCommand(): Promise<void> {
   if (stale.length === 0) {
     vscode.window.showInformationMessage(
       vscode.l10n.t(
-        "Dev Certs: No stale dev certificate artifacts were found."
+        "Dev Certs: No duplicate dev certificates were found in this dev container."
       )
     );
     return;
@@ -239,7 +239,7 @@ async function cleanupCommand(): Promise<void> {
   const detail = formatStaleDetail(stale);
   const confirm = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Remove {0} stale dev certificate artifact(s)?",
+      "Dev Certs: Remove {0} duplicate dev certificate(s) from this dev container?",
       stale.length
     ),
     { modal: true, detail },
@@ -259,12 +259,14 @@ async function cleanupCommand(): Promise<void> {
   }
 
   const summary = vscode.l10n.t(
-    "Dev Certs: Removed {0} stale artifact(s){1}{2}.",
+    "Dev Certs: Removed {0} duplicate dev certificate(s) from this dev container{1}{2}.",
     result.removed.length,
     result.failed.length
       ? vscode.l10n.t(" ({0} failed)", result.failed.length)
       : "",
-    result.rehashedTrustDir ? vscode.l10n.t(", trust dir rehashed") : ""
+    result.rehashedTrustDir
+      ? vscode.l10n.t(", container trust directory rehashed")
+      : ""
   );
   if (result.failed.length > 0) {
     vscode.window.showWarningMessage(summary);
@@ -281,7 +283,7 @@ function formatStaleSummary(stale: StaleArtifact[]): string {
   };
   for (const s of stale) counts[s.location]++;
   return (
-    `Stale dev cert artifacts detected: ` +
+    `Duplicate dev certificates detected in container: ` +
     `my-store=${counts["my-store"]}, ` +
     `root-store=${counts["root-store"]}, ` +
     `trust-dir=${counts["trust-dir"]}`
@@ -297,9 +299,9 @@ function formatStaleDetail(stale: StaleArtifact[]): string {
   for (const s of stale) groups[s.location].push(s.fullPath);
 
   const labels: Record<ArtifactLocation, string> = {
-    "my-store": ".NET My store",
-    "root-store": ".NET Root store",
-    "trust-dir": "OpenSSL trust dir",
+    "my-store": "Container .NET My store",
+    "root-store": "Container .NET Root store",
+    "trust-dir": "Container OpenSSL trust directory",
   };
 
   const sections: string[] = [];
