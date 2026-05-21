@@ -8,17 +8,19 @@ import { createDecipheriv, createHash, pbkdf2Sync } from "node:crypto";
  *   b) PBES2-encrypted (PBKDF2-SHA-{1,256,384,512} + AES-{128,192,256}-CBC)
  *      — what this extension's host emits, and what modern `dotnet
  *      dev-certs https --export-path` emits on .NET 9+,
- *   c) PBE-SHA1-3DES or PBE-SHA1-2DES encrypted (the historical
- *      `dotnet dev-certs https` / `Pkcs12Builder` default on .NET ≤8).
+ *   c) PBE-SHA1-3DES encrypted (the historical `dotnet dev-certs https` /
+ *      `Pkcs12Builder` default on .NET ≤8).
  *
  * The scan tries each layer with the supplied password (empty by default,
  * which matches every dev cert PFX we care about) and is fail-closed: any
  * parse, decrypt, or unsupported-algorithm error returns `false`, so we
  * never delete a file we couldn't positively identify.
  *
- * RC2-40 (OID 1.2.840.113549.1.12.1.6) is intentionally NOT supported —
- * Node's `crypto` doesn't expose RC2, and we'd rather report "not a dev
- * cert" for an ancient export than ship a hand-rolled cipher.
+ * Older legacy schemes (PBE-SHA1-RC2-40, PBE-SHA1-2-key-3DES) are
+ * intentionally NOT supported — Node's `crypto` doesn't expose RC2, and
+ * 2-key 3DES hasn't been a modern `dotnet dev-certs` default for years.
+ * A file encrypted with one of those schemes will fail closed and be
+ * left in place rather than touched on guesswork.
  */
 
 export const ASPNET_HTTPS_OID_DER = Buffer.from([
@@ -31,7 +33,6 @@ const OID = {
   pbes2: "1.2.840.113549.1.5.13",
   pbkdf2: "1.2.840.113549.1.5.12",
   pbeSha1_3Des: "1.2.840.113549.1.12.1.3",
-  pbeSha1_2Des: "1.2.840.113549.1.12.1.4",
   aes128Cbc: "2.16.840.1.101.3.4.1.2",
   aes192Cbc: "2.16.840.1.101.3.4.1.22",
   aes256Cbc: "2.16.840.1.101.3.4.1.42",
@@ -298,8 +299,7 @@ function decryptPbes2(encrypted: Buffer, params: Buffer, password: string): Buff
 function decryptPkcs12Pbe3Des(
   encrypted: Buffer,
   params: Buffer,
-  password: string,
-  keyBytes: 16 | 24
+  password: string
 ): Buffer | null {
   // pkcs-12PbeParams SEQUENCE { salt OCTET STRING, iterations INTEGER }
   const outer = expectTag(params, 0, TAG_SEQUENCE);
@@ -309,9 +309,7 @@ function decryptPkcs12Pbe3Des(
   const iterTlv = readIntegerSmall(params, outer.contentStart + saltTlv.totalLength);
   if (!iterTlv || iterTlv.value <= 0) return null;
 
-  const rawKey = pkcs12B2Kdf(password, saltTlv.content, 1, iterTlv.value, keyBytes, "sha1");
-  // 2-key 3DES: K = K1 || K2 || K1 (24 bytes total for des-ede3-cbc).
-  const key = keyBytes === 16 ? Buffer.concat([rawKey, rawKey.subarray(0, 8)]) : rawKey;
+  const key = pkcs12B2Kdf(password, saltTlv.content, 1, iterTlv.value, 24, "sha1");
   const iv = pkcs12B2Kdf(password, saltTlv.content, 2, iterTlv.value, 8, "sha1");
 
   try {
@@ -363,9 +361,7 @@ function decryptAuthSafeEntry(
     case OID.pbes2:
       return decryptPbes2(encrypted, paramsBuf, password);
     case OID.pbeSha1_3Des:
-      return decryptPkcs12Pbe3Des(encrypted, paramsBuf, password, 24);
-    case OID.pbeSha1_2Des:
-      return decryptPkcs12Pbe3Des(encrypted, paramsBuf, password, 16);
+      return decryptPkcs12Pbe3Des(encrypted, paramsBuf, password);
     default:
       return null;
   }
