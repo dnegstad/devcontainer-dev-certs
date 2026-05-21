@@ -344,7 +344,6 @@ export abstract class BaseCertificateStore implements PlatformCertificateStore {
     options: {
       filenamePredicate?: (filename: string) => boolean;
       context?: string;
-      extraSkipped?: ClassifiedCandidate[];
     } = {}
   ): Promise<UsableDevCert | null> {
     if (!fs.existsSync(dir)) return null;
@@ -386,13 +385,6 @@ export abstract class BaseCertificateStore implements PlatformCertificateStore {
       }
       // skipped → already logged inside classifyCandidate
     }
-
-    // Allow callers to mix in additional skipped entries discovered outside
-    // the folder scan (e.g. keychain-only thumbprints on macOS). They've
-    // already been logged at classification time; we accept them here only
-    // so the function signature documents that selection sees nothing but
-    // usable candidates.
-    void options.extraSkipped;
 
     return selectBestDevCert(usable, context);
   }
