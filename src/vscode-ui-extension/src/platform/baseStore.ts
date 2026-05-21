@@ -319,12 +319,13 @@ export abstract class BaseCertificateStore implements PlatformCertificateStore {
   }
 
   /**
-   * Scan a directory for PFX files matching `aspnetcore-localhost-<thumb>.pfx`
-   * or `<thumb>.pfx` (the two canonical dev-cert filename shapes used by
-   * .NET on macOS/Linux). For each match:
+   * Scan a directory for `*.pfx` files and classify each one. For every
+   * match:
    *
-   * 1. Try to parse it. Parse failures on canonically-named files emit the
-   *    "failed to parse PFX" unusable warning.
+   * 1. Try to parse it. Parse failures on canonically-named files
+   *    (`aspnetcore-localhost-<thumb>.pfx` or `<thumb>.pfx`) emit the
+   *    "failed to parse PFX" unusable warning; parse failures on other
+   *    filenames are silent — they may belong to other tools.
    * 2. If parsed and the cert passes `isValidDevCert` but there's no private
    *    key, emit the "no matching private key" unusable warning.
    * 3. Otherwise classify as `usable`.
@@ -332,8 +333,10 @@ export abstract class BaseCertificateStore implements PlatformCertificateStore {
    * Selection runs only over the surviving usable candidates via
    * `selectBestDevCert`. Multi-candidate selection emits its own warning.
    *
-   * Callers may pre-filter via `filenamePredicate` (defaults to "accept any
-   * *.pfx whose basename matches a canonical dev-cert thumbprint pattern").
+   * Callers may narrow which files to consider via `filenamePredicate`
+   * (default: accept every `*.pfx`). Whether a parse failure produces a
+   * warning is controlled separately by `extractThumbprintHintFromFilename`
+   * — see step 1.
    */
   protected async findBestDevCertInDir(
     dir: string,
