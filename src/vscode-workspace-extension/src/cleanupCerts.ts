@@ -160,14 +160,24 @@ export function findStaleDevCerts(
 
 export interface CleanupResult {
   /**
-   * Certs whose CurrentUser\My PFX was successfully removed. `.NET` /
-   * Aspire enumerate from there, so this is the count users care about.
-   * A cert appears here even if a downstream Root / trust-dir delete
-   * failed — those failures are surfaced separately via `failed`.
+   * Certs whose CurrentUser\My PFX was successfully removed AND every
+   * downstream file (Root PFX, trust-dir PEM) was either removed or
+   * absent. `.NET` / Aspire enumerate from My, so this is the count
+   * users actually care about. A cert with any unlink failure is NOT
+   * in this list — its My PFX stays on disk so the cleanup is
+   * re-discoverable on retry (see `cleanupStaleDevCerts` jsdoc).
    */
   removedCerts: StaleDevCert[];
-  /** Per-file unlink failures across every location. */
-  failed: { artifact: StaleArtifact; error: string }[];
+  /**
+   * Per-file detail of every successful unlink, tagged with the owning
+   * thumbprint. Includes partial-success cases — a cert whose Root
+   * unlink failed but whose trust-dir PEM unlinked successfully has an
+   * entry here for the PEM, an entry in `failed` for the Root, and is
+   * absent from `removedCerts`.
+   */
+  removed: { thumbprint: string; artifact: StaleArtifact }[];
+  /** Per-file unlink failures across every location, tagged with thumbprint. */
+  failed: { thumbprint: string; artifact: StaleArtifact; error: string }[];
   rehashedTrustDir: boolean;
 }
 
@@ -188,7 +198,8 @@ export function cleanupStaleDevCerts(
   stale: readonly StaleDevCert[]
 ): CleanupResult {
   const removedCerts: StaleDevCert[] = [];
-  const failed: { artifact: StaleArtifact; error: string }[] = [];
+  const removed: { thumbprint: string; artifact: StaleArtifact }[] = [];
+  const failed: { thumbprint: string; artifact: StaleArtifact; error: string }[] = [];
   let removedAnyTrustPem = false;
 
   for (const cert of stale) {
@@ -203,11 +214,12 @@ export function cleanupStaleDevCerts(
     for (const artifact of downstream) {
       try {
         fs.unlinkSync(artifact.fullPath);
+        removed.push({ thumbprint: cert.thumbprint, artifact });
         if (artifact.location === "trust-dir") removedAnyTrustPem = true;
       } catch (err: unknown) {
         downstreamOk = false;
         const message = err instanceof Error ? err.message : String(err);
-        failed.push({ artifact, error: message });
+        failed.push({ thumbprint: cert.thumbprint, artifact, error: message });
       }
     }
 
@@ -217,10 +229,11 @@ export function cleanupStaleDevCerts(
 
     try {
       fs.unlinkSync(myArtifact.fullPath);
+      removed.push({ thumbprint: cert.thumbprint, artifact: myArtifact });
       removedCerts.push(cert);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      failed.push({ artifact: myArtifact, error: message });
+      failed.push({ thumbprint: cert.thumbprint, artifact: myArtifact, error: message });
     }
   }
 
@@ -234,5 +247,5 @@ export function cleanupStaleDevCerts(
     }
   }
 
-  return { removedCerts, failed, rehashedTrustDir };
+  return { removedCerts, removed, failed, rehashedTrustDir };
 }

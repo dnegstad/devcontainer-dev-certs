@@ -286,17 +286,15 @@ async function cleanupCommand(): Promise<void> {
 
   const result = cleanupStaleDevCerts(stale);
 
-  for (const cert of result.removedCerts) {
-    for (const a of cert.artifacts) {
-      log(
-        `Cleanup: removed ${cert.thumbprint} ${logLocationLabel(a.location)}: ${a.fullPath}`
-      );
-    }
+  for (const r of result.removed) {
+    log(
+      `Cleanup: removed ${r.thumbprint} ${logLocationLabel(r.artifact.location)}: ${r.artifact.fullPath}`
+    );
   }
   for (const f of result.failed) {
     log(
-      `Cleanup: failed to remove ${logLocationLabel(f.artifact.location)} ` +
-        `${f.artifact.identifier} (${f.artifact.fullPath}): ${f.error}`
+      `Cleanup: failed to remove ${f.thumbprint} ` +
+        `${logLocationLabel(f.artifact.location)} (${f.artifact.fullPath}): ${f.error}`
     );
   }
 

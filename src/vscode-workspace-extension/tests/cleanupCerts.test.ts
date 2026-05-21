@@ -288,14 +288,27 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
 
     expect(result.removedCerts).toEqual([]);
     expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].thumbprint).toBe(STALE_THUMB);
     expect(result.failed[0].artifact.location).toBe("root-store");
+
+    // The trust-dir PEM DID unlink successfully (downstream files are
+    // attempted independently). It must show up in `removed` so the
+    // output-channel log accurately reflects partial state — otherwise
+    // a future change to the deletion order could silently drop the
+    // record.
+    expect(
+      result.removed.some(
+        (r) => r.artifact.location === "trust-dir" && r.thumbprint === STALE_THUMB
+      )
+    ).toBe(true);
+    expect(fs.existsSync(path.join(trustDir, stalePem))).toBe(false);
 
     // My PFX is preserved → next cleanup pass can re-discover the cert and
     // retry the downstream sweep after the user fixes the failing path.
     expect(fs.existsSync(path.join(storeDir, `${STALE_THUMB}.pfx`))).toBe(true);
-    // Pre-My downstream files we did manage to delete are gone (PEM removed
-    // before the Root failure was discovered in iteration order doesn't
-    // matter — what matters is that the My sentinel is preserved).
+    expect(
+      result.removed.some((r) => r.artifact.location === "my-store")
+    ).toBe(false);
     // The blocker dir is still there because the unlink failed.
     expect(fs.existsSync(rootCandidate)).toBe(true);
   });
