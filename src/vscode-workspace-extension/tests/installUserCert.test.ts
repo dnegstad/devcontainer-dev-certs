@@ -179,6 +179,30 @@ describe.skipIf(process.platform === "win32")("installDotNetDevCert", () => {
     // command explicitly to remove it.
     expect(fs.existsSync(stalePath)).toBe(true);
   });
+
+  it("leaves pre-existing hash symlinks for unrelated PEMs untouched", () => {
+    // Simulate a leftover PEM + its own hash symlink from a prior rotation.
+    // Use a hash-shaped filename and link it to the stale PEM directly so
+    // we control both the symlink target and its inode/mtime.
+    const stalePem = path.join(
+      trustDir,
+      "aspnetcore-localhost-CAFEBABE.pem"
+    );
+    fs.writeFileSync(stalePem, SAMPLE_DEV_PEM);
+    const stalelink = path.join(trustDir, "deadbeef.0");
+    fs.symlinkSync("aspnetcore-localhost-CAFEBABE.pem", stalelink);
+    const before = fs.lstatSync(stalelink);
+
+    installDotNetDevCert(devMaterial("FEEDFACE"));
+
+    // The stranger's symlink must be untouched (same inode + mtime).
+    const after = fs.lstatSync(stalelink);
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(fs.readlinkSync(stalelink)).toBe(
+      "aspnetcore-localhost-CAFEBABE.pem"
+    );
+  });
 });
 
 describe.skipIf(process.platform === "win32")("isCertInstalled", () => {

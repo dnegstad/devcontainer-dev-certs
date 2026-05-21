@@ -63,24 +63,34 @@ export function rehashDirectory(directory: string): void {
     const hash = computeSubjectHash(pemContent);
     if (!hash) continue;
 
-    createHashSymlinkForHash(directory, certFile, hash);
+    ensureHashSymlinkForHash(directory, certFile, hash);
   }
 }
 
 /**
- * Create a single hash symlink for a specific PEM file.
+ * Ensure an OpenSSL subject-hash symlink exists for `pemFileName` in
+ * `directory`. No-op when a valid slot already points at the same PEM —
+ * the caller can re-invoke this safely on every install without producing
+ * duplicate `{hash}.0`/`{hash}.1` pairs. Allocates the next free slot
+ * (`{hash}.0` … `{hash}.9`) on a real collision with a different target.
+ *
+ * Unlike `rehashDirectory`, this never touches symlinks belonging to PEMs
+ * we didn't write — the install paths use this so a pre-existing
+ * `aspnetcore-localhost-{oldThumb}.pem` (or any unrelated PEM the user
+ * left in the trust dir) keeps its hash symlinks intact until the user
+ * explicitly runs the cleanup command.
  */
-export function createHashSymlink(
+export function ensureHashSymlink(
   directory: string,
   pemFileName: string,
   pemContent: string
 ): void {
   const hash = computeSubjectHash(pemContent);
   if (!hash) return;
-  createHashSymlinkForHash(directory, pemFileName, hash);
+  ensureHashSymlinkForHash(directory, pemFileName, hash);
 }
 
-function createHashSymlinkForHash(
+function ensureHashSymlinkForHash(
   directory: string,
   pemFileName: string,
   hash: string
@@ -92,11 +102,7 @@ function createHashSymlinkForHash(
     const linkName = `${hash}.${i}`;
     const linkPath = path.join(directory, linkName);
     if (fs.existsSync(linkPath)) {
-      // Idempotency: if the existing slot already points at the same PEM
-      // we're trying to link, there's nothing to do — returning here prevents
-      // callers (e.g. installDotNetDevCert, which rehashes the whole dir
-      // before re-asserting its own symlink) from producing duplicate
-      // {hash}.0 + {hash}.1 entries that both target the same cert.
+      // Already-correct slot — bail out without writing anything.
       try {
         if (fs.readlinkSync(linkPath) === pemFileName) return;
       } catch {

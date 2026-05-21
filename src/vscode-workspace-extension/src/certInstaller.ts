@@ -10,7 +10,7 @@ import {
   getPemFileNameForUser,
 } from "@devcontainer-dev-certs/shared";
 import type { CertMaterialV3 } from "@devcontainer-dev-certs/shared";
-import { createHashSymlink, rehashDirectory } from "./util/rehash";
+import { ensureHashSymlink, rehashDirectory } from "./util/rehash";
 import type { ExtraDestination } from "./util/destinations";
 
 export type {
@@ -72,11 +72,11 @@ export function installDotNetDevCert(material: CertMaterialV3): void {
   fs.writeFileSync(pemPath, pemContent);
   chmodSafe(pemPath, 0o644);
 
-  // Stale PEMs from prior rotations are deliberately left in place — the
-  // user-invoked "Clean Up Stale Dev Certificate Artifacts" command
-  // is the only path that deletes adjacent files. rehashDirectory rebuilds
-  // hash symlinks for every PEM present, including the one we just wrote.
-  rehashDirectory(trustDir);
+  // Targeted symlink — only touches the slot for our PEM. Stale PEMs
+  // from prior rotations and their hash symlinks are deliberately left
+  // in place; the user-invoked "Clean Up Stale Dev Certificate
+  // Artifacts" command is the only path that mutates adjacent files.
+  ensureHashSymlink(trustDir, pemFileName, pemContent);
 }
 
 /**
@@ -145,7 +145,7 @@ export function installUserCert(material: CertMaterialV3): void {
     fs.writeFileSync(pemPath, pemContent);
     chmodSafe(pemPath, 0o644);
 
-    createHashSymlink(trustDir, pemFileName, pemContent);
+    ensureHashSymlink(trustDir, pemFileName, pemContent);
   }
 }
 
