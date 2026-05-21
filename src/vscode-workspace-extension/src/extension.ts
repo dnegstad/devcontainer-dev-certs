@@ -184,7 +184,7 @@ async function detectStaleAndPromptCleanup(
   const dismiss = vscode.l10n.t("Don't Show Again");
   const choice = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Detected {0} stale dev certificate artifact(s) in this dev container's .NET My/Root stores and OpenSSL trust dir. Leftovers can cause .NET/Aspire to pick the wrong certificate.",
+      "Dev Certs: Detected {0} other dev certificate artifact(s) alongside the extension-managed certificate in this dev container's .NET My/Root stores and OpenSSL trust dir. Cleaning them up preserves the extension-managed certificate so .NET/Aspire reliably pick it for TLS.",
       stale.length
     ),
     cleanup,
@@ -229,7 +229,7 @@ async function cleanupCommand(): Promise<void> {
   if (stale.length === 0) {
     vscode.window.showInformationMessage(
       vscode.l10n.t(
-        "Dev Certs: No stale dev certificate artifacts were found in this dev container."
+        "Dev Certs: Only the extension-managed dev certificate is present in this dev container — nothing to clean up."
       )
     );
     return;
@@ -239,7 +239,7 @@ async function cleanupCommand(): Promise<void> {
   const detail = formatStaleDetail(stale);
   const confirm = await vscode.window.showWarningMessage(
     vscode.l10n.t(
-      "Dev Certs: Remove {0} stale dev certificate artifact(s) from this dev container?",
+      "Dev Certs: Remove {0} other dev certificate artifact(s) from this dev container, preserving the extension-managed certificate?",
       stale.length
     ),
     { modal: true, detail },
@@ -259,7 +259,7 @@ async function cleanupCommand(): Promise<void> {
   }
 
   const summary = vscode.l10n.t(
-    "Dev Certs: Removed {0} stale dev certificate artifact(s) from this dev container{1}{2}.",
+    "Dev Certs: Removed {0} other dev certificate artifact(s) from this dev container, preserving the extension-managed certificate{1}{2}.",
     result.removed.length,
     result.failed.length
       ? vscode.l10n.t(" ({0} failed)", result.failed.length)
@@ -283,7 +283,7 @@ function formatStaleSummary(stale: StaleArtifact[]): string {
   };
   for (const s of stale) counts[s.location]++;
   return (
-    `Stale dev cert artifacts detected in container: ` +
+    `Multiple dev certs detected alongside the extension-managed cert in container: ` +
     `my-store=${counts["my-store"]}, ` +
     `root-store=${counts["root-store"]}, ` +
     `trust-dir=${counts["trust-dir"]}`

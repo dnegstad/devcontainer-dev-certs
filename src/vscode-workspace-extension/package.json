@@ -39,7 +39,7 @@
       },
       {
         "command": "devcontainer-dev-certs.cleanupStaleDevCerts",
-        "title": "Dev Certs: Clean Up Stale Dev Certificate Artifacts in Container"
+        "title": "Dev Certs: Clean Up Other Dev Certificates in Container"
       }
     ],
     "configuration": {
@@ -63,7 +63,7 @@
         "devcontainer-dev-certs.warnOnStaleDevCerts": {
           "type": "boolean",
           "default": true,
-          "description": "Show a warning when stale dev certificate artifacts are detected in this dev container's .NET certificate stores after install."
+          "description": "Show a warning when multiple dev certificates are detected in this dev container's .NET certificate stores after install — alongside the extension-managed certificate."
         }
       }
     }

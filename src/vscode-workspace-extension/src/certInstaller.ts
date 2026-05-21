@@ -72,11 +72,10 @@ export function installDotNetDevCert(material: CertMaterialV3): void {
   fs.writeFileSync(pemPath, pemContent);
   chmodSafe(pemPath, 0o644);
 
-  // Targeted symlink — only touches the slot for our PEM. Stale PEMs
-  // from prior rotations and their hash symlinks are deliberately
-  // left in place; the user-invoked "Clean Up Stale Dev Certificate
-  // Artifacts in Container" command is the only path that mutates
-  // adjacent files.
+  // Targeted symlink — only touches the slot for our PEM. PEMs from
+  // prior rotations and their hash symlinks are deliberately left in
+  // place; the user-invoked "Clean Up Other Dev Certificates in
+  // Container" command is the only path that mutates adjacent files.
   ensureHashSymlink(trustDir, pemFileName, pemContent);
 }
 
