@@ -201,6 +201,33 @@ describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
     expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
   });
 
+  it("gathers associated files even when the producer used lowercase thumbprint filenames", () => {
+    // Some producers / older tooling write the thumbprint in lowercase
+    // hex. The case-insensitive PFX filename regex matches, but path
+    // lookups for the Root PFX and trust-dir PEM have to preserve the
+    // on-disk casing — otherwise the orphans would never be cleaned up
+    // on a case-sensitive filesystem.
+    const lower = STALE_THUMB.toLowerCase();
+    fs.writeFileSync(path.join(storeDir, `${lower}.pfx`), devCertPfx());
+    fs.writeFileSync(path.join(rootStoreDir, `${lower}.pfx`), devCertPfx());
+    fs.writeFileSync(
+      path.join(trustDir, `aspnetcore-localhost-${lower}.pem`),
+      "lc-pem"
+    );
+
+    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    expect(stale).toHaveLength(1);
+    // Thumbprint is normalised to uppercase for display/comparison.
+    expect(stale[0].thumbprint).toBe(STALE_THUMB);
+    const locations = stale[0].artifacts.map((a) => a.location).sort();
+    expect(locations).toEqual(["my-store", "root-store", "trust-dir"]);
+    // Every gathered file path must match the on-disk (lowercase) casing
+    // so the subsequent `unlinkSync` actually hits the file.
+    for (const a of stale[0].artifacts) {
+      expect(fs.existsSync(a.fullPath)).toBe(true);
+    }
+  });
+
   it("does not report associated files that don't exist on disk", () => {
     // Stale PFX in My but no matching Root PFX and no matching PEM.
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());

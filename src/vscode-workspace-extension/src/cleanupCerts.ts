@@ -111,8 +111,12 @@ export function findStaleDevCerts(
   for (const entry of entries) {
     const match = PFX_FILENAME_RE.exec(entry);
     if (!match) continue;
-    const thumb = match[1].toUpperCase();
-    if (managedMyStoreThumbprints.has(thumb)) continue;
+    // Preserve on-disk casing for sibling-file lookups (case-sensitive
+    // filesystems won't match across variants); normalize separately for
+    // the managed-set comparison and the user-visible identifier.
+    const onDiskThumb = match[1];
+    const normalThumb = onDiskThumb.toUpperCase();
+    if (managedMyStoreThumbprints.has(normalThumb)) continue;
 
     const myPath = path.join(myStoreDir, entry);
     let bytes: Buffer;
@@ -128,21 +132,26 @@ export function findStaleDevCerts(
     if (!scanPfxForDevCertOid(bytes, "")) continue;
 
     const artifacts: StaleArtifact[] = [
-      { location: "my-store", fullPath: myPath, identifier: thumb },
+      { location: "my-store", fullPath: myPath, identifier: normalThumb },
     ];
 
-    // Associated Root-store PFX (.NET dev-certs install writes here too).
-    const rootCandidate = path.join(rootStoreDir, getPfxFileName(thumb));
+    // Associated Root-store PFX and trust-dir PEM. A producer that wrote
+    // the My entry in lowercase will have written its siblings in the
+    // same casing — using `onDiskThumb` keeps the lookups aligned with
+    // whatever convention the original tool followed.
+    const rootCandidate = path.join(
+      rootStoreDir,
+      getPfxFileName(onDiskThumb)
+    );
     if (fs.existsSync(rootCandidate)) {
       artifacts.push({
         location: "root-store",
         fullPath: rootCandidate,
-        identifier: thumb,
+        identifier: normalThumb,
       });
     }
 
-    // Associated trust-dir PEM (`aspnetcore-localhost-{thumbprint}.pem`).
-    const pemFile = getPemFileName(thumb);
+    const pemFile = getPemFileName(onDiskThumb);
     const pemCandidate = path.join(trustDir, pemFile);
     if (fs.existsSync(pemCandidate)) {
       artifacts.push({
@@ -152,7 +161,7 @@ export function findStaleDevCerts(
       });
     }
 
-    stale.push({ thumbprint: thumb, artifacts });
+    stale.push({ thumbprint: normalThumb, artifacts });
   }
 
   return stale;
