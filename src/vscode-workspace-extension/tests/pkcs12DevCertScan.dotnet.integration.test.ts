@@ -9,114 +9,154 @@ import {
 } from "../src/util/pkcs12DevCertScan";
 
 /**
- * End-to-end check that `scanPfxForDevCertOid` identifies a PFX produced by
- * the real `dotnet dev-certs https` CLI — the second producer (alongside
- * the host extension's own `buildPfx`) we need to handle to make the
- * cleanup command work. Skips unless `dotnet --version` reports >= 9, the
- * floor on which `dotnet dev-certs https --export-path --no-password` is
- * available and stable. CI sets up .NET 10 in build-extensions.yml.
+ * End-to-end check that `scanPfxForDevCertOid` identifies the PFX that
+ * `dotnet dev-certs https --trust` actually lands in the standard .NET
+ * store directories — i.e. exactly the file shape the cleanup command
+ * will encounter at runtime, produced by the second producer we care
+ * about (alongside this extension's own `buildPfx`).
+ *
+ * Gated to CI:
+ *   - `--trust` mutates the host's `~/.dotnet/corefx/cryptography/x509stores`
+ *     and `~/.aspnet/dev-certs/trust` directories, so we don't want to
+ *     stomp on a developer's real config when they `npm test` locally.
+ *   - `CI=true` is the GitHub Actions convention; the CI workflow
+ *     installs .NET 10 SDK ahead of `npm test`.
+ *
+ * Exit-code handling:
+ *   - `dotnet dev-certs https --trust` returns 4 on Linux when SSL_CERT_DIR
+ *     doesn't include `~/.aspnet/dev-certs/trust` — "partial trust", but
+ *     the .NET store + trust dir writes still happened. That's the only
+ *     state we need for this scan, so 4 is treated as success here. Any
+ *     other non-zero exit is a real failure and surfaces.
  */
-let dotnetMajor = 0;
-try {
-  const dotnetVersion = execFileSync("dotnet", ["--version"], {
-    timeout: 5000,
-    stdio: ["ignore", "pipe", "pipe"],
-  })
-    .toString()
-    .trim();
-  dotnetMajor = Number.parseInt(dotnetVersion.split(".")[0] ?? "", 10) || 0;
-} catch {
-  // dotnet not on PATH — suite skips.
-}
-const dotnetReady = dotnetMajor >= 9;
+const inCi = process.env["CI"] === "true";
 
-let tmpDir: string;
-// Each export under a per-test sub-dir, but we share the dotnet-managed
-// dev cert across the suite — generating one is slow.
-let devCertPfx: Buffer | null = null;
-let devCertPfxWithPassword: Buffer | null = null;
+let dotnetMajor = 0;
+if (inCi) {
+  try {
+    const dotnetVersion = execFileSync("dotnet", ["--version"], {
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+      .toString()
+      .trim();
+    dotnetMajor = Number.parseInt(dotnetVersion.split(".")[0] ?? "", 10) || 0;
+  } catch {
+    // dotnet not on PATH — suite skips.
+  }
+}
+const ready = inCi && dotnetMajor >= 9;
+
+const dotnetMyStore = path.join(
+  os.homedir(),
+  ".dotnet",
+  "corefx",
+  "cryptography",
+  "x509stores",
+  "my"
+);
+const dotnetRootStore = path.join(
+  os.homedir(),
+  ".dotnet",
+  "corefx",
+  "cryptography",
+  "x509stores",
+  "root"
+);
+
+const PFX_RE = /^[A-F0-9]{40}\.pfx$/i;
+
+function listPfxes(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir).filter((f) => PFX_RE.test(f));
+  } catch {
+    return [];
+  }
+}
 
 beforeAll(() => {
-  if (!dotnetReady) return;
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-scan-"));
+  if (!ready) return;
 
-  // Export the dev cert as a passwordless PFX. `dotnet dev-certs https` will
-  // mint one in the user's store if it doesn't already exist there.
-  const pfxNoPwdPath = path.join(tmpDir, "dev-nopass.pfx");
   const result = spawnSync(
     "dotnet",
-    [
-      "dev-certs",
-      "https",
-      "--export-path",
-      pfxNoPwdPath,
-      "--no-password",
-      "--quiet",
-    ],
-    { timeout: 120_000, encoding: "utf-8" }
+    ["dev-certs", "https", "--trust", "--quiet"],
+    { timeout: 180_000, encoding: "utf-8" }
   );
-  if (result.status === 0 && fs.existsSync(pfxNoPwdPath)) {
-    devCertPfx = fs.readFileSync(pfxNoPwdPath);
-  }
 
-  // Also export with an explicit empty `--password ""` — older .NET
-  // versions emitted different default encryption on this path vs the
-  // `--no-password` path, and we want the cleanup scan to handle both.
-  const pfxPwdPath = path.join(tmpDir, "dev-emptypass.pfx");
-  const result2 = spawnSync(
-    "dotnet",
-    [
-      "dev-certs",
-      "https",
-      "--export-path",
-      pfxPwdPath,
-      "--password",
-      "",
-      "--quiet",
-    ],
-    { timeout: 120_000, encoding: "utf-8" }
-  );
-  if (result2.status === 0 && fs.existsSync(pfxPwdPath)) {
-    devCertPfxWithPassword = fs.readFileSync(pfxPwdPath);
+  // 0 = full success, 4 = partial trust (SSL_CERT_DIR didn't include the
+  // OpenSSL trust dir — see banner comment). Both leave the same artifacts
+  // on disk in the locations we scan below.
+  if (result.status !== 0 && result.status !== 4) {
+    throw new Error(
+      `dotnet dev-certs --trust failed: status=${result.status}\n` +
+        `stdout=${(result.stdout ?? "").trim()}\n` +
+        `stderr=${(result.stderr ?? "").trim()}`
+    );
   }
-}, 180_000);
+}, 200_000);
 
 afterAll(() => {
-  if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+  if (!ready) return;
+  // Best-effort: roll back what --trust placed so the runner doesn't carry
+  // dev-cert state between unrelated jobs. `--clean` removes the cert from
+  // every standard location it touched.
+  spawnSync("dotnet", ["dev-certs", "https", "--clean", "--quiet"], {
+    timeout: 60_000,
+  });
 });
 
-describe.skipIf(!dotnetReady)(
-  "scanPfxForDevCertOid against `dotnet dev-certs https` output",
+describe.skipIf(!ready)(
+  "scanPfxForDevCertOid against PFXes produced by `dotnet dev-certs https --trust`",
   () => {
-    it("identifies a PFX produced by `--export-path ... --no-password`", () => {
-      expect(devCertPfx, "dotnet dev-certs --no-password export failed").not.toBeNull();
-      expect(scanPfxForDevCertOid(devCertPfx!)).toBe(true);
+    it("identifies the dev cert PFX in ~/.dotnet/.../x509stores/my/", () => {
+      const candidates = listPfxes(dotnetMyStore);
+      expect(
+        candidates.length,
+        `no thumbprint-keyed PFX files found in ${dotnetMyStore} after --trust`
+      ).toBeGreaterThan(0);
+
+      const positives = candidates.filter((f) => {
+        const bytes = fs.readFileSync(path.join(dotnetMyStore, f));
+        return scanPfxForDevCertOid(bytes);
+      });
+      expect(
+        positives.length,
+        `scanPfxForDevCertOid did not identify any PFX in ${dotnetMyStore} ` +
+          `as a dev cert (candidates: ${candidates.join(", ")})`
+      ).toBeGreaterThan(0);
     });
 
-    it("identifies a PFX produced by `--export-path ... --password \"\"`", () => {
-      // Skip this case if .NET's CLI rejected the empty-string password
-      // argument (older versions allow it; newer versions may not). We
-      // already proved scanning works above; this is a belt-and-suspenders
-      // check for the alternate export path.
-      if (!devCertPfxWithPassword) return;
-      expect(scanPfxForDevCertOid(devCertPfxWithPassword)).toBe(true);
+    it("identifies the dev cert PFX in ~/.dotnet/.../x509stores/root/", () => {
+      const candidates = listPfxes(dotnetRootStore);
+      expect(
+        candidates.length,
+        `no thumbprint-keyed PFX files found in ${dotnetRootStore} after --trust`
+      ).toBeGreaterThan(0);
+
+      const positives = candidates.filter((f) => {
+        const bytes = fs.readFileSync(path.join(dotnetRootStore, f));
+        return scanPfxForDevCertOid(bytes);
+      });
+      expect(positives.length).toBeGreaterThan(0);
     });
 
     it("usually exercises the decrypt path, not the plaintext fast path", () => {
-      // `dotnet dev-certs` historically encrypts the cert bag (PBE-SHA1-3DES
-      // on legacy .NET, PBES2/AES on newer .NET). If the OID happens to
-      // appear in plaintext (unlikely but possible for some future export
-      // mode), the assertion below is too strict — soften to a log instead
-      // of a hard failure.
-      if (!devCertPfx) return;
-      const hasPlaintextOid = devCertPfx.includes(ASPNET_HTTPS_OID_DER);
-      if (hasPlaintextOid) {
+      // The historical .NET PFX export encrypts the cert bag (PBE-SHA1-3DES
+      // on legacy, PBES2/AES on modern). If a future runtime stops
+      // encrypting it, the fast path catches the OID directly — still a
+      // pass, but we want a log so the test author knows the decrypt path
+      // wasn't actually exercised on this runner.
+      const candidates = listPfxes(dotnetMyStore);
+      const pick = candidates[0];
+      if (!pick) return;
+      const bytes = fs.readFileSync(path.join(dotnetMyStore, pick));
+      if (bytes.includes(ASPNET_HTTPS_OID_DER)) {
         console.log(
-          "[note] dotnet-exported PFX has plaintext OID — scanner took fast path, not decrypt path."
+          `[note] PFX ${pick} in the .NET My store carried the OID in ` +
+            `plaintext — scanner took the fast path, not the decrypt path.`
         );
       }
-      // Either way, the scan must succeed.
-      expect(scanPfxForDevCertOid(devCertPfx)).toBe(true);
+      expect(scanPfxForDevCertOid(bytes)).toBe(true);
     });
   }
 );
