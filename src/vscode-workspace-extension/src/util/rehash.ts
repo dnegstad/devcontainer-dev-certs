@@ -58,12 +58,7 @@ export function rehashDirectory(directory: string): void {
   for (const certFile of certFiles) {
     const fullPath = path.join(directory, certFile);
     if (isSymlink(fullPath)) continue; // Skip symlinks themselves
-
-    const pemContent = fs.readFileSync(fullPath, "utf-8");
-    const hash = computeSubjectHash(pemContent);
-    if (!hash) continue;
-
-    ensureHashSymlinkForHash(directory, certFile, hash);
+    ensureHashSymlink(directory, certFile, fs.readFileSync(fullPath, "utf-8"));
   }
 }
 
@@ -87,14 +82,6 @@ export function ensureHashSymlink(
 ): void {
   const hash = computeSubjectHash(pemContent);
   if (!hash) return;
-  ensureHashSymlinkForHash(directory, pemFileName, hash);
-}
-
-function ensureHashSymlinkForHash(
-  directory: string,
-  pemFileName: string,
-  hash: string
-): void {
   // Slot 0-9 covers any realistic number of collisions in a dev trust dir.
   // Catch EEXIST so a concurrent rehash from another process doesn't crash
   // the caller — existsSync()/symlinkSync() isn't atomic on its own.
