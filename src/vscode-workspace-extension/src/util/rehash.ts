@@ -91,7 +91,19 @@ function createHashSymlinkForHash(
   for (let i = 0; i < 10; i++) {
     const linkName = `${hash}.${i}`;
     const linkPath = path.join(directory, linkName);
-    if (fs.existsSync(linkPath)) continue;
+    if (fs.existsSync(linkPath)) {
+      // Idempotency: if the existing slot already points at the same PEM
+      // we're trying to link, there's nothing to do — returning here prevents
+      // callers (e.g. installDotNetDevCert, which rehashes the whole dir
+      // before re-asserting its own symlink) from producing duplicate
+      // {hash}.0 + {hash}.1 entries that both target the same cert.
+      try {
+        if (fs.readlinkSync(linkPath) === pemFileName) return;
+      } catch {
+        // Not a usable match (broken slot, not a symlink, race) — try next.
+      }
+      continue;
+    }
     try {
       fs.symlinkSync(pemFileName, linkPath);
       return;

@@ -6,6 +6,13 @@ import {
   rehashExtraDestinations,
   writeExtraDestination,
 } from "./certInstaller";
+import {
+  buildManagedSets,
+  cleanupStaleDevCertArtifacts,
+  findStaleDevCertArtifacts,
+  type ArtifactLocation,
+  type StaleArtifact,
+} from "./cleanupCerts";
 import { parseExtraCertDestinations } from "./util/destinations";
 import { ensureSslCertDir } from "./util/sslCertDir";
 import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
@@ -20,6 +27,8 @@ const UI_EXTENSION_ID = "dnegstad.devcontainer-dev-certs-host";
 const GET_CERT_COMMAND = "devcontainer-dev-certs.getCertMaterial";
 const GET_BUNDLE_COMMAND = "devcontainer-dev-certs.getAllCertMaterial";
 const GET_BUNDLE_V3_COMMAND = "devcontainer-dev-certs.getAllCertMaterialV3";
+const CLEANUP_COMMAND = "devcontainer-dev-certs.cleanupStaleDevCerts";
+const WARN_STALE_CONFIG_KEY = "warnOnStaleDevCerts";
 
 function isTruthyEnv(val: string | undefined, defaultVal: boolean): boolean {
   if (val === undefined || val === "") return defaultVal;
@@ -39,6 +48,12 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("devcontainer-dev-certs.injectCert", () =>
       injectCertificate()
+    )
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(CLEANUP_COMMAND, () =>
+      cleanupCommand()
     )
   );
 
@@ -149,7 +164,151 @@ async function injectCertificate(): Promise<void> {
         newInstalls.join(", ")
       )
     );
+
+    void detectStaleAndPromptCleanup(bundle);
   }
+}
+
+async function detectStaleAndPromptCleanup(
+  bundle: CertBundleV3
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
+  if (!config.get<boolean>(WARN_STALE_CONFIG_KEY, true)) return;
+
+  const stale = findStaleDevCertArtifacts(buildManagedSets(bundle));
+  if (stale.length === 0) return;
+
+  log(formatStaleSummary(stale));
+
+  const cleanup = vscode.l10n.t("Clean Up");
+  const dismiss = vscode.l10n.t("Don't Show Again");
+  const choice = await vscode.window.showWarningMessage(
+    vscode.l10n.t(
+      "Dev Certs: Detected {0} stale ASP.NET dev certificate artifact(s) across the .NET My/Root stores and OpenSSL trust dir. Leftovers can cause .NET/Aspire to pick the wrong certificate.",
+      stale.length
+    ),
+    cleanup,
+    dismiss
+  );
+
+  if (choice === cleanup) {
+    await vscode.commands.executeCommand(CLEANUP_COMMAND);
+  } else if (choice === dismiss) {
+    await config.update(
+      WARN_STALE_CONFIG_KEY,
+      false,
+      vscode.ConfigurationTarget.Global
+    );
+  }
+}
+
+async function cleanupCommand(): Promise<void> {
+  const includeDotNetDev = isTruthyEnv(
+    process.env["DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET"],
+    true
+  );
+  const includeUserCerts = isTruthyEnv(
+    process.env["DEVCONTAINER_DEV_CERTS_SYNC_USER"],
+    true
+  );
+
+  // Refuse to run blind: without the live bundle we can't tell stale from
+  // legitimately-installed and would risk deleting in-use artifacts.
+  const bundle = await tryGetBundle(includeDotNetDev, includeUserCerts);
+  if (!bundle) {
+    vscode.window.showWarningMessage(
+      vscode.l10n.t(
+        "Dev Certs: Unable to determine the managed certificate set — aborting cleanup."
+      )
+    );
+    return;
+  }
+
+  const managed = buildManagedSets(bundle);
+  const stale = findStaleDevCertArtifacts(managed);
+  if (stale.length === 0) {
+    vscode.window.showInformationMessage(
+      vscode.l10n.t(
+        "Dev Certs: No stale ASP.NET dev certificate artifacts were found."
+      )
+    );
+    return;
+  }
+
+  const remove = vscode.l10n.t("Remove");
+  const detail = formatStaleDetail(stale);
+  const confirm = await vscode.window.showWarningMessage(
+    vscode.l10n.t(
+      "Dev Certs: Remove {0} stale ASP.NET dev certificate artifact(s)?",
+      stale.length
+    ),
+    { modal: true, detail },
+    remove
+  );
+  if (confirm !== remove) return;
+
+  const result = cleanupStaleDevCertArtifacts(managed);
+
+  for (const r of result.removed) {
+    log(`Cleanup: removed ${r.location} ${r.fullPath}`);
+  }
+  for (const f of result.failed) {
+    log(
+      `Cleanup: failed to remove ${f.artifact.location} ${f.artifact.fullPath}: ${f.error}`
+    );
+  }
+
+  const summary = vscode.l10n.t(
+    "Dev Certs: Removed {0} stale artifact(s){1}{2}.",
+    result.removed.length,
+    result.failed.length
+      ? vscode.l10n.t(" ({0} failed)", result.failed.length)
+      : "",
+    result.rehashedTrustDir ? vscode.l10n.t(", trust dir rehashed") : ""
+  );
+  if (result.failed.length > 0) {
+    vscode.window.showWarningMessage(summary);
+  } else {
+    vscode.window.showInformationMessage(summary);
+  }
+}
+
+function formatStaleSummary(stale: StaleArtifact[]): string {
+  const counts: Record<ArtifactLocation, number> = {
+    "my-store": 0,
+    "root-store": 0,
+    "trust-dir": 0,
+  };
+  for (const s of stale) counts[s.location]++;
+  return (
+    `Stale dev cert artifacts detected: ` +
+    `my-store=${counts["my-store"]}, ` +
+    `root-store=${counts["root-store"]}, ` +
+    `trust-dir=${counts["trust-dir"]}`
+  );
+}
+
+function formatStaleDetail(stale: StaleArtifact[]): string {
+  const groups: Record<ArtifactLocation, string[]> = {
+    "my-store": [],
+    "root-store": [],
+    "trust-dir": [],
+  };
+  for (const s of stale) groups[s.location].push(s.fullPath);
+
+  const labels: Record<ArtifactLocation, string> = {
+    "my-store": ".NET My store",
+    "root-store": ".NET Root store",
+    "trust-dir": "OpenSSL trust dir",
+  };
+
+  const sections: string[] = [];
+  for (const loc of Object.keys(groups) as ArtifactLocation[]) {
+    const paths = groups[loc];
+    if (paths.length === 0) continue;
+    sections.push(`${labels[loc]}:\n${paths.map((p) => `  ${p}`).join("\n")}`);
+  }
+  return sections.join("\n\n");
 }
 
 async function tryGetBundle(
