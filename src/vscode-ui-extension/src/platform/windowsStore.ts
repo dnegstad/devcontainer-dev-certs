@@ -106,6 +106,11 @@ export class WindowsCertificateStore extends BaseCertificateStore {
           [void]$candidates.Add(@{ thumbprint = $thumb; pfxPath = $tmpPfx; subjectCN = $cn; notBefore = $nbf; notAfter = $exp })
         } catch {
           $msg = $_.Exception.Message
+          # $cert.PrivateKey.Key.ExportPolicy resolves only for RSA/CNG-backed
+          # keys. Legacy CAPI keys and non-RSA algorithms surface the policy
+          # at a different path (or not at all) — we treat the lookup as
+          # best-effort and fall back to message-string matching when it
+          # throws or returns null.
           $policy = $null
           try { $policy = $cert.PrivateKey.Key.ExportPolicy } catch {}
           if ($policy) {
