@@ -5,6 +5,7 @@ import * as path from "path";
 import {
   BaseCertificateStore,
   classifyCandidate,
+  extractThumbprintHintFromFilename,
   selectBestDevCert,
   type UsableDevCert,
 } from "./baseStore";
@@ -61,7 +62,7 @@ export class MacCertificateStore extends BaseCertificateStore {
           classifyCandidate({
             kind: "parseFailure",
             source: pfxPath,
-            thumbprintHint: extractThumbHintFromMacFilename(pfxFile),
+            thumbprintHint: extractThumbprintHintFromFilename(pfxFile),
           });
           continue;
         }
@@ -306,11 +307,6 @@ export class MacCertificateStore extends BaseCertificateStore {
       }
     }
   }
-}
-
-function extractThumbHintFromMacFilename(filename: string): string | null {
-  const m = filename.match(/^aspnetcore-localhost-([0-9A-Fa-f]{40})\.pfx$/);
-  return m ? m[1].toUpperCase() : null;
 }
 
 /**
