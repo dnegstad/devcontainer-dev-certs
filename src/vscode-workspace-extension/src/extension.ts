@@ -7,11 +7,11 @@ import {
   writeExtraDestination,
 } from "./certInstaller";
 import {
+  ARTIFACT_LOCATION_LOG_LABEL,
   buildManagedMyStoreThumbprints,
   bundleHasManagedDevCert,
   cleanupStaleDevCerts,
   findStaleDevCerts,
-  type ArtifactLocation,
   type CleanupResult,
   type StaleDevCert,
 } from "./cleanupCerts";
@@ -282,7 +282,7 @@ function performCleanup(stale: readonly StaleDevCert[]): void {
   // Per-file failure detail — actionable, kept terse (location + error).
   for (const f of result.failed) {
     log(
-      `  failed: ${f.thumbprint} ${logLocationLabel(f.artifact.location)} (${f.error})`
+      `  failed: ${f.thumbprint} ${ARTIFACT_LOCATION_LOG_LABEL[f.artifact.location]} (${f.error})`
     );
   }
 
@@ -318,19 +318,6 @@ export function formatCleanupSummary(result: CleanupResult): string {
   );
 }
 
-// Output-channel labels keep per-location detail (the engineering audit
-// trail), with the trust-dir disambiguated from generic OpenSSL trust
-// directories. The internal `ArtifactLocation` strings stay unchanged.
-function logLocationLabel(loc: ArtifactLocation): string {
-  switch (loc) {
-    case "my-store":
-      return "my-store";
-    case "root-store":
-      return "root-store";
-    case "trust-dir":
-      return "aspnet-dev-certs-trust";
-  }
-}
 
 async function tryGetBundle(
   includeDotNetDev: boolean,

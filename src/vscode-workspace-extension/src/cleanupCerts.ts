@@ -22,6 +22,15 @@ const PFX_FILENAME_RE = /^([A-F0-9]{40})\.pfx$/i;
 
 export type ArtifactLocation = "my-store" | "root-store" | "trust-dir";
 
+/** Log-channel label for each location. Disambiguates "trust-dir" from
+ *  generic OpenSSL trust folders. `Record<ArtifactLocation, …>` forces
+ *  any new location to have a label added here at compile time. */
+export const ARTIFACT_LOCATION_LOG_LABEL: Record<ArtifactLocation, string> = {
+  "my-store": "my-store",
+  "root-store": "root-store",
+  "trust-dir": "aspnet-dev-certs-trust",
+};
+
 export interface StaleArtifact {
   location: ArtifactLocation;
   fullPath: string;
