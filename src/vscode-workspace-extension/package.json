@@ -36,6 +36,10 @@
       {
         "command": "devcontainer-dev-certs.injectCert",
         "title": "Dev Certs: Inject Certificate into Remote"
+      },
+      {
+        "command": "devcontainer-dev-certs.cleanupStaleDevCerts",
+        "title": "Dev Certs: Clean Up Other Dev Certificates in Dev Container"
       }
     ],
     "configuration": {
@@ -55,6 +59,11 @@
           "type": "boolean",
           "default": true,
           "description": "Ensure SSL_CERT_DIR is configured in the remote environment when the Dev Container feature hasn't set it"
+        },
+        "devcontainer-dev-certs.warnOnStaleDevCerts": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a warning when multiple dev certificates are detected in this Dev Container's .NET certificate stores after install — alongside the extension-managed certificate."
         }
       }
     }

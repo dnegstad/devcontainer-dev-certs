@@ -58,40 +58,65 @@ export function rehashDirectory(directory: string): void {
   for (const certFile of certFiles) {
     const fullPath = path.join(directory, certFile);
     if (isSymlink(fullPath)) continue; // Skip symlinks themselves
-
-    const pemContent = fs.readFileSync(fullPath, "utf-8");
-    const hash = computeSubjectHash(pemContent);
-    if (!hash) continue;
-
-    createHashSymlinkForHash(directory, certFile, hash);
+    ensureHashSymlink(directory, certFile, fs.readFileSync(fullPath, "utf-8"));
   }
 }
 
 /**
- * Create a single hash symlink for a specific PEM file.
+ * Ensure an OpenSSL subject-hash symlink exists for `pemFileName` in
+ * `directory`. No-op when a valid slot already points at the same PEM —
+ * the caller can re-invoke this safely on every install without producing
+ * duplicate `{hash}.0`/`{hash}.1` pairs. Allocates the next free slot
+ * (`{hash}.0` … `{hash}.9`) on a real collision with a different target.
+ *
+ * Unlike `rehashDirectory`, this only touches the slot for our PEM —
+ * other PEMs' hash symlinks are left alone.
  */
-export function createHashSymlink(
+export function ensureHashSymlink(
   directory: string,
   pemFileName: string,
   pemContent: string
 ): void {
   const hash = computeSubjectHash(pemContent);
   if (!hash) return;
-  createHashSymlinkForHash(directory, pemFileName, hash);
-}
-
-function createHashSymlinkForHash(
-  directory: string,
-  pemFileName: string,
-  hash: string
-): void {
   // Slot 0-9 covers any realistic number of collisions in a dev trust dir.
   // Catch EEXIST so a concurrent rehash from another process doesn't crash
-  // the caller — existsSync()/symlinkSync() isn't atomic on its own.
+  // the caller.
   for (let i = 0; i < 10; i++) {
     const linkName = `${hash}.${i}`;
     const linkPath = path.join(directory, linkName);
-    if (fs.existsSync(linkPath)) continue;
+
+    // Use lstat (instead of existsSync) so dangling symlinks are detected
+    // as "occupied" and can be reclaimed.
+    let existing: fs.Stats | undefined;
+    try {
+      existing = fs.lstatSync(linkPath);
+    } catch {
+      // ENOENT — slot is free.
+    }
+
+    if (existing) {
+      if (!existing.isSymbolicLink()) continue; // not ours; skip
+      let target: string;
+      try {
+        target = fs.readlinkSync(linkPath);
+      } catch {
+        continue;
+      }
+      if (target === pemFileName) return; // already correct
+      const targetPath = path.isAbsolute(target)
+        ? target
+        : path.join(directory, target);
+      if (fs.existsSync(targetPath)) continue; // live collision; next slot
+      // Dangling — reclaim the slot. Hash symlinks are written exclusively
+      // by this extension, so a dangling one is leftover state we own.
+      try {
+        fs.unlinkSync(linkPath);
+      } catch {
+        continue;
+      }
+    }
+
     try {
       fs.symlinkSync(pemFileName, linkPath);
       return;

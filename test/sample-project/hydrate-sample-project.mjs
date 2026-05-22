@@ -15,7 +15,7 @@
 //   - CLI for manual testing
 //   - CI for automated testing
 
-import { cpSync, rmSync, mkdirSync } from "fs";
+import { cpSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -39,6 +39,26 @@ cpSync(scriptDir, outDir, {
 });
 
 // Copy feature into .devcontainer/
-cpSync(featureDir, join(outDir, ".devcontainer", "devcontainer-dev-certs"), { recursive: true });
+const stagedFeatureDir = join(outDir, ".devcontainer", "devcontainer-dev-certs");
+cpSync(featureDir, stagedFeatureDir, { recursive: true });
+
+// Strip the marketplace-pinned dev-cert extension IDs from the staged
+// feature so the local VSIX (workspace) and Extension Development Host
+// (UI) aren't shadowed by the published stable versions.
+const featureManifestPath = join(stagedFeatureDir, "devcontainer-feature.json");
+const featureManifest = JSON.parse(readFileSync(featureManifestPath, "utf-8"));
+const vscodeCustomizations = featureManifest.customizations?.vscode;
+if (Array.isArray(vscodeCustomizations?.extensions)) {
+  vscodeCustomizations.extensions = vscodeCustomizations.extensions.filter(
+    (id) => !id.startsWith("dnegstad.devcontainer-dev-certs-")
+  );
+  if (vscodeCustomizations.extensions.length === 0) {
+    delete vscodeCustomizations.extensions;
+  }
+}
+writeFileSync(
+  featureManifestPath,
+  JSON.stringify(featureManifest, null, 2) + "\n"
+);
 
 console.log(`Test project hydrated at: ${outDir}`);

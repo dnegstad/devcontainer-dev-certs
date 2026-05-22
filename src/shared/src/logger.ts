@@ -19,3 +19,9 @@ export function initLogger(channelName: string): vscode.OutputChannel {
 export function log(message: string): void {
   channel?.appendLine(`[${new Date().toISOString()}] ${message}`);
 }
+
+/** Reveal the shared output channel. `preserveFocus = true` so a
+ *  concurrent prompt doesn't lose focus. No-op if uninitialised. */
+export function revealLogger(): void {
+  channel?.show(true);
+}

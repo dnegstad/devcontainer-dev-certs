@@ -121,14 +121,22 @@ describe.skipIf(process.platform === "win32")("installUserCert store gating", ()
 });
 
 describe.skipIf(process.platform === "win32")("installDotNetDevCert", () => {
-  it("always writes to the store regardless of any opt-in flag", () => {
-    const material: CertMaterialV3 = {
+  const SAMPLE_DEV_PEM =
+    "-----BEGIN CERTIFICATE-----\n" +
+    "MIIBkTCB+wIJANSsAUOhwHK7MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNVBAMMCWxv\n" +
+    "Y2FsaG9zdDAeFw0yNDAxMDEwMDAwMDBaFw0zNDAxMDEwMDAwMDBaMBQxEjAQBgNV\n" +
+    "BAMMCWxvY2FsaG9zdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAyx0qMlYa\n" +
+    "PEzL0c9XBYNcQ6KAjMjbDLp6FrW+lWZHCKf8/aSJW7CnH2tQHrPiU8r6QYBSWQ7c\n" +
+    "VTrA8h8wYy7eRdQk31uLR7tGzZ5JxBz2DYxcuxR1RJ/+QbR1m6Z5w9p5UqxQ4l3+\n" +
+    "AbsmPwy3J7t4cqo3PVPmF6mPiK7M+M0CAwEAATANBgkqhkiG9w0BAQsFAAOBgQAt\n" +
+    "-----END CERTIFICATE-----\n";
+
+  function devMaterial(thumbprint: string): CertMaterialV3 {
+    return {
       kind: "dotnet-dev",
       name: "aspnetcore-dev",
-      thumbprint: "DEADBEEF",
-      pemCertBase64: Buffer.from(
-        "-----BEGIN CERTIFICATE-----\nDEV\n-----END CERTIFICATE-----\n"
-      ).toString("base64"),
+      thumbprint,
+      pemCertBase64: Buffer.from(SAMPLE_DEV_PEM).toString("base64"),
       pemKeyBase64: Buffer.from(
         "-----BEGIN PRIVATE KEY-----\nDEV\n-----END PRIVATE KEY-----\n"
       ).toString("base64"),
@@ -138,10 +146,60 @@ describe.skipIf(process.platform === "win32")("installDotNetDevCert", () => {
       installToDotNetStore: true,
       dotNetStorePfxBase64: Buffer.from("DEV-PFX").toString("base64"),
     };
-    installDotNetDevCert(material);
+  }
+
+  it("always writes to the store regardless of any opt-in flag", () => {
+    installDotNetDevCert(devMaterial("DEADBEEF"));
     expect(fs.existsSync(path.join(storeDir, "DEADBEEF.pfx"))).toBe(true);
     expect(fs.existsSync(path.join(rootStoreDir, "DEADBEEF.pfx"))).toBe(true);
   });
+
+  it("creates exactly one hash symlink for the new PEM (no duplicate .0/.1)", () => {
+    installDotNetDevCert(devMaterial("DEADBEEF"));
+    const links = fs
+      .readdirSync(trustDir)
+      .filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+    expect(links).toHaveLength(1);
+    expect(links[0].endsWith(".0")).toBe(true);
+    expect(fs.readlinkSync(path.join(trustDir, links[0]))).toBe(
+      "aspnetcore-localhost-DEADBEEF.pem"
+    );
+  });
+
+  it("does NOT sweep pre-existing aspnetcore-localhost PEMs from prior rotations", () => {
+    const stalePath = path.join(
+      trustDir,
+      "aspnetcore-localhost-CAFEBABE.pem"
+    );
+    fs.writeFileSync(stalePath, "old");
+
+    installDotNetDevCert(devMaterial("DEADBEEF"));
+
+    // Old PEM is left intact — the user is expected to invoke the cleanup
+    // command explicitly to remove it.
+    expect(fs.existsSync(stalePath)).toBe(true);
+  });
+
+  it("is idempotent when called twice with the same thumbprint", () => {
+    installDotNetDevCert(devMaterial("DEADBEEF"));
+    installDotNetDevCert(devMaterial("DEADBEEF"));
+
+    expect(fs.readdirSync(storeDir)).toEqual(["DEADBEEF.pfx"]);
+    expect(fs.readdirSync(rootStoreDir)).toEqual(["DEADBEEF.pfx"]);
+
+    const trustEntries = fs.readdirSync(trustDir);
+    const pems = trustEntries.filter((f) => f.endsWith(".pem"));
+    const links = trustEntries.filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+    expect(pems).toEqual(["aspnetcore-localhost-DEADBEEF.pem"]);
+    expect(links).toHaveLength(1);
+    expect(links[0].endsWith(".0")).toBe(true);
+    expect(fs.readlinkSync(path.join(trustDir, links[0]))).toBe(
+      "aspnetcore-localhost-DEADBEEF.pem"
+    );
+  });
+
+  // The "leaves pre-existing hash symlinks for unrelated PEMs untouched"
+  // invariant is covered at the unit level in `tests/rehash.test.ts`.
 });
 
 describe.skipIf(process.platform === "win32")("isCertInstalled", () => {

@@ -6,6 +6,9 @@ export const window = {
       appendLine(_msg: string) {
         // no-op in tests
       },
+      show(_preserveFocus?: boolean) {
+        // no-op in tests
+      },
     };
   },
   showWarningMessage() {
@@ -25,9 +28,27 @@ export const workspace = {
       get<T>(_key: string, defaultValue?: T): T | undefined {
         return defaultValue;
       },
+      update(_key: string, _value: unknown, _target?: unknown): Promise<void> {
+        return Promise.resolve();
+      },
     };
   },
 };
+
+export const commands = {
+  executeCommand<T = unknown>(_command: string, ..._args: unknown[]): Promise<T | undefined> {
+    return Promise.resolve(undefined);
+  },
+  registerCommand(_command: string, _callback: (...args: unknown[]) => unknown) {
+    return { dispose() {} };
+  },
+};
+
+export enum ConfigurationTarget {
+  Global = 1,
+  Workspace = 2,
+  WorkspaceFolder = 3,
+}
 
 type L10nArg = string | number | boolean;
 type L10nOptions = {
