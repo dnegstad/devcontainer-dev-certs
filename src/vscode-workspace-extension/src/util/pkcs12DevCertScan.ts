@@ -165,7 +165,11 @@ function decryptPbes2(encrypted: Buffer, params: Buffer, password: string): Buff
   pp += iterTlv.totalLength;
 
   let explicitKeyLength = 0;
-  let prf: "sha1" | "sha256" | "sha384" | "sha512" = "sha1";
+  // SHA-256 is what our producers (this extension's buildPfx + .NET 9+
+  // Pkcs12Builder) emit. The default below only matters when the PRF
+  // field is absent, which they never do; any other actual PRF will be
+  // selected explicitly in the loop below.
+  let prf: "sha256" | "sha384" | "sha512" = "sha256";
   while (pp < ppEnd) {
     const peek = readTlv(params, pp);
     if (!peek) return null;
@@ -179,10 +183,6 @@ function decryptPbes2(encrypted: Buffer, params: Buffer, password: string): Buff
       if (!prfAlg) return null;
       const prfOid = readOid(params, prfAlg.contentStart);
       if (prfOid) {
-        // SHA-1 PRF is the implicit default when the field is omitted —
-        // producers rarely encode it explicitly, so it falls through here
-        // as an unsupported algorithm if they do. `prf` is already
-        // initialised to "sha1" for the omitted case.
         if (prfOid.oid === OID.hmacSha256) prf = "sha256";
         else if (prfOid.oid === OID.hmacSha384) prf = "sha384";
         else if (prfOid.oid === OID.hmacSha512) prf = "sha512";
