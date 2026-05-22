@@ -275,15 +275,14 @@ async function cleanupCommand(): Promise<void> {
 function performCleanup(stale: readonly StaleDevCert[]): void {
   const result = cleanupStaleDevCerts(stale);
 
-  for (const r of result.removed) {
-    log(
-      `Cleanup: removed ${r.thumbprint} ${logLocationLabel(r.artifact.location)}: ${r.artifact.fullPath}`
-    );
-  }
+  log(
+    `Cleanup: removed ${result.removedCerts.length} of ${stale.length} dev cert(s)` +
+      (result.failed.length ? `, ${result.failed.length} file(s) failed` : "")
+  );
+  // Per-file failure detail — actionable, kept terse (location + error).
   for (const f of result.failed) {
     log(
-      `Cleanup: failed to remove ${f.thumbprint} ` +
-        `${logLocationLabel(f.artifact.location)} (${f.artifact.fullPath}): ${f.error}`
+      `  failed: ${f.thumbprint} ${logLocationLabel(f.artifact.location)} (${f.error})`
     );
   }
 
@@ -301,16 +300,8 @@ function performCleanup(stale: readonly StaleDevCert[]): void {
 }
 
 function logStaleCandidates(stale: readonly StaleDevCert[]): void {
-  const totalFiles = stale.reduce((n, c) => n + c.artifacts.length, 0);
-  log(
-    `Cleanup: ${stale.length} other dev cert(s) in CurrentUser\\My; ` +
-      `${totalFiles} associated file(s) would be removed:`
-  );
-  for (const s of stale) {
-    for (const a of s.artifacts) {
-      log(`  ${s.thumbprint} ${logLocationLabel(a.location)}: ${a.fullPath}`);
-    }
-  }
+  log(`Cleanup: ${stale.length} other dev cert(s) detected:`);
+  for (const s of stale) log(`  ${s.thumbprint}`);
 }
 
 /** User-visible summary line for a completed cleanup. */
