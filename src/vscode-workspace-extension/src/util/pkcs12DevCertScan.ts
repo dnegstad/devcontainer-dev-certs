@@ -29,7 +29,6 @@ const OID = {
   aes128Cbc: "2.16.840.1.101.3.4.1.2",
   aes192Cbc: "2.16.840.1.101.3.4.1.22",
   aes256Cbc: "2.16.840.1.101.3.4.1.42",
-  hmacSha1: "1.2.840.113549.2.7",
   hmacSha256: "1.2.840.113549.2.9",
   hmacSha384: "1.2.840.113549.2.10",
   hmacSha512: "1.2.840.113549.2.11",
@@ -180,10 +179,13 @@ function decryptPbes2(encrypted: Buffer, params: Buffer, password: string): Buff
       if (!prfAlg) return null;
       const prfOid = readOid(params, prfAlg.contentStart);
       if (prfOid) {
+        // SHA-1 PRF is the implicit default when the field is omitted —
+        // producers rarely encode it explicitly, so it falls through here
+        // as an unsupported algorithm if they do. `prf` is already
+        // initialised to "sha1" for the omitted case.
         if (prfOid.oid === OID.hmacSha256) prf = "sha256";
         else if (prfOid.oid === OID.hmacSha384) prf = "sha384";
         else if (prfOid.oid === OID.hmacSha512) prf = "sha512";
-        else if (prfOid.oid === OID.hmacSha1) prf = "sha1";
         else return null;
       }
       pp += prfAlg.totalLength;
