@@ -602,7 +602,7 @@ describe("CertProvider defaultKestrelCertificate", () => {
     ).toBe(true);
   });
 
-  it("refuses to target the dotnet-dev cert (custom-cert-only setting)", async () => {
+  it("refuses to target the dotnet-dev cert with a dedicated message (not the generic missing-entry one)", async () => {
     __setConfig("devcontainerDevCerts", {
       defaultKestrelCertificate: "aspnetcore-dev",
     });
@@ -614,6 +614,22 @@ describe("CertProvider defaultKestrelCertificate", () => {
     });
 
     expect(bundle.defaultKestrelCert).toBeUndefined();
+    // The cert IS in the bundle — make sure we don't mislead the user
+    // with the generic "no userCertificates entry with that name was
+    // synced" warning. They get the dotnet-dev-specific guidance instead.
+    expect(
+      warningMessages.some((m) =>
+        m.includes("no userCertificates entry with that name was synced")
+      )
+    ).toBe(false);
+    expect(
+      warningMessages.some(
+        (m) =>
+          m.includes("aspnetcore-dev") &&
+          m.includes("auto-generated dotnet-dev certificate") &&
+          m.includes("X509Store")
+      )
+    ).toBe(true);
   });
 
   it("is absent on the V2 endpoint (V3-only wire field)", async () => {

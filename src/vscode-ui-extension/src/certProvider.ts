@@ -451,6 +451,21 @@ function resolveDefaultKestrelCert(
   const requested = config.get<string>("defaultKestrelCertificate", "").trim();
   if (!requested) return undefined;
 
+  // The dotnet-dev cert may well be in the bundle, but the setting is
+  // for *custom* user certs only — Kestrel already auto-discovers the
+  // dotnet-dev cert via X509Store. Catch this before the generic "no
+  // match" warning, which would mislead the user into thinking the cert
+  // is missing.
+  if (requested === DOTNET_DEV_CERT_NAME) {
+    const message = vscode.l10n.t(
+      "Dev Certs: defaultKestrelCertificate is set to '{0}', but the auto-generated dotnet-dev certificate cannot be the Kestrel default — Kestrel already discovers it via the .NET X509Store. Set this only for a custom userCertificates entry, or leave it empty.",
+      requested
+    );
+    log(`[warn] ${message}`);
+    void vscode.window.showWarningMessage(message);
+    return undefined;
+  }
+
   const match = certs.find((c) => c.kind === "user" && c.name === requested);
   if (!match) {
     const message = vscode.l10n.t(
