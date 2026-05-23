@@ -17,6 +17,10 @@ import {
   type CleanupResult,
   type StaleDevCert,
 } from "./cleanupCerts";
+import {
+  createDefaultKestrelDebugProvider,
+  kestrelDefaultEnvHolder,
+} from "./defaultKestrelDebugProvider";
 import { parseExtraCertDestinations } from "./util/destinations";
 import { ensureSslCertDir } from "./util/sslCertDir";
 import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
@@ -60,6 +64,20 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(CLEANUP_COMMAND, () =>
       cleanupCommand()
+    )
+  );
+
+  // Counterpart to the EnvironmentVariableCollection path: terminals see
+  // ASPNETCORE_Kestrel__Certificates__Default__Path/Password through the
+  // collection, but the coreclr debug adapter constructs its own child env
+  // and doesn't inherit those mutations. The provider below injects the
+  // same vars into resolved debug configurations so F5 launches via the
+  // C# Dev Kit (and Aspire AppHost, which currently also routes through
+  // coreclr) match the terminal behavior.
+  context.subscriptions.push(
+    vscode.debug.registerDebugConfigurationProvider(
+      "coreclr",
+      createDefaultKestrelDebugProvider()
     )
   );
 
@@ -351,6 +369,7 @@ function applyDefaultKestrelCert(
     envCollection.delete(KESTREL_PATH_ENV);
     envCollection.delete(KESTREL_PASSWORD_ENV);
     envCollection.description = undefined;
+    kestrelDefaultEnvHolder.current = undefined;
     removeKestrelDefaultCert();
   };
 
@@ -401,6 +420,13 @@ function applyDefaultKestrelCert(
   } else {
     envCollection.delete(KESTREL_PASSWORD_ENV);
   }
+  // Mirror the same selection into the holder the debug provider reads.
+  // Keeping these in lockstep is what makes terminal and F5 launches see
+  // an identical set of vars.
+  kestrelDefaultEnvHolder.current =
+    selection.password !== undefined
+      ? { path: pfxPath, password: selection.password }
+      : { path: pfxPath };
   log(
     `Default Kestrel certificate set to '${selection.name}' at ${pfxPath} for VS Code-launched processes.`
   );
