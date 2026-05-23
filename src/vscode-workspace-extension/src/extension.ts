@@ -328,18 +328,19 @@ export function formatCleanupSummary(result: CleanupResult): string {
 
 
 /**
- * Apply (or sweep) the user-selected default Kestrel cert. When the host
- * sent a `defaultKestrelCert` pointer, we write the matching cert's PFX
- * to the well-known path and surface its path (plus password when set)
- * via the extension's environment variable collection so processes
- * launched from VS Code — integrated terminals, debug sessions, tasks —
- * inherit `ASPNETCORE_Kestrel__Certificates__Default__Path` and
- * `__Password` automatically.
+ * Apply (or sweep) the user-selected default Kestrel cert. When a cert
+ * in the bundle carries `isDefaultKestrelCert: true`, we write its PFX
+ * to the well-known path and surface that path (plus its inline
+ * `pfxPassword` when set) via the extension's environment variable
+ * collection so processes launched from VS Code — integrated terminals,
+ * debug sessions, tasks — inherit
+ * `ASPNETCORE_Kestrel__Certificates__Default__Path` and `__Password`
+ * automatically.
  *
  * The opposite path matters too: if the setting was previously set and
- * the user has since cleared it (or renamed the entry), the bundle no
- * longer carries the pointer. We sweep the file and clear the env vars
- * so a stale selection doesn't keep applying.
+ * the user has since cleared it (or renamed the entry), no cert in the
+ * bundle is flagged. We sweep the file and clear the env vars so a
+ * stale selection doesn't keep applying.
  */
 function applyDefaultKestrelCert(
   context: vscode.ExtensionContext,
@@ -353,22 +354,10 @@ function applyDefaultKestrelCert(
     removeKestrelDefaultCert();
   };
 
-  const selection = bundle.defaultKestrelCert;
-  if (!selection) {
-    sweep();
-    return;
-  }
-
   const material = bundle.certs.find(
-    (c) => c.kind === "user" && c.name === selection.name
+    (c) => c.kind === "user" && c.isDefaultKestrelCert === true
   );
   if (!material) {
-    // The host already validated this; reaching here means the bundle
-    // shape was tampered with on the wire or a host/workspace version
-    // mismatch dropped the cert. Refuse to apply rather than blowing up.
-    log(
-      `defaultKestrelCert references '${selection.name}' but no matching user cert is in the bundle; skipping.`
-    );
     sweep();
     return;
   }
@@ -386,13 +375,16 @@ function applyDefaultKestrelCert(
     "Sets ASPNETCORE_Kestrel__Certificates__Default__Path/Password to the user-selected dev certificate."
   );
   envCollection.replace(KESTREL_PATH_ENV, pfxPath);
-  if (selection.password !== undefined) {
-    envCollection.replace(KESTREL_PASSWORD_ENV, selection.password);
+  // pfxPassword on the cert is the single source — same value the user
+  // typed into `userCertificates[].pfxPassword`. Absence means the cert's
+  // PFX opens with the empty password.
+  if (material.pfxPassword !== undefined) {
+    envCollection.replace(KESTREL_PASSWORD_ENV, material.pfxPassword);
   } else {
     envCollection.delete(KESTREL_PASSWORD_ENV);
   }
   log(
-    `Default Kestrel certificate set to '${selection.name}' at ${pfxPath} for VS Code-launched processes.`
+    `Default Kestrel certificate set to '${material.name}' at ${pfxPath} for VS Code-launched processes.`
   );
 }
 

@@ -14,7 +14,6 @@ import type {
   CertMaterial,
   CertMaterialV2,
   CertMaterialV3,
-  DefaultKestrelCertSelection,
 } from "@devcontainer-dev-certs/shared";
 import { DOTNET_DEV_CERT_NAME } from "@devcontainer-dev-certs/shared";
 
@@ -110,16 +109,40 @@ export class CertProvider {
    * preserving `pfxBase64`, the per-cert `installToDotNetStore` flag, and
    * the (separate) passwordless `dotNetStorePfxBase64` payload when the
    * cert opted into the store install.
+   *
+   * Also splices in `pfxPassword` (from the user's `userCertificates`
+   * config) and `isDefaultKestrelCert` (from
+   * `devcontainerDevCerts.defaultKestrelCertificate`) on a per-call
+   * basis. Both are derived from settings, not from cert material, so
+   * they live outside the cache and can change without invalidating it.
    */
   async getAllCertMaterialV3(
     args: GetAllCertMaterialArgs
   ): Promise<CertBundleV3> {
     const certs = await this.collect(args);
-    const v3Certs = certs.map((c) => c.v3);
-    const defaultKestrelCert = resolveDefaultKestrelCert(v3Certs);
-    return defaultKestrelCert
-      ? { certs: v3Certs, defaultKestrelCert }
-      : { certs: v3Certs };
+    const config = vscode.workspace.getConfiguration("devcontainerDevCerts");
+    const userConfigs = config.get<UserCertificateConfig[]>(
+      "userCertificates",
+      []
+    );
+    const configByName = new Map(userConfigs.map((u) => [u.name, u]));
+
+    const v3Certs: CertMaterialV3[] = certs.map((c) => {
+      if (c.v3.kind !== "user") return c.v3;
+      const source = configByName.get(c.v3.name);
+      if (!source?.pfxPassword) return c.v3;
+      return { ...c.v3, pfxPassword: source.pfxPassword };
+    });
+
+    const defaultName = resolveDefaultKestrelCertName(v3Certs);
+    if (defaultName) {
+      const idx = v3Certs.findIndex((c) => c.name === defaultName);
+      if (idx >= 0) {
+        v3Certs[idx] = { ...v3Certs[idx], isDefaultKestrelCert: true };
+      }
+    }
+
+    return { certs: v3Certs };
   }
 
   clearCache(): void {
@@ -432,22 +455,21 @@ export class CertProvider {
  *     TLS, so it can't be Kestrel's default).
  *
  * Mismatches log a warning + surface a notification once per resolution
- * so a typo in the setting doesn't silently no-op. The password is read
- * back from the `userCertificates` entry's `pfxPassword` field — it's
- * needed on the wire because the workspace extension has to surface it
- * as `ASPNETCORE_Kestrel__Certificates__Default__Password`, and the
- * value can't be recovered from the PFX bytes.
+ * so a typo in the setting doesn't silently no-op. The actual password
+ * isn't returned here — it travels on the cert material itself as
+ * `pfxPassword`, so it stays a single source of truth (the user's
+ * `userCertificates[].pfxPassword`).
  */
-function resolveDefaultKestrelCert(
+function resolveDefaultKestrelCertName(
   certs: CertMaterialV3[]
-): DefaultKestrelCertSelection | undefined {
-  const config = vscode.workspace.getConfiguration("devcontainerDevCerts");
-  const requested = config.get<string>("defaultKestrelCertificate", "").trim();
+): string | undefined {
+  const requested = vscode.workspace
+    .getConfiguration("devcontainerDevCerts")
+    .get<string>("defaultKestrelCertificate", "")
+    .trim();
   if (!requested) return undefined;
 
-  const match = certs.find(
-    (c) => c.kind === "user" && c.name === requested
-  );
+  const match = certs.find((c) => c.kind === "user" && c.name === requested);
   if (!match) {
     const message = vscode.l10n.t(
       "Dev Certs: defaultKestrelCertificate is set to '{0}', but no userCertificates entry with that name was synced. The Kestrel default environment variables will not be applied.",
@@ -469,12 +491,5 @@ function resolveDefaultKestrelCert(
     void vscode.window.showWarningMessage(message);
     return undefined;
   }
-
-  const userConfigs = config.get<UserCertificateConfig[]>(
-    "userCertificates",
-    []
-  );
-  const source = userConfigs.find((u) => u.name === requested);
-  const password = source?.pfxPassword;
-  return password ? { name: match.name, password } : { name: match.name };
+  return match.name;
 }

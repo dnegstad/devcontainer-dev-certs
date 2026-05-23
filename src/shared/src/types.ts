@@ -102,38 +102,30 @@ export interface CertMaterialV3 {
    * the X509Store directory.
    */
   dotNetStorePfxBase64?: string;
-}
-
-/**
- * Pointer to the user-managed certificate the host wants the workspace
- * extension to make the default for Kestrel inside the container. The
- * workspace extension finds the matching `CertMaterialV3` by `name`,
- * writes its PFX to a well-known path (see `getKestrelDefaultCertPath`),
- * and sets `ASPNETCORE_Kestrel__Certificates__Default__Path` (plus
- * `__Password` when supplied) via VS Code's environment variable
- * collection so processes launched from VS Code inherit them.
- *
- * The password travels as a plain string because the workspace extension
- * needs to surface it via the env var — the value is otherwise locked
- * inside the PFX bytes and not recoverable.
- */
-export interface DefaultKestrelCertSelection {
-  /** Matches `CertMaterialV3.name` for a user-managed cert in the bundle. */
-  name: string;
   /**
-   * Password for the referenced PFX. Omitted when the user did not set
-   * `pfxPassword` on the source `userCertificates` entry (i.e., the PFX
-   * is openable with the empty password).
+   * The plaintext password the user set on the source `userCertificates`
+   * entry's `pfxPassword`, propagated so the workspace extension can
+   * surface it via `ASPNETCORE_Kestrel__Certificates__Default__Password`
+   * for the cert selected by `devcontainerDevCerts.defaultKestrelCertificate`.
+   * Omitted (and never `""`) when the user didn't set one; consumers
+   * treat absence as "empty password". Only populated on user certs; the
+   * dotnet-dev cert is intrinsically passwordless.
    */
-  password?: string;
+  pfxPassword?: string;
+  /**
+   * True iff this cert was picked by
+   * `devcontainerDevCerts.defaultKestrelCertificate`. At most one cert in
+   * the bundle carries this flag. The workspace extension uses it to
+   * decide which cert's PFX to write to
+   * `getKestrelDefaultCertPath()` and which `pfxPassword` to surface in
+   * the Kestrel default env vars. Absence on every cert means the
+   * setting was unset, invalid, or pointed at a cert that couldn't
+   * qualify (no private key, wrong kind) — in which case the workspace
+   * extension sweeps any prior selection.
+   */
+  isDefaultKestrelCert?: boolean;
 }
 
 export interface CertBundleV3 {
   certs: CertMaterialV3[];
-  /**
-   * Optional: the user-selected default Kestrel certificate. Present
-   * when the host's `devcontainerDevCerts.defaultKestrelCertificate`
-   * setting resolved to a user cert that's actually in `certs`.
-   */
-  defaultKestrelCert?: DefaultKestrelCertSelection;
 }
