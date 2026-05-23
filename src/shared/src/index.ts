@@ -6,6 +6,7 @@ export type {
   CertBundle,
   CertMaterialV3,
   CertBundleV3,
+  DefaultKestrelCertSelection,
   DestFormat,
 } from "./types";
 export { DOTNET_DEV_CERT_NAME } from "./types";

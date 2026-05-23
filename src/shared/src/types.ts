@@ -102,30 +102,45 @@ export interface CertMaterialV3 {
    * the X509Store directory.
    */
   dotNetStorePfxBase64?: string;
+}
+
+/**
+ * Pointer attached to `CertBundleV3` when the host's
+ * `devcontainerDevCerts.defaultKestrelCertificate` setting resolved to a
+ * qualifying user cert. The workspace extension finds the matching
+ * `CertMaterialV3` by `name`, writes its PFX to
+ * `getKestrelDefaultCertPath()`, and surfaces
+ * `ASPNETCORE_Kestrel__Certificates__Default__Path` (plus `__Password`
+ * when supplied) via VS Code's environment variable collection.
+ *
+ * Lives at the bundle level (not per-cert) because at most one default
+ * is valid and the workspace's only validation is "does this name match
+ * a cert in the bundle". Putting it per-cert would require additionally
+ * enforcing "exactly one cert carries the flag" on the receiving side.
+ *
+ * The password is the user's own `userCertificates[].pfxPassword`,
+ * propagated here because the workspace extension has to surface it via
+ * the env var — the value is otherwise locked inside the PFX bytes and
+ * not recoverable. It is NOT a new top-level VS Code setting; the new
+ * setting (`defaultKestrelCertificate`) carries only the cert name.
+ */
+export interface DefaultKestrelCertSelection {
+  /** Matches `CertMaterialV3.name` for a user-managed cert in the bundle. */
+  name: string;
   /**
-   * The plaintext password the user set on the source `userCertificates`
-   * entry's `pfxPassword`, propagated so the workspace extension can
-   * surface it via `ASPNETCORE_Kestrel__Certificates__Default__Password`
-   * for the cert selected by `devcontainerDevCerts.defaultKestrelCertificate`.
-   * Omitted (and never `""`) when the user didn't set one; consumers
-   * treat absence as "empty password". Only populated on user certs; the
-   * dotnet-dev cert is intrinsically passwordless.
+   * Mirrors `userCertificates[].pfxPassword` for the referenced entry.
+   * Omitted when the user did not set one (i.e., the PFX is openable
+   * with the empty password).
    */
-  pfxPassword?: string;
-  /**
-   * True iff this cert was picked by
-   * `devcontainerDevCerts.defaultKestrelCertificate`. At most one cert in
-   * the bundle carries this flag. The workspace extension uses it to
-   * decide which cert's PFX to write to
-   * `getKestrelDefaultCertPath()` and which `pfxPassword` to surface in
-   * the Kestrel default env vars. Absence on every cert means the
-   * setting was unset, invalid, or pointed at a cert that couldn't
-   * qualify (no private key, wrong kind) — in which case the workspace
-   * extension sweeps any prior selection.
-   */
-  isDefaultKestrelCert?: boolean;
+  password?: string;
 }
 
 export interface CertBundleV3 {
   certs: CertMaterialV3[];
+  /**
+   * Optional: the user-selected default Kestrel certificate. Present
+   * when the host's `devcontainerDevCerts.defaultKestrelCertificate`
+   * setting resolved to a user cert that's actually in `certs`.
+   */
+  defaultKestrelCert?: DefaultKestrelCertSelection;
 }

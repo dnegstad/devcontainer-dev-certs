@@ -488,7 +488,7 @@ describe("CertProvider.getAllCertMaterial", () => {
 });
 
 describe("CertProvider defaultKestrelCertificate", () => {
-  it("flags the matching user cert and propagates its pfxPassword inline", async () => {
+  it("attaches the pointer with name+password when the setting matches", async () => {
     const { cert, key } = await makeValidCert();
     const tmp = writeCertFiles(cert, key);
     cleanupDirs.push(tmp.dir);
@@ -511,13 +511,16 @@ describe("CertProvider defaultKestrelCertificate", () => {
       includeUserCerts: true,
     });
 
-    const flagged = bundle.certs.filter((c) => c.isDefaultKestrelCert);
-    expect(flagged).toHaveLength(1);
-    expect(flagged[0].name).toBe("corp-ca");
-    expect(flagged[0].pfxPassword).toBe("hunter2");
+    expect(bundle.defaultKestrelCert).toEqual({
+      name: "corp-ca",
+      password: "hunter2",
+    });
+    // The pointer is bundle-level; per-cert material is untouched.
+    expect(bundle.certs[0]).not.toHaveProperty("pfxPassword");
+    expect(bundle.certs[0]).not.toHaveProperty("isDefaultKestrelCert");
   });
 
-  it("omits pfxPassword when the source entry has none, but still flags the cert", async () => {
+  it("omits password when the source entry has none", async () => {
     const { cert, key } = await makeValidCert();
     const tmp = writeCertFiles(cert, key);
     cleanupDirs.push(tmp.dir);
@@ -539,41 +542,11 @@ describe("CertProvider defaultKestrelCertificate", () => {
       includeUserCerts: true,
     });
 
-    expect(bundle.certs[0].isDefaultKestrelCert).toBe(true);
-    expect(bundle.certs[0].pfxPassword).toBeUndefined();
+    expect(bundle.defaultKestrelCert).toEqual({ name: "no-pw" });
+    expect(bundle.defaultKestrelCert?.password).toBeUndefined();
   });
 
-  it("propagates pfxPassword to non-default user certs too (single source of truth)", async () => {
-    // pfxPassword is the cert's own property — it travels regardless of
-    // whether the cert is the chosen Kestrel default. The default flag
-    // is the only thing gated by `defaultKestrelCertificate`.
-    const { cert, key } = await makeValidCert();
-    const tmp = writeCertFiles(cert, key);
-    cleanupDirs.push(tmp.dir);
-
-    __setConfig("devcontainerDevCerts", {
-      defaultKestrelCertificate: "",
-      userCertificates: [
-        {
-          name: "corp-ca",
-          pemCertPath: tmp.certPath,
-          pemKeyPath: tmp.keyPath,
-          pfxPassword: "hunter2",
-        },
-      ] satisfies UserCertificateConfig[],
-    });
-
-    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
-    const bundle = await provider.getAllCertMaterialV3({
-      includeDotNetDev: false,
-      includeUserCerts: true,
-    });
-
-    expect(bundle.certs[0].pfxPassword).toBe("hunter2");
-    expect(bundle.certs[0].isDefaultKestrelCert).toBeUndefined();
-  });
-
-  it("warns and leaves every cert unflagged when the setting names a missing cert", async () => {
+  it("warns and omits the pointer when the setting names a missing cert", async () => {
     const { cert, key } = await makeValidCert();
     const tmp = writeCertFiles(cert, key);
     cleanupDirs.push(tmp.dir);
@@ -595,13 +568,13 @@ describe("CertProvider defaultKestrelCertificate", () => {
       includeUserCerts: true,
     });
 
-    expect(bundle.certs.some((c) => c.isDefaultKestrelCert)).toBe(false);
+    expect(bundle.defaultKestrelCert).toBeUndefined();
     expect(warningMessages.some((m) => m.includes("does-not-exist"))).toBe(
       true
     );
   });
 
-  it("refuses to flag a CA-only entry (no private key)", async () => {
+  it("refuses to point at a CA-only entry (no private key)", async () => {
     const { cert } = await makeValidCert();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-ca-only-"));
     cleanupDirs.push(dir);
@@ -621,7 +594,7 @@ describe("CertProvider defaultKestrelCertificate", () => {
       includeUserCerts: true,
     });
 
-    expect(bundle.certs.some((c) => c.isDefaultKestrelCert)).toBe(false);
+    expect(bundle.defaultKestrelCert).toBeUndefined();
     expect(
       warningMessages.some(
         (m) => m.includes("ca-only") && m.includes("no private key")
@@ -640,10 +613,10 @@ describe("CertProvider defaultKestrelCertificate", () => {
       includeUserCerts: true,
     });
 
-    expect(bundle.certs.some((c) => c.isDefaultKestrelCert)).toBe(false);
+    expect(bundle.defaultKestrelCert).toBeUndefined();
   });
 
-  it("does not surface the new fields on the V2 endpoint", async () => {
+  it("is absent on the V2 endpoint (V3-only wire field)", async () => {
     const { cert, key } = await makeValidCert();
     const tmp = writeCertFiles(cert, key);
     cleanupDirs.push(tmp.dir);
@@ -661,12 +634,10 @@ describe("CertProvider defaultKestrelCertificate", () => {
     });
 
     const provider = new CertProvider(mockManager("DOTNET-THUMB"));
-    const v2 = await provider.getAllCertMaterial({
+    const v2 = (await provider.getAllCertMaterial({
       includeDotNetDev: false,
       includeUserCerts: true,
-    });
-    const wireFields = v2.certs[0] as unknown as Record<string, unknown>;
-    expect(wireFields.isDefaultKestrelCert).toBeUndefined();
-    expect(wireFields.pfxPassword).toBeUndefined();
+    })) as unknown as Record<string, unknown>;
+    expect(v2.defaultKestrelCert).toBeUndefined();
   });
 });

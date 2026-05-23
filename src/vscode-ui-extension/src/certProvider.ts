@@ -14,6 +14,7 @@ import type {
   CertMaterial,
   CertMaterialV2,
   CertMaterialV3,
+  DefaultKestrelCertSelection,
 } from "@devcontainer-dev-certs/shared";
 import { DOTNET_DEV_CERT_NAME } from "@devcontainer-dev-certs/shared";
 
@@ -110,39 +111,21 @@ export class CertProvider {
    * the (separate) passwordless `dotNetStorePfxBase64` payload when the
    * cert opted into the store install.
    *
-   * Also splices in `pfxPassword` (from the user's `userCertificates`
-   * config) and `isDefaultKestrelCert` (from
-   * `devcontainerDevCerts.defaultKestrelCertificate`) on a per-call
-   * basis. Both are derived from settings, not from cert material, so
-   * they live outside the cache and can change without invalidating it.
+   * Also resolves `devcontainerDevCerts.defaultKestrelCertificate`
+   * against the assembled bundle and attaches a bundle-level
+   * `defaultKestrelCert` pointer when it picks a qualifying user cert.
+   * Bundle-level (not per-cert) because at most one default is valid;
+   * the workspace extension's job is just "find the cert by name".
    */
   async getAllCertMaterialV3(
     args: GetAllCertMaterialArgs
   ): Promise<CertBundleV3> {
     const certs = await this.collect(args);
-    const config = vscode.workspace.getConfiguration("devcontainerDevCerts");
-    const userConfigs = config.get<UserCertificateConfig[]>(
-      "userCertificates",
-      []
-    );
-    const configByName = new Map(userConfigs.map((u) => [u.name, u]));
-
-    const v3Certs: CertMaterialV3[] = certs.map((c) => {
-      if (c.v3.kind !== "user") return c.v3;
-      const source = configByName.get(c.v3.name);
-      if (!source?.pfxPassword) return c.v3;
-      return { ...c.v3, pfxPassword: source.pfxPassword };
-    });
-
-    const defaultName = resolveDefaultKestrelCertName(v3Certs);
-    if (defaultName) {
-      const idx = v3Certs.findIndex((c) => c.name === defaultName);
-      if (idx >= 0) {
-        v3Certs[idx] = { ...v3Certs[idx], isDefaultKestrelCert: true };
-      }
-    }
-
-    return { certs: v3Certs };
+    const v3Certs = certs.map((c) => c.v3);
+    const defaultKestrelCert = resolveDefaultKestrelCert(v3Certs);
+    return defaultKestrelCert
+      ? { certs: v3Certs, defaultKestrelCert }
+      : { certs: v3Certs };
   }
 
   clearCache(): void {
@@ -455,18 +438,17 @@ export class CertProvider {
  *     TLS, so it can't be Kestrel's default).
  *
  * Mismatches log a warning + surface a notification once per resolution
- * so a typo in the setting doesn't silently no-op. The actual password
- * isn't returned here — it travels on the cert material itself as
- * `pfxPassword`, so it stays a single source of truth (the user's
- * `userCertificates[].pfxPassword`).
+ * so a typo in the setting doesn't silently no-op. The password is the
+ * single source of truth on `userCertificates[].pfxPassword`; we copy
+ * it onto the pointer because the workspace extension has to surface
+ * it via `__Password`, and the value can't be recovered from the PFX
+ * bytes.
  */
-function resolveDefaultKestrelCertName(
+function resolveDefaultKestrelCert(
   certs: CertMaterialV3[]
-): string | undefined {
-  const requested = vscode.workspace
-    .getConfiguration("devcontainerDevCerts")
-    .get<string>("defaultKestrelCertificate", "")
-    .trim();
+): DefaultKestrelCertSelection | undefined {
+  const config = vscode.workspace.getConfiguration("devcontainerDevCerts");
+  const requested = config.get<string>("defaultKestrelCertificate", "").trim();
   if (!requested) return undefined;
 
   const match = certs.find((c) => c.kind === "user" && c.name === requested);
@@ -491,5 +473,11 @@ function resolveDefaultKestrelCertName(
     void vscode.window.showWarningMessage(message);
     return undefined;
   }
-  return match.name;
+
+  const userConfigs = config.get<UserCertificateConfig[]>(
+    "userCertificates",
+    []
+  );
+  const password = userConfigs.find((u) => u.name === requested)?.pfxPassword;
+  return password ? { name: match.name, password } : { name: match.name };
 }
