@@ -213,9 +213,13 @@ function isLocalDnsName(name: string): boolean {
 
   if (ALLOWED_DNS_EXACT.has(candidate)) return true;
   for (const suffix of ALLOWED_DNS_SUFFIXES) {
+    // Suffix matches as "ends with .suffix" OR "equals suffix without the
+    // leading dot" — so both `foo.dev.internal` and `dev.internal` (the
+    // wildcard-stripped form of `*.dev.internal`) match a `.dev.internal`
+    // suffix entry.
+    const bareSuffix = suffix.startsWith(".") ? suffix.slice(1) : suffix;
     if (candidate.endsWith(suffix)) return true;
-    // Bare suffix without leading dot — `.localhost` matches `localhost`
-    // via the exact set above, so we don't need a separate equality here.
+    if (candidate === bareSuffix) return true;
   }
   return false;
 }

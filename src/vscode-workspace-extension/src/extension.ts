@@ -19,6 +19,7 @@ import {
   type CleanupResult,
   type StaleDevCert,
 } from "./cleanupCerts";
+import { pushContainerCertToHost } from "./containerCertPush";
 import { parseExtraCertDestinations } from "./util/destinations";
 import { ensureSslCertDir } from "./util/sslCertDir";
 import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
@@ -74,10 +75,40 @@ export function activate(context: vscode.ExtensionContext): void {
     log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
   }
 
+  // Reverse-sync: if the feature opted into pushing the container's own
+  // dev cert to the host, run that before the standard pull so that the
+  // push lands first and any subsequent pull naturally returns the cert
+  // we just trusted on the host. This block is fully independent of the
+  // normal flow — if no cert is found, or the host setting is off, the
+  // pull below still runs as usual.
+  const syncFromContainer = isTruthyEnv(
+    process.env["DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER"],
+    false
+  );
+  if (syncFromContainer) {
+    log(
+      "syncContainerCert enabled — scanning container for a dev certificate to push to the host."
+    );
+  }
+
   if (config.get<boolean>("autoInject", true)) {
     log("Auto-inject enabled, requesting certificate material...");
-    void injectCertificate();
+    void runActivationSync(syncFromContainer);
+  } else if (syncFromContainer) {
+    void pushContainerCertToHost();
   }
+}
+
+/**
+ * Activation-time orchestration: push first (when enabled), then pull. Both
+ * sides are awaited sequentially so the host has the freshly-pushed cert in
+ * its platform store by the time the pull runs.
+ */
+async function runActivationSync(syncFromContainer: boolean): Promise<void> {
+  if (syncFromContainer) {
+    await pushContainerCertToHost();
+  }
+  await injectCertificate();
 }
 
 async function injectCertificate(): Promise<void> {

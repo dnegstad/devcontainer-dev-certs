@@ -144,6 +144,7 @@ test/
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override for non-standard base images. |
 | `generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert. Set to `false` to skip generation (useful when you only want to sync user-managed certs). |
 | `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` VS Code setting. |
+| `syncContainerCert` | `false` | **Reverse sync (opt-in).** When the container itself already has a valid ASP.NET dev certificate (e.g. baked into the image with `dotnet dev-certs https`), push it to the host so the host trusts it instead of generating its own. See "[Syncing a certificate from the container to the host](#syncing-a-certificate-from-the-container-to-the-host)". |
 | `extraCertDestinations` | `""` | Comma-separated list of additional directories to write cert artifacts to. Each entry is `<abs-dir>[=<format>]` where `format` is `pem`, `key`, `pem-bundle`, `pfx`, or `all` (default). Every synced cert is written under the directory as `{name}.{pem,key,pfx}` (and/or `{name}-bundle.pem`). Example: `/etc/nginx/certs=pem,/var/myapp`. |
 
 ## User-managed certificates
@@ -221,6 +222,53 @@ Every cert written to an extra destination uses a stable, documented `{name}` th
 | User-managed cert | the `name` field of the matching `userCertificates` entry |
 
 So with `extraCertDestinations = /etc/nginx/certs` and a user cert named `corp-ca`, the directory ends up containing `aspnetcore-dev.pem`, `aspnetcore-dev.key`, `aspnetcore-dev.pfx`, `aspnetcore-dev-bundle.pem`, `corp-ca.pem`, `corp-ca.key`, `corp-ca.pfx`, and `corp-ca-bundle.pem` (subject to the format filter). The thumbprint-keyed filenames (`{thumbprint}.pfx`, `aspnetcore-localhost-{thumbprint}.pem`) remain only in the canonical .NET directories where Kestrel requires them — they do not appear in extra destinations.
+
+## Syncing a certificate from the container to the host
+
+By default the host is the source of truth: the host extension generates the ASP.NET dev cert, trusts it locally, then pushes it into every dev container that asks for it. That keeps the OS-level trust prompt count low — you confirm trust once on the host and every container reuses the same cert.
+
+Some projects flip that around: the container's own build step (or a `dotnet dev-certs https` invocation baked into the image) is the canonical generator of the cert. In that case you can opt the container in to pushing its dev cert *to* the host, so the host trusts the container's cert instead of generating its own.
+
+To enable, both sides must opt in:
+
+1. Set the feature option on the container:
+
+    ```json
+    {
+        "features": {
+            "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
+                "syncContainerCert": true
+            }
+        }
+    }
+    ```
+
+2. Set the host VS Code setting:
+
+    ```json
+    {
+        "devcontainerDevCerts.acceptContainerDevCerts": true
+    }
+    ```
+
+Both flows are independent. With `syncContainerCert` enabled:
+
+- The workspace extension scans `~/.dotnet/corefx/cryptography/x509stores/my/*.pfx` inside the container, classifies each candidate the same way the host classifies its own platform stores (CN=localhost, OID v4+, key + cert match, valid notBefore/notAfter), and picks the best (highest dev-cert version, then latest `notAfter`). If multiple valid candidates are present, a log line in the **Dev Container Dev Certs (Remote)** output channel lists every thumbprint that was considered.
+- If a usable cert is found, the workspace extension pushes its PFX + PEM bytes to the host via a new IPC command. If none is found, the push is a no-op — there's no fallback to host generation. (If you also want host generation as a fallback, keep `generateDotNetCert: true` — the two flows compose.)
+- The host extension independently re-validates the cert (same `isValidDevCert` rules; matches dev-cert OID, version, validity window). It then restricts SAN entries to local-only scopes by default — `localhost`, `*.localhost`, `*.dev.localhost`, `*.dev.internal`, `host.docker.internal`, `host.containers.internal`, IPv4 loopback / RFC1918 / link-local, IPv6 loopback / unique-local / link-local. A cert with SAN entries outside that set is rejected.
+- If validation passes, the host shows a one-time modal consent prompt before adding the cert to the platform trust store. The OS-level trust prompt (macOS keychain dialog, Windows MMC dialog) fires for each unique cert as usual.
+
+To allow SAN entries that aren't local (rare; security-sensitive — the cert will be trusted by your host browser for the listed names), opt in explicitly:
+
+```json
+{
+    "devcontainerDevCerts.allowNonLocalContainerCertSans": true
+}
+```
+
+When this is on, non-local SAN entries are shown in the consent modal so you can see exactly what you're agreeing to trust.
+
+Pushes from a Dev Container without the matching feature option are ignored — the host setting on its own doesn't do anything until a container actively pushes. Host trust prompts fire per unique thumbprint, so opening multiple containers with different container-generated certs will accumulate trust prompts; this is intentional and is why the option isn't on by default.
 
 ## Development
 

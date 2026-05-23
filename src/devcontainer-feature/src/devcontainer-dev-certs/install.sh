@@ -6,6 +6,7 @@ TRUST_NSS="${TRUSTNSS:-false}"
 SSL_CERT_DIRS="${SSLCERTDIRS:-/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl}"
 GENERATE_DOTNET_CERT="${GENERATEDOTNETCERT:-true}"
 SYNC_USER_CERTIFICATES="${SYNCUSERCERTIFICATES:-true}"
+SYNC_CONTAINER_CERT="${SYNCCONTAINERCERT:-false}"
 EXTRA_CERT_DESTINATIONS="${EXTRACERTDESTINATIONS:-}"
 
 REMOTE_USER="${_REMOTE_USER:-vscode}"
@@ -25,7 +26,7 @@ fi
 # Validate that no feature option contains a newline. We append these to
 # /etc/environment, and an embedded newline would inject an extra env line
 # (potentially with a name the operator didn't intend).
-for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES EXTRA_CERT_DESTINATIONS; do
+for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS; do
     case "${!varname}" in
         *$'\n'*)
             echo "Error: feature option ${varname} must not contain newlines." >&2
@@ -147,6 +148,7 @@ append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_RESOLVED}"
 # (users routinely separate CSV entries with `, `), so unconditionally quote.
 append_env "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
+append_env "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
 
 # Set ownership
@@ -188,3 +190,4 @@ echo "  OpenSSL trust:        ${TRUST_DIR}"
 echo "  SSL_CERT_DIR:         ${SSL_CERT_DIR_RESOLVED}"
 echo "  generateDotNetCert:   ${GENERATE_DOTNET_CERT}"
 echo "  syncUserCertificates: ${SYNC_USER_CERTIFICATES}"
+echo "  syncContainerCert:    ${SYNC_CONTAINER_CERT}"

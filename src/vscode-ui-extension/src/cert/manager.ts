@@ -65,6 +65,31 @@ export class CertManager {
   }
 
   /**
+   * Install and trust an externally-supplied certificate (e.g. one pushed
+   * from a Dev Container via the syncContainerCert reverse-sync flow).
+   * Does NOT generate — the caller has already chosen + validated this
+   * cert. Replaces any existing dev cert in the platform store with the
+   * supplied one (`saveCertificate` is keyed by thumbprint), then walks
+   * the same OS trust path the normal generation flow uses.
+   */
+  async acceptExternalCertificate(
+    cert: GeneratedCert["cert"],
+    key: GeneratedCert["key"],
+    thumbprint: string
+  ): Promise<void> {
+    const store = await this.getStore();
+
+    log(`Installing externally-supplied dev certificate ${thumbprint}...`);
+    await store.saveCertificate(cert, key, thumbprint);
+
+    this.currentCert = { cert, key, thumbprint };
+
+    log("Trusting externally-supplied certificate in OS store...");
+    await store.trustCertificate(cert);
+    log("Externally-supplied certificate trusted.");
+  }
+
+  /**
    * Ensure a cert exists and is trusted. Generates one if needed.
    */
   async trust(): Promise<void> {

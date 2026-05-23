@@ -5,14 +5,23 @@ import * as vscode from "vscode";
 import { CertManager } from "./cert/manager";
 import { CertProvider } from "./certProvider";
 import type { GetAllCertMaterialArgs } from "./certProvider";
+import {
+  acceptContainerDevCert,
+  type AcceptContainerCertPayload,
+  type AcceptContainerCertResult,
+} from "./containerCertAccept";
 import { trustInNss } from "./platform/nssTrust";
 import {
   initLogger,
   log,
   getOpenSslTrustDir,
   getPemFileName,
+  type LoadedCert,
+  type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
 import type { CertBundle, CertBundleV3 } from "@devcontainer-dev-certs/shared";
+
+const CONTAINER_CERT_CONSENT_KEY = "containerCertProvisionConsented";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs"));
@@ -160,6 +169,64 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
+  // Reverse-sync entry point: receive a dev certificate from a Dev Container
+  // (when the workspace extension opted in via the `syncContainerCert`
+  // feature option) and trust it on the host. Gated on the host setting
+  // `devcontainerDevCerts.acceptContainerDevCerts`; defaults to off so the
+  // mere installation of this extension can't be tricked into trusting a
+  // container-supplied certificate.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "devcontainer-dev-certs.acceptContainerDevCert",
+      async (
+        payload: AcceptContainerCertPayload
+      ): Promise<AcceptContainerCertResult> => {
+        const cfg = vscode.workspace.getConfiguration("devcontainerDevCerts");
+        const acceptEnabled = cfg.get<boolean>(
+          "acceptContainerDevCerts",
+          false
+        );
+        const allowNonLocalSans = cfg.get<boolean>(
+          "allowNonLocalContainerCertSans",
+          false
+        );
+
+        const result = await acceptContainerDevCert(payload, {
+          acceptEnabled,
+          allowNonLocalSans,
+          getCurrentThumbprint: async () => {
+            const status = await certManager.check();
+            return status.exists ? status.thumbprint : null;
+          },
+          hasConsent: () =>
+            context.globalState.get<boolean>(
+              CONTAINER_CERT_CONSENT_KEY,
+              false
+            ),
+          recordConsent: () =>
+            Promise.resolve(
+              context.globalState.update(CONTAINER_CERT_CONSENT_KEY, true)
+            ).then(() => undefined),
+          promptUser: (cert, nonLocal) =>
+            promptForContainerCertConsent(cert, nonLocal),
+          acceptCertificate: async (cert) => {
+            await certManager.acceptExternalCertificate(
+              cert.cert,
+              cert.key!,
+              cert.thumbprint
+            );
+          },
+          onAccepted: () => {
+            certProvider.clearCache();
+            ensureTerminalSslCertDir(context);
+          },
+        });
+
+        return result;
+      }
+    )
+  );
+
   // Trust the dev certificate in browser NSS databases (Linux)
   context.subscriptions.push(
     vscode.commands.registerCommand(
@@ -255,6 +322,78 @@ async function promptForCertConsent(): Promise<boolean> {
     generate
   );
   return choice === generate;
+}
+
+/**
+ * Show a modal consent dialog before installing + trusting a development
+ * certificate pushed from a Dev Container to this host. One-time gating
+ * via `containerCertProvisionConsented` global state — after the first
+ * accept, subsequent same-host pushes are handled silently (the OS still
+ * fires its own native trust prompts as usual on each save).
+ *
+ * The `nonLocalSans` argument is non-empty only when the user has set
+ * `devcontainerDevCerts.allowNonLocalContainerCertSans = true` and the
+ * cert has SAN entries beyond local scopes — surfaced in the modal so
+ * the user can see exactly what they're agreeing to trust.
+ */
+async function promptForContainerCertConsent(
+  cert: LoadedCert,
+  nonLocalSans: NonLocalSanEntry[]
+): Promise<boolean> {
+  const trust = vscode.l10n.t("Trust");
+  const platformDetail =
+    process.platform === "darwin"
+      ? vscode.l10n.t(
+          "macOS will prompt you for your login keychain password to complete the trust step."
+        )
+      : process.platform === "win32"
+        ? vscode.l10n.t(
+            "Windows will ask you to confirm adding the certificate to your user certificate store."
+          )
+        : vscode.l10n.t(
+            "The certificate will be added to your local trust store."
+          );
+
+  const message = vscode.l10n.t(
+    "Trust this Dev Container's HTTPS development certificate on this host?"
+  );
+
+  const certCN = cert.cert.subjectCN ?? "(unknown)";
+  const sections: string[] = [
+    vscode.l10n.t(
+      "A Dev Container has asked to install its own ASP.NET HTTPS development certificate on this host — useful when the container generates the certificate as part of its build, instead of letting the host generate one."
+    ),
+    vscode.l10n.t(
+      "Certificate: CN={0}, thumbprint {1}, expires {2}.",
+      certCN,
+      cert.thumbprint,
+      cert.cert.notAfter.toISOString()
+    ),
+    platformDetail,
+  ];
+
+  if (nonLocalSans.length > 0) {
+    sections.push(
+      vscode.l10n.t(
+        "NOTE: this certificate is valid for non-local addresses ({0}). You enabled devcontainerDevCerts.allowNonLocalContainerCertSans, so this prompt is showing — trust only if you really mean to accept these names on this host.",
+        nonLocalSans.map((e) => `${e.type}:${e.value}`).join(", ")
+      )
+    );
+  }
+
+  sections.push(
+    vscode.l10n.t(
+      "Declining skips trusting this certificate. To permanently disable this flow, set devcontainerDevCerts.acceptContainerDevCerts to false."
+    )
+  );
+
+  const detail = sections.join("\n\n");
+  const choice = await vscode.window.showInformationMessage(
+    message,
+    { modal: true, detail },
+    trust
+  );
+  return choice === trust;
 }
 
 export interface ResolveDotnetProvisioningDeps {

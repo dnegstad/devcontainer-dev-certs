@@ -34,6 +34,11 @@
       "default": true,
       "description": "Allow the host extension to sync user-provided certificates (configured via the devcontainerDevCerts.userCertificates VS Code setting) into this container."
     },
+    "syncContainerCert": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt in to reverse-sync: when this container already has a valid ASP.NET HTTPS dev certificate (e.g. produced by `dotnet dev-certs https` baked into the image), the workspace extension pushes it to the host extension to trust on this host machine. The host independently re-validates the certificate, restricts SANs to local addresses by default (override with devcontainerDevCerts.allowNonLocalContainerCertSans), and prompts before adding it to the host OS trust store. Requires devcontainerDevCerts.acceptContainerDevCerts on the host. No fallback: if no valid cert is found in the container, the push is skipped entirely — host generation is gated separately by generateDotNetCert."
+    },
     "extraCertDestinations": {
       "type": "string",
       "default": "",
