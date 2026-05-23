@@ -195,6 +195,27 @@ To exempt an individual entry from the global setting (e.g., keep most of your u
 
 The auto-generated dotnet-dev cert is always installed to the store regardless of these settings — it's intrinsically passwordless and the store IS its canonical location.
 
+### Default Kestrel certificate (opt-in)
+
+By default, Kestrel discovers the auto-generated dev cert through its X509Store fallback — no environment variables are set, and `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` remain untouched. If you'd like to pin a *custom* user certificate as Kestrel's default instead, set:
+
+```json
+{
+    "devcontainerDevCerts.defaultKestrelCertificate": "corp-wildcard"
+}
+```
+
+The value names a `devcontainerDevCerts.userCertificates` entry by `name`. When set, the workspace extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` inside the container and sets these environment variables via VS Code's `EnvironmentVariableCollection`:
+
+| Variable | Value |
+|----------|-------|
+| `ASPNETCORE_Kestrel__Certificates__Default__Path` | `~/.aspnet/dev-certs/https/kestrel-default.pfx` |
+| `ASPNETCORE_Kestrel__Certificates__Default__Password` | The entry's `pfxPassword`, when set |
+
+Only one certificate is selected at a time. Changing the setting (or clearing it) on the next sync rewrites or removes the file and the env vars. The pointer must reference a user-managed entry that carries a private key — CA-only entries are rejected with a warning notification.
+
+**Scope.** The env vars only apply to processes launched from VS Code: integrated terminals, debug sessions, `tasks.json` invocations, the Aspire dashboard launcher, etc. Processes started outside VS Code (a stray `docker exec`, an SSH session into the container without VS Code attached) won't see them — that's intentional, since the selection lives in your VS Code settings, not in the container's environment. For those cases keep using the X509Store fallback (or set the env vars yourself in `devcontainer.json` `containerEnv`).
+
 ## Extra destinations
 
 `extraCertDestinations` writes cert artifacts into additional directories inside the container — useful for non-.NET workloads (nginx, Java keystores, Python requests bundles, etc.). Each entry is a directory; every synced cert gets a set of files under it named after the cert. Formats:

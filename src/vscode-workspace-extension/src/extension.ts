@@ -4,7 +4,9 @@ import {
   installUserCert,
   isCertInstalled,
   rehashExtraDestinations,
+  removeKestrelDefaultCert,
   writeExtraDestination,
+  writeKestrelDefaultCert,
 } from "./certInstaller";
 import {
   ARTIFACT_LOCATION_LOG_LABEL,
@@ -31,6 +33,8 @@ const GET_BUNDLE_COMMAND = "devcontainer-dev-certs.getAllCertMaterial";
 const GET_BUNDLE_V3_COMMAND = "devcontainer-dev-certs.getAllCertMaterialV3";
 const CLEANUP_COMMAND = "devcontainer-dev-certs.cleanupStaleDevCerts";
 const WARN_STALE_CONFIG_KEY = "warnOnStaleDevCerts";
+const KESTREL_PATH_ENV = "ASPNETCORE_Kestrel__Certificates__Default__Path";
+const KESTREL_PASSWORD_ENV = "ASPNETCORE_Kestrel__Certificates__Default__Password";
 
 function isTruthyEnv(val: string | undefined, defaultVal: boolean): boolean {
   if (val === undefined || val === "") return defaultVal;
@@ -49,7 +53,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("devcontainer-dev-certs.injectCert", () =>
-      injectCertificate()
+      injectCertificate(context)
     )
   );
 
@@ -72,11 +76,13 @@ export function activate(context: vscode.ExtensionContext): void {
 
   if (config.get<boolean>("autoInject", true)) {
     log("Auto-inject enabled, requesting certificate material...");
-    void injectCertificate();
+    void injectCertificate(context);
   }
 }
 
-async function injectCertificate(): Promise<void> {
+async function injectCertificate(
+  context: vscode.ExtensionContext
+): Promise<void> {
   const includeDotNetDev = isTruthyEnv(
     process.env["DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET"],
     true
@@ -145,6 +151,8 @@ async function injectCertificate(): Promise<void> {
   }
 
   rehashExtraDestinations(rehashDirs);
+
+  applyDefaultKestrelCert(context, bundle);
 
   const processed = newInstalls.length + alreadyInstalled.length;
   if (processed > 0) {
@@ -318,6 +326,75 @@ export function formatCleanupSummary(result: CleanupResult): string {
   );
 }
 
+
+/**
+ * Apply (or sweep) the user-selected default Kestrel cert. When the host
+ * sent a `defaultKestrelCert` pointer, we write the matching cert's PFX
+ * to the well-known path and surface its path (plus password when set)
+ * via the extension's environment variable collection so processes
+ * launched from VS Code — integrated terminals, debug sessions, tasks —
+ * inherit `ASPNETCORE_Kestrel__Certificates__Default__Path` and
+ * `__Password` automatically.
+ *
+ * The opposite path matters too: if the setting was previously set and
+ * the user has since cleared it (or renamed the entry), the bundle no
+ * longer carries the pointer. We sweep the file and clear the env vars
+ * so a stale selection doesn't keep applying.
+ */
+function applyDefaultKestrelCert(
+  context: vscode.ExtensionContext,
+  bundle: CertBundleV3
+): void {
+  const envCollection = context.environmentVariableCollection;
+  const sweep = (): void => {
+    envCollection.delete(KESTREL_PATH_ENV);
+    envCollection.delete(KESTREL_PASSWORD_ENV);
+    envCollection.description = undefined;
+    removeKestrelDefaultCert();
+  };
+
+  const selection = bundle.defaultKestrelCert;
+  if (!selection) {
+    sweep();
+    return;
+  }
+
+  const material = bundle.certs.find(
+    (c) => c.kind === "user" && c.name === selection.name
+  );
+  if (!material) {
+    // The host already validated this; reaching here means the bundle
+    // shape was tampered with on the wire or a host/workspace version
+    // mismatch dropped the cert. Refuse to apply rather than blowing up.
+    log(
+      `defaultKestrelCert references '${selection.name}' but no matching user cert is in the bundle; skipping.`
+    );
+    sweep();
+    return;
+  }
+
+  let pfxPath: string;
+  try {
+    pfxPath = writeKestrelDefaultCert(material);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(`Failed to write Kestrel default cert: ${message}`);
+    return;
+  }
+
+  envCollection.description = vscode.l10n.t(
+    "Sets ASPNETCORE_Kestrel__Certificates__Default__Path/Password to the user-selected dev certificate."
+  );
+  envCollection.replace(KESTREL_PATH_ENV, pfxPath);
+  if (selection.password !== undefined) {
+    envCollection.replace(KESTREL_PASSWORD_ENV, selection.password);
+  } else {
+    envCollection.delete(KESTREL_PASSWORD_ENV);
+  }
+  log(
+    `Default Kestrel certificate set to '${selection.name}' at ${pfxPath} for VS Code-launched processes.`
+  );
+}
 
 async function tryGetBundle(
   includeDotNetDev: boolean,

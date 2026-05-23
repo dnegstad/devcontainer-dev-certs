@@ -23,7 +23,7 @@ The system uses the VS Code **companion extension pattern**: two extensions comm
 
 These decisions were made deliberately. Do not change them without discussion.
 
-- **No Kestrel environment variables.** Do not set `ASPNETCORE_Kestrel__Certificates__Default__Path` or `__Password`. Kestrel discovers the cert via X509Store fallback.
+- **Kestrel environment variables are opt-in only.** Kestrel discovers the auto-generated dev cert via X509Store fallback — the workspace extension does NOT set `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` for it. The single exception is `devcontainerDevCerts.defaultKestrelCertificate`: when set, the host attaches a `defaultKestrelCert: {name, password?}` pointer to the V3 bundle, and the workspace extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` and sets the env vars via `context.environmentVariableCollection`. This applies only to processes launched from VS Code (terminals, debug, tasks), not to `/etc/environment` or `/etc/profile.d` — deliberate, because non-VS-Code processes shouldn't pick up an extension-scoped selection. Only one cert can be the default; the pointer must reference a user-managed entry with a private key.
 
 - **No `update-ca-certificates`.** OpenSSL trust is handled via `SSL_CERT_DIR` pointing to a directory with c_rehash hash symlinks. No system CA bundle modification.
 

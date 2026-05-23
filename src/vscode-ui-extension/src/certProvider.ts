@@ -14,6 +14,7 @@ import type {
   CertMaterial,
   CertMaterialV2,
   CertMaterialV3,
+  DefaultKestrelCertSelection,
 } from "@devcontainer-dev-certs/shared";
 import { DOTNET_DEV_CERT_NAME } from "@devcontainer-dev-certs/shared";
 
@@ -114,7 +115,11 @@ export class CertProvider {
     args: GetAllCertMaterialArgs
   ): Promise<CertBundleV3> {
     const certs = await this.collect(args);
-    return { certs: certs.map((c) => c.v3) };
+    const v3Certs = certs.map((c) => c.v3);
+    const defaultKestrelCert = resolveDefaultKestrelCert(v3Certs);
+    return defaultKestrelCert
+      ? { certs: v3Certs, defaultKestrelCert }
+      : { certs: v3Certs };
   }
 
   clearCache(): void {
@@ -414,4 +419,62 @@ export class CertProvider {
       )
     );
   }
+}
+
+/**
+ * Resolve `devcontainerDevCerts.defaultKestrelCertificate` against the
+ * actual bundle we're about to ship. Validates that:
+ *   - the setting is a non-empty string,
+ *   - it names a user-managed cert currently in the bundle (the
+ *     dotnet-dev cert is excluded — Kestrel already auto-discovers it
+ *     via X509Store; the setting exists for custom user certs),
+ *   - that cert carries a private key (a CA-only entry can't terminate
+ *     TLS, so it can't be Kestrel's default).
+ *
+ * Mismatches log a warning + surface a notification once per resolution
+ * so a typo in the setting doesn't silently no-op. The password is read
+ * back from the `userCertificates` entry's `pfxPassword` field — it's
+ * needed on the wire because the workspace extension has to surface it
+ * as `ASPNETCORE_Kestrel__Certificates__Default__Password`, and the
+ * value can't be recovered from the PFX bytes.
+ */
+function resolveDefaultKestrelCert(
+  certs: CertMaterialV3[]
+): DefaultKestrelCertSelection | undefined {
+  const config = vscode.workspace.getConfiguration("devcontainerDevCerts");
+  const requested = config.get<string>("defaultKestrelCertificate", "").trim();
+  if (!requested) return undefined;
+
+  const match = certs.find(
+    (c) => c.kind === "user" && c.name === requested
+  );
+  if (!match) {
+    const message = vscode.l10n.t(
+      "Dev Certs: defaultKestrelCertificate is set to '{0}', but no userCertificates entry with that name was synced. The Kestrel default environment variables will not be applied.",
+      requested
+    );
+    log(`[warn] ${message}`);
+    void vscode.window.showWarningMessage(message);
+    return undefined;
+  }
+  // `pemKeyBase64` is the canonical "loader found a private key" signal
+  // for both PFX-source and PEM-source entries — `pfxBase64` alone can be
+  // present for a CA-only PFX (we ship its original bytes verbatim).
+  if (!match.pemKeyBase64 || !match.pfxBase64) {
+    const message = vscode.l10n.t(
+      "Dev Certs: defaultKestrelCertificate '{0}' has no private key (CA-only entry); it cannot serve as Kestrel's default certificate.",
+      requested
+    );
+    log(`[warn] ${message}`);
+    void vscode.window.showWarningMessage(message);
+    return undefined;
+  }
+
+  const userConfigs = config.get<UserCertificateConfig[]>(
+    "userCertificates",
+    []
+  );
+  const source = userConfigs.find((u) => u.name === requested);
+  const password = source?.pfxPassword;
+  return password ? { name: match.name, password } : { name: match.name };
 }
