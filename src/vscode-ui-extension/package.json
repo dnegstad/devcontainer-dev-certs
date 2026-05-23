@@ -109,7 +109,7 @@
         "devcontainerDevCerts.defaultKestrelCertificate": {
           "type": "string",
           "default": "",
-          "description": "Name of a devcontainerDevCerts.userCertificates entry to use as the default Kestrel certificate inside dev containers. When set, the remote extension writes that cert's PFX to ~/.aspnet/dev-certs/https/kestrel-default.pfx and sets ASPNETCORE_Kestrel__Certificates__Default__Path (plus __Password when configured) for processes launched from VS Code (integrated terminals, debug, tasks). Leave empty to opt out — Kestrel will still discover the auto-generated dev cert via X509Store. The setting only affects processes started from VS Code; other containers users (e.g., SSH sessions, manual docker exec) do not see these env vars."
+          "description": "Name of a devcontainerDevCerts.userCertificates entry to use as the default Kestrel certificate inside dev containers. When set, the remote extension writes that cert's PFX to ~/.aspnet/dev-certs/https/kestrel-default.pfx and sets ASPNETCORE_Kestrel__Certificates__Default__Path (plus __Password when configured) for processes launched from VS Code (integrated terminals, debug, tasks). Leave empty to opt out — Kestrel will still discover the auto-generated dev cert via X509Store. The setting only affects processes started from VS Code; other container users (e.g., SSH sessions, manual docker exec) do not see these env vars."
         }
       }
     }
