@@ -8,6 +8,7 @@
   ],
   "scripts": {
     "hydrate:sample-project": "node test/sample-project/hydrate-sample-project.mjs",
+    "gen:test-cert": "node test/generate-test-cert.mjs",
     "lint": "eslint ."
   },
   "devDependencies": {
