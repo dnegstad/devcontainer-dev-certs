@@ -195,6 +195,27 @@ To exempt an individual entry from the global setting (e.g., keep most of your u
 
 The auto-generated dotnet-dev cert is always installed to the store regardless of these settings — it's intrinsically passwordless and the store IS its canonical location.
 
+### Default Kestrel certificate (opt-in)
+
+By default, Kestrel discovers the auto-generated dev cert through its X509Store fallback — no environment variables are set, and `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` remain untouched. If you'd like to pin a *custom* user certificate as Kestrel's default instead, add the following to your VS Code user `settings.json`:
+
+```json
+{
+    "devcontainerDevCerts.defaultKestrelCertificate": "corp-wildcard"
+}
+```
+
+The value names a `devcontainerDevCerts.userCertificates` entry by `name`. When set, the workspace extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` inside the container and sets these environment variables via VS Code's `EnvironmentVariableCollection`:
+
+| Variable | Value |
+|----------|-------|
+| `ASPNETCORE_Kestrel__Certificates__Default__Path` | `~/.aspnet/dev-certs/https/kestrel-default.pfx` |
+| `ASPNETCORE_Kestrel__Certificates__Default__Password` | The entry's `pfxPassword`, when set |
+
+Only one certificate is selected at a time. Changing the setting (or clearing it) on the next sync rewrites or removes the file and the env vars. The pointer must reference a user-managed entry that carries a private key — CA-only entries are rejected with a warning notification.
+
+**Scope.** Because the selection lives in a VS Code setting, the env vars only apply to processes launched from VS Code. The remote extension wires them up two ways: `EnvironmentVariableCollection` covers integrated terminals (and the `tasks.json` invocations that run in them), and a `coreclr` `DebugConfigurationProvider` injects the same two vars into resolved debug configurations so F5 launches via the C# Dev Kit (and Aspire AppHost, which currently routes through `coreclr`) pick them up too. When both a launch config and the selection set the Path/Password keys, the selection wins — `defaultKestrelCertificate` is the higher-level abstraction and a stale `launchSettings.json` entry shouldn't silently override it. Processes started outside VS Code (a stray `docker exec`, an SSH session into the container without VS Code attached) won't see the vars — that's intentional. For those cases keep using the X509Store fallback (or set the env vars yourself in `devcontainer.json` `containerEnv`).
+
 ## Extra destinations
 
 `extraCertDestinations` writes cert artifacts into additional directories inside the container — useful for non-.NET workloads (nginx, Java keystores, Python requests bundles, etc.). Each entry is a directory; every synced cert gets a set of files under it named after the cert. Formats:

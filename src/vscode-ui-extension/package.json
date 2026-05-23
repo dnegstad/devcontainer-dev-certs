@@ -105,6 +105,11 @@
           "type": "boolean",
           "default": false,
           "description": "When true, copies every user certificate from devcontainerDevCerts.userCertificates into the container's .NET X509Store (~/.dotnet/corefx/cryptography/x509stores/my/) so X509Store(StoreName.My, StoreLocation.CurrentUser) enumerates them. SECURITY WARNING: .NET's StoreName.My enumeration on Linux opens each file with a null password and cannot accept per-file passwords, so each cert's copy stored there has its password stripped. The private key sits on disk in plain-text-equivalent form, protected only by file permissions (0o600). Leave this false (the default) unless you specifically need .NET store enumeration to find your user certs. The auto-generated dotnet-dev cert is always installed to the store regardless of this setting (it has no password to strip, and the store IS its canonical location). To exempt an individual cert from this global setting, add excludeFromDotNetStore: true to that entry."
+        },
+        "devcontainerDevCerts.defaultKestrelCertificate": {
+          "type": "string",
+          "default": "",
+          "description": "Name of a devcontainerDevCerts.userCertificates entry to use as the default Kestrel certificate inside dev containers. When set, the remote extension writes that cert's PFX to ~/.aspnet/dev-certs/https/kestrel-default.pfx and sets ASPNETCORE_Kestrel__Certificates__Default__Path (plus __Password when configured) for processes launched from VS Code (integrated terminals, debug, tasks). Leave empty to opt out — Kestrel will still discover the auto-generated dev cert via X509Store. The setting only affects processes started from VS Code; other container users (e.g., SSH sessions, manual docker exec) do not see these env vars."
         }
       }
     }

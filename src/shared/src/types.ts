@@ -104,6 +104,43 @@ export interface CertMaterialV3 {
   dotNetStorePfxBase64?: string;
 }
 
+/**
+ * Pointer attached to `CertBundleV3` when the host's
+ * `devcontainerDevCerts.defaultKestrelCertificate` setting resolved to a
+ * qualifying user cert. The workspace extension finds the matching
+ * `CertMaterialV3` by `name`, writes its PFX to
+ * `getKestrelDefaultCertPath()`, and surfaces
+ * `ASPNETCORE_Kestrel__Certificates__Default__Path` (plus `__Password`
+ * when supplied) via VS Code's environment variable collection.
+ *
+ * Lives at the bundle level (not per-cert) because at most one default
+ * is valid and the workspace's only validation is "does this name match
+ * a cert in the bundle". Putting it per-cert would require additionally
+ * enforcing "exactly one cert carries the flag" on the receiving side.
+ *
+ * The password is the user's own `userCertificates[].pfxPassword`,
+ * propagated here because the workspace extension has to surface it via
+ * the env var — the value is otherwise locked inside the PFX bytes and
+ * not recoverable. It is NOT a new top-level VS Code setting; the new
+ * setting (`defaultKestrelCertificate`) carries only the cert name.
+ */
+export interface DefaultKestrelCertSelection {
+  /** Matches `CertMaterialV3.name` for a user-managed cert in the bundle. */
+  name: string;
+  /**
+   * Mirrors `userCertificates[].pfxPassword` for the referenced entry.
+   * Omitted when the user did not set one (i.e., the PFX is openable
+   * with the empty password).
+   */
+  password?: string;
+}
+
 export interface CertBundleV3 {
   certs: CertMaterialV3[];
+  /**
+   * Optional: the user-selected default Kestrel certificate. Present
+   * when the host's `devcontainerDevCerts.defaultKestrelCertificate`
+   * setting resolved to a user cert that's actually in `certs`.
+   */
+  defaultKestrelCert?: DefaultKestrelCertSelection;
 }

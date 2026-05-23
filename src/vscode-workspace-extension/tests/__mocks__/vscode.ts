@@ -44,6 +44,21 @@ export const commands = {
   },
 };
 
+export const debug = {
+  registerDebugConfigurationProvider(
+    _debugType: string,
+    _provider: unknown,
+    _triggerKind?: unknown
+  ) {
+    return { dispose() {} };
+  },
+};
+
+export enum DebugConfigurationProviderTriggerKind {
+  Initial = 1,
+  Dynamic = 2,
+}
+
 export enum ConfigurationTarget {
   Global = 1,
   Workspace = 2,
