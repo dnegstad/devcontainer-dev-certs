@@ -197,7 +197,7 @@ The auto-generated dotnet-dev cert is always installed to the store regardless o
 
 ### Default Kestrel certificate (opt-in)
 
-By default, Kestrel discovers the auto-generated dev cert through its X509Store fallback — no environment variables are set, and `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` remain untouched. If you'd like to pin a *custom* user certificate as Kestrel's default instead, add the following VS Code setting to your user or workspace `settings.json`:
+By default, Kestrel discovers the auto-generated dev cert through its X509Store fallback — no environment variables are set, and `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` remain untouched. If you'd like to pin a *custom* user certificate as Kestrel's default instead, add the following to your VS Code user `settings.json`:
 
 ```json
 {
