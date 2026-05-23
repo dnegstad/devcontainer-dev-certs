@@ -361,7 +361,7 @@ async function promptForContainerCertConsent(
     "Trust this Dev Container's HTTPS development certificate on this host?"
   );
 
-  const certCN = cert.cert.subjectCN ?? "(unknown)";
+  const certCN = cert.cert.subjectCN ?? vscode.l10n.t("(unknown)");
   const sections: string[] = [
     vscode.l10n.t(
       "A Dev Container has asked to install its own ASP.NET HTTPS development certificate on this host — useful when the container generates the certificate as part of its build, instead of letting the host generate one."
@@ -386,7 +386,7 @@ async function promptForContainerCertConsent(
 
   sections.push(
     vscode.l10n.t(
-      "Declining skips trusting this certificate. To permanently disable this flow, set devcontainerDevCerts.acceptContainerDevCerts to false."
+      "Declining skips trusting this certificate. To permanently disable this flow, set devcontainerDevCerts.generateDotNetCert to false (which also disables host-side generation)."
     )
   );
 
