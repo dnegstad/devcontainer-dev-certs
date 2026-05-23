@@ -4,6 +4,11 @@
   "private": true,
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "dependencies": {
+    "@peculiar/x509": "^2.0.0",
+    "asn1js": "^3.0.10",
+    "pkijs": "^3.4.0"
+  },
   "devDependencies": {
     "@types/vscode": "^1.100.0",
     "typescript": "^6.0.3"

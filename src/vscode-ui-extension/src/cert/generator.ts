@@ -12,16 +12,26 @@ import {
   cryptoProvider,
 } from "@peculiar/x509";
 import { randomBytes, webcrypto } from "node:crypto";
-import { DevCert, DevKey } from "./types";
 import {
+  DevCert,
+  DevKey,
   ASPNET_HTTPS_OID,
-  ASPNET_HTTPS_OID_FRIENDLY_NAME,
   CURRENT_CERTIFICATE_VERSION,
-  MINIMUM_CERTIFICATE_VERSION,
   RSA_KEY_SIZE,
   SAN_DNS_NAMES,
   SAN_IP_ADDRESSES,
-} from "./properties";
+} from "@devcontainer-dev-certs/shared";
+
+// `isValidDevCert` and `getCertificateVersion` used to live in this file;
+// they now live in `@devcontainer-dev-certs/shared/cert/validation` so the
+// workspace extension can call the same code path when scanning for a
+// container-side dev cert to push to the host. Re-exported here so existing
+// imports of `./cert/generator` keep working unchanged.
+export {
+  isValidDevCert,
+  getCertificateVersion,
+  computeThumbprint,
+} from "@devcontainer-dev-certs/shared";
 
 let cryptoProviderConfigured = false;
 function ensureCryptoProvider(): void {
@@ -123,68 +133,6 @@ export async function generateCertificate(
   };
 }
 
-/**
- * Check whether a parsed certificate looks like a valid ASP.NET Core HTTPS
- * dev cert: CN=localhost, currently within its validity window, and tagged
- * with the dev-cert custom OID at an acceptable version.
- */
-export function isValidDevCert(
-  cert: DevCert,
-  minimumVersion: number = MINIMUM_CERTIFICATE_VERSION
-): boolean {
-  if (cert.subjectCN !== "localhost") return false;
-
-  const now = new Date();
-  if (cert.notBefore > now || cert.notAfter < now) return false;
-
-  const version = getCertificateVersion(cert);
-  if (version < 0 || version < minimumVersion) return false;
-
-  return true;
-}
-
-/**
- * Extract the version byte from the ASP.NET dev cert custom-OID extension.
- * Returns -1 if the extension is absent.
- */
-export function getCertificateVersion(cert: DevCert): number {
-  const ext = cert.getExtension(ASPNET_HTTPS_OID);
-  if (!ext) return -1;
-
-  // The extension's extnValue is itself a DER OCTET STRING wrapping the
-  // version byte (matching how `dotnet dev-certs` and node-forge serialise
-  // the value). Peel back one layer of OCTET STRING if present, otherwise
-  // treat the bytes directly.
-  const raw = unwrapOctetString(ext.value);
-
-  if (raw.length === 0) return 0;
-
-  // Legacy v0 cert: raw bytes spell out the friendly name.
-  if (
-    raw.length === ASPNET_HTTPS_OID_FRIENDLY_NAME.length &&
-    raw[0] === 0x41 // 'A'
-  ) {
-    return 0;
-  }
-
-  return raw[0];
-}
-
-/**
- * Compute the SHA-1 thumbprint of a PEM-encoded certificate string.
- * Uppercase hex, matching .NET's `X509Certificate2.Thumbprint` and the
- * filename convention used by Kestrel's X509Store fallback.
- *
- * Note: this is intentionally SHA-1 because it has to round-trip through
- * tooling that defines "thumbprint" as SHA-1 (`dotnet dev-certs`, the
- * .NET X509Store filename layout, and Windows cert MMC). For a stronger
- * cert identifier inside this extension, use `DevCert.thumbprint`
- * (SHA-256) directly.
- */
-export function computeThumbprint(pemCert: string): string {
-  return new DevCert(pemCert).thumbprintSha1;
-}
-
 async function generateKeyPair(
   algorithm: GenerateAlgorithm
 ): Promise<{
@@ -284,28 +232,4 @@ function generateSerialNumber(): string {
     }
   }
   throw new Error("Failed to generate a non-zero certificate serial number.");
-}
-
-function unwrapOctetString(value: Buffer): Buffer {
-  if (value.length >= 2 && value[0] === 0x04) {
-    // OCTET STRING tag is 0x04. Decode short-form length.
-    if ((value[1] & 0x80) === 0) {
-      const len = value[1];
-      if (value.length === 2 + len) {
-        return value.subarray(2);
-      }
-    } else {
-      const numLenBytes = value[1] & 0x7f;
-      if (numLenBytes <= 4 && value.length >= 2 + numLenBytes) {
-        let len = 0;
-        for (let i = 0; i < numLenBytes; i++) {
-          len = (len << 8) | value[2 + i];
-        }
-        if (value.length === 2 + numLenBytes + len) {
-          return value.subarray(2 + numLenBytes);
-        }
-      }
-    }
-  }
-  return value;
 }

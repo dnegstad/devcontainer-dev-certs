@@ -1,3 +1,7 @@
+// Polyfill must load before any module that pulls in @peculiar/x509 (via
+// shared). tsyringe — a transitive dep of @peculiar/x509 — wires up
+// `@injectable` decorators against `Reflect.metadata` at module init.
+import "reflect-metadata";
 import * as vscode from "vscode";
 import {
   installDotNetDevCert,
