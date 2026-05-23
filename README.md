@@ -165,6 +165,7 @@ Set in your host VS Code's user or workspace settings. Provided by the **Dev Con
 | `devcontainerDevCerts.generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert and trust it in the host OS store. When `false`, user-managed certificates (if any) are still synced, but no managed dev cert lives on the host — this also implicitly disables acceptance of container-pushed certs (a container push would land one in the same trust store the user opted out of). |
 | `devcontainerDevCerts.userCertificates` | `[]` | Host-managed certificates to sync from the host into dev containers. See "[User-managed certificates](#user-managed-certificates)" for the per-entry schema (`name`, `pfxPath`/`pemCertPath`, etc.). User-managed certs are never added to the host OS trust store. |
 | `devcontainerDevCerts.installUserCertsToDotNetStore` | `false` | When `true`, also copies every entry from `userCertificates` into the container's .NET X509Store. **Security note:** the on-disk PFX there is passwordless (Linux's `StoreName.My` enumeration can't accept per-file passwords), so opting in strips your user cert's password on the in-container copy. Per-entry exemption via `excludeFromDotNetStore: true`. The auto-generated dotnet-dev cert is always installed to the store regardless. |
+| `devcontainerDevCerts.defaultKestrelCertificate` | `""` | Name of a `userCertificates` entry to use as the default Kestrel certificate inside dev containers. When set, the remote extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` and exports `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` to processes launched from VS Code (terminals, debug, tasks). Leave empty to opt out — Kestrel will still discover the auto-generated dev cert via X509Store. See "[Default Kestrel certificate (opt-in)](#default-kestrel-certificate-opt-in)" for scope and caveats. |
 | `devcontainerDevCerts.allowNonLocalContainerCertSans` | `false` | When accepting a Dev Container-managed dev certificate (via `syncContainerCert`), override the default SAN restriction that limits trusted certificates to localhost / loopback / private IPs / docker host names. Only enable when you fully understand the SAN entries the container will push. Has no effect when `generateDotNetCert` or `autoProvision` is `false`. |
 
 ### Workspace (Remote) VS Code settings
@@ -226,6 +227,27 @@ Setting this acknowledges that the in-container PFX copy is passwordless. The or
 To exempt an individual entry from the global setting (e.g., keep most of your user certs in the store but carve out one sensitive cert), add `"excludeFromDotNetStore": true` to that `userCertificates` entry. Has no effect when the global setting is `false` (no user certs go to the store anyway).
 
 The auto-generated dotnet-dev cert is always installed to the store regardless of these settings — it's intrinsically passwordless and the store IS its canonical location.
+
+### Default Kestrel certificate (opt-in)
+
+By default, Kestrel discovers the auto-generated dev cert through its X509Store fallback — no environment variables are set, and `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` remain untouched. If you'd like to pin a *custom* user certificate as Kestrel's default instead, add the following to your VS Code user `settings.json`:
+
+```json
+{
+    "devcontainerDevCerts.defaultKestrelCertificate": "corp-wildcard"
+}
+```
+
+The value names a `devcontainerDevCerts.userCertificates` entry by `name`. When set, the workspace extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` inside the container and sets these environment variables via VS Code's `EnvironmentVariableCollection`:
+
+| Variable | Value |
+|----------|-------|
+| `ASPNETCORE_Kestrel__Certificates__Default__Path` | `~/.aspnet/dev-certs/https/kestrel-default.pfx` |
+| `ASPNETCORE_Kestrel__Certificates__Default__Password` | The entry's `pfxPassword`, when set |
+
+Only one certificate is selected at a time. Changing the setting (or clearing it) on the next sync rewrites or removes the file and the env vars. The pointer must reference a user-managed entry that carries a private key — CA-only entries are rejected with a warning notification.
+
+**Scope.** Because the selection lives in a VS Code setting, the env vars only apply to processes launched from VS Code. The remote extension wires them up two ways: `EnvironmentVariableCollection` covers integrated terminals (and the `tasks.json` invocations that run in them), and a `coreclr` `DebugConfigurationProvider` injects the same two vars into resolved debug configurations so F5 launches via the C# Dev Kit (and Aspire AppHost, which currently routes through `coreclr`) pick them up too. When both a launch config and the selection set the Path/Password keys, the selection wins — `defaultKestrelCertificate` is the higher-level abstraction and a stale `launchSettings.json` entry shouldn't silently override it. Processes started outside VS Code (a stray `docker exec`, an SSH session into the container without VS Code attached) won't see the vars — that's intentional. For those cases keep using the X509Store fallback (or set the env vars yourself in `devcontainer.json` `containerEnv`).
 
 ## Extra destinations
 

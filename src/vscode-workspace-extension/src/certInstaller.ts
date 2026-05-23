@@ -4,6 +4,7 @@ import {
   assertValidCertName,
   getDotNetStorePath,
   getDotNetRootStorePath,
+  getKestrelDefaultCertPath,
   getOpenSslTrustDir,
   getPfxFileName,
   getPemFileName,
@@ -297,4 +298,31 @@ export function rehashExtraDestinations(dirs: Iterable<string>): void {
       // best-effort
     }
   }
+}
+
+/**
+ * Write the user-selected default Kestrel PFX to the well-known path.
+ * Returns the path written so the caller can surface it in env vars.
+ * Throws if the source material has no PFX bytes (which the host should
+ * have prevented — defense in depth).
+ */
+export function writeKestrelDefaultCert(material: CertMaterialV3): string {
+  if (!material.pfxBase64) {
+    throw new Error(
+      `cert '${material.name}' has no PFX bytes; cannot write Kestrel default.`
+    );
+  }
+  const destPath = getKestrelDefaultCertPath();
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  fs.writeFileSync(destPath, Buffer.from(material.pfxBase64, "base64"));
+  chmodSafe(destPath, 0o600);
+  return destPath;
+}
+
+/**
+ * Remove the well-known Kestrel default PFX if it exists. No-ops when
+ * the file is already absent.
+ */
+export function removeKestrelDefaultCert(): void {
+  fs.rmSync(getKestrelDefaultCertPath(), { force: true });
 }

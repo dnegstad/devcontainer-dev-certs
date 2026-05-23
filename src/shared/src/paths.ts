@@ -69,3 +69,23 @@ export function getPemFileName(thumbprint: string): string {
 export function getPemFileNameForUser(name: string): string {
   return `${name}.pem`;
 }
+
+/**
+ * Container-side path that holds the PFX selected by
+ * `devcontainerDevCerts.defaultKestrelCertificate`. Single fixed filename
+ * (only one default exists at a time) so the workspace extension can
+ * sweep it without needing to remember the prior selection's name.
+ *
+ * Sits in its own directory under `~/.aspnet/dev-certs/` rather than the
+ * standard `~/.aspnet/https/` location so we don't clash with PFXes
+ * `dotnet user-secrets`, Aspire, or other tooling may write there.
+ */
+export function getKestrelDefaultCertPath(): string {
+  return path.join(
+    os.homedir(),
+    ".aspnet",
+    "dev-certs",
+    "https",
+    "kestrel-default.pfx"
+  );
+}

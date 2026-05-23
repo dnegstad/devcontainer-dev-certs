@@ -486,3 +486,174 @@ describe("CertProvider.getAllCertMaterial", () => {
     expect(bundle.certs[0].thumbprint).toBe(thumbprint);
   });
 });
+
+describe("CertProvider defaultKestrelCertificate", () => {
+  it("attaches the pointer with name+password when the setting matches", async () => {
+    const { cert, key } = await makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    __setConfig("devcontainerDevCerts", {
+      defaultKestrelCertificate: "corp-ca",
+      userCertificates: [
+        {
+          name: "corp-ca",
+          pemCertPath: tmp.certPath,
+          pemKeyPath: tmp.keyPath,
+          pfxPassword: "hunter2",
+        },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterialV3({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    expect(bundle.defaultKestrelCert).toEqual({
+      name: "corp-ca",
+      password: "hunter2",
+    });
+    // The pointer is bundle-level; per-cert material is untouched.
+    expect(bundle.certs[0]).not.toHaveProperty("pfxPassword");
+    expect(bundle.certs[0]).not.toHaveProperty("isDefaultKestrelCert");
+  });
+
+  it("omits password when the source entry has none", async () => {
+    const { cert, key } = await makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    __setConfig("devcontainerDevCerts", {
+      defaultKestrelCertificate: "no-pw",
+      userCertificates: [
+        {
+          name: "no-pw",
+          pemCertPath: tmp.certPath,
+          pemKeyPath: tmp.keyPath,
+        },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterialV3({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    expect(bundle.defaultKestrelCert).toEqual({ name: "no-pw" });
+    expect(bundle.defaultKestrelCert?.password).toBeUndefined();
+  });
+
+  it("warns and omits the pointer when the setting names a missing cert", async () => {
+    const { cert, key } = await makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    __setConfig("devcontainerDevCerts", {
+      defaultKestrelCertificate: "does-not-exist",
+      userCertificates: [
+        {
+          name: "corp-ca",
+          pemCertPath: tmp.certPath,
+          pemKeyPath: tmp.keyPath,
+        },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterialV3({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    expect(bundle.defaultKestrelCert).toBeUndefined();
+    expect(warningMessages.some((m) => m.includes("does-not-exist"))).toBe(
+      true
+    );
+  });
+
+  it("refuses to point at a CA-only entry (no private key)", async () => {
+    const { cert } = await makeValidCert();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-ca-only-"));
+    cleanupDirs.push(dir);
+    const certPath = path.join(dir, "ca.pem");
+    fs.writeFileSync(certPath, cert.pem);
+
+    __setConfig("devcontainerDevCerts", {
+      defaultKestrelCertificate: "ca-only",
+      userCertificates: [
+        { name: "ca-only", pemCertPath: certPath },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const bundle = await provider.getAllCertMaterialV3({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    });
+
+    expect(bundle.defaultKestrelCert).toBeUndefined();
+    expect(
+      warningMessages.some(
+        (m) => m.includes("ca-only") && m.includes("no private key")
+      )
+    ).toBe(true);
+  });
+
+  it("refuses to target the dotnet-dev cert with a dedicated message (not the generic missing-entry one)", async () => {
+    __setConfig("devcontainerDevCerts", {
+      defaultKestrelCertificate: "aspnetcore-dev",
+    });
+
+    const provider = new CertProvider(mockManager("DEV-THUMB"));
+    const bundle = await provider.getAllCertMaterialV3({
+      includeDotNetDev: true,
+      includeUserCerts: true,
+    });
+
+    expect(bundle.defaultKestrelCert).toBeUndefined();
+    // The cert IS in the bundle — make sure we don't mislead the user
+    // with the generic "no userCertificates entry with that name was
+    // synced" warning. They get the dotnet-dev-specific guidance instead.
+    expect(
+      warningMessages.some((m) =>
+        m.includes("no userCertificates entry with that name was synced")
+      )
+    ).toBe(false);
+    expect(
+      warningMessages.some(
+        (m) =>
+          m.includes("aspnetcore-dev") &&
+          m.includes("auto-generated dotnet-dev certificate") &&
+          m.includes("X509Store")
+      )
+    ).toBe(true);
+  });
+
+  it("is absent on the V2 endpoint (V3-only wire field)", async () => {
+    const { cert, key } = await makeValidCert();
+    const tmp = writeCertFiles(cert, key);
+    cleanupDirs.push(tmp.dir);
+
+    __setConfig("devcontainerDevCerts", {
+      defaultKestrelCertificate: "corp-ca",
+      userCertificates: [
+        {
+          name: "corp-ca",
+          pemCertPath: tmp.certPath,
+          pemKeyPath: tmp.keyPath,
+          pfxPassword: "hunter2",
+        },
+      ] satisfies UserCertificateConfig[],
+    });
+
+    const provider = new CertProvider(mockManager("DOTNET-THUMB"));
+    const v2 = (await provider.getAllCertMaterial({
+      includeDotNetDev: false,
+      includeUserCerts: true,
+    })) as unknown as Record<string, unknown>;
+    expect(v2.defaultKestrelCert).toBeUndefined();
+  });
+});
