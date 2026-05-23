@@ -379,7 +379,14 @@ function applyDefaultKestrelCert(
     pfxPath = writeKestrelDefaultCert(material);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    log(`Failed to write Kestrel default cert: ${message}`);
+    // A partial failure here mustn't leave VS Code-launched processes
+    // pointing at the prior selection's path/password — sweep both env
+    // vars and the well-known file so the next process sees a clean
+    // "no default" state rather than a stale one.
+    log(
+      `Failed to write Kestrel default cert: ${message}. Clearing any prior selection.`
+    );
+    sweep();
     return;
   }
 
