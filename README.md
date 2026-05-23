@@ -229,29 +229,21 @@ By default the host is the source of truth: the host extension generates the ASP
 
 Some projects flip that around: the container's own build step (or a `dotnet dev-certs https` invocation baked into the image) is the canonical generator of the cert. In that case you can opt the container in to pushing its dev cert *to* the host, so the host trusts the container's cert instead of generating its own.
 
-To enable, both sides must opt in:
+To enable, set the feature option on the container:
 
-1. Set the feature option on the container:
-
-    ```json
-    {
-        "features": {
-            "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
-                "syncContainerCert": true
-            }
+```json
+{
+    "features": {
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
+            "syncContainerCert": true
         }
     }
-    ```
+}
+```
 
-2. Set the host VS Code setting:
+The host side is gated by the same VS Code settings that gate the normal host-generation flow: `devcontainerDevCerts.generateDotNetCert` (default `true`) and `devcontainer-dev-certs.autoProvision` (default `true`). If you've disabled either — because you don't want any extension-managed dev cert on your host — a container's push is rejected with the same intent. No separate "accept container certs" toggle: the user-level question "is this host willing to trust a managed ASP.NET dev cert?" has one answer, regardless of where the cert came from.
 
-    ```json
-    {
-        "devcontainerDevCerts.acceptContainerDevCerts": true
-    }
-    ```
-
-Both flows are independent. With `syncContainerCert` enabled:
+With `syncContainerCert` enabled:
 
 - The workspace extension scans `~/.dotnet/corefx/cryptography/x509stores/my/*.pfx` inside the container, classifies each candidate the same way the host classifies its own platform stores (CN=localhost, OID v4+, key + cert match, valid notBefore/notAfter), and picks the best (highest dev-cert version, then latest `notAfter`). If multiple valid candidates are present, a log line in the **Dev Container Dev Certs (Remote)** output channel lists every thumbprint that was considered.
 - If a usable cert is found, the workspace extension pushes its PFX + PEM bytes to the host via a new IPC command. If none is found, the push is a no-op — there's no fallback to host generation. (If you also want host generation as a fallback, keep `generateDotNetCert: true` — the two flows compose.)

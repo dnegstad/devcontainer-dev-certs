@@ -171,28 +171,31 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Reverse-sync entry point: receive a dev certificate from a Dev Container
   // (when the workspace extension opted in via the `syncContainerCert`
-  // feature option) and trust it on the host. Gated on the host setting
-  // `devcontainerDevCerts.acceptContainerDevCerts`; defaults to off so the
-  // mere installation of this extension can't be tricked into trusting a
-  // container-supplied certificate.
+  // feature option) and trust it on the host. Gated on the same VS Code
+  // settings that gate the host-side generation flow —
+  // `devcontainerDevCerts.generateDotNetCert` and
+  // `devcontainer-dev-certs.autoProvision`. The user controls whether ANY
+  // extension-managed dev cert lands on their host through those, so we
+  // don't introduce a separate accept toggle.
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.acceptContainerDevCert",
       async (
         payload: AcceptContainerCertPayload
       ): Promise<AcceptContainerCertResult> => {
-        const cfg = vscode.workspace.getConfiguration("devcontainerDevCerts");
-        const acceptEnabled = cfg.get<boolean>(
-          "acceptContainerDevCerts",
-          false
-        );
-        const allowNonLocalSans = cfg.get<boolean>(
-          "allowNonLocalContainerCertSans",
-          false
-        );
+        const generateDotNetCert = vscode.workspace
+          .getConfiguration("devcontainerDevCerts")
+          .get<boolean>("generateDotNetCert", true);
+        const autoProvision = vscode.workspace
+          .getConfiguration("devcontainer-dev-certs")
+          .get<boolean>("autoProvision", true);
+        const allowNonLocalSans = vscode.workspace
+          .getConfiguration("devcontainerDevCerts")
+          .get<boolean>("allowNonLocalContainerCertSans", false);
 
         const result = await acceptContainerDevCert(payload, {
-          acceptEnabled,
+          generateDotNetCert,
+          autoProvision,
           allowNonLocalSans,
           getCurrentThumbprint: async () => {
             const status = await certManager.check();

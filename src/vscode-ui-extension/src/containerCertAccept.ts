@@ -42,8 +42,19 @@ export interface AcceptContainerCertResult {
  * platform stores or the vscode API.
  */
 export interface AcceptContainerCertDeps {
-  /** `devcontainerDevCerts.acceptContainerDevCerts` host setting. */
-  acceptEnabled: boolean;
+  /**
+   * `devcontainerDevCerts.generateDotNetCert` host setting. When false,
+   * the user has opted out of having any extension-managed ASP.NET dev
+   * cert on their host trust store — a container-pushed cert would
+   * violate that intent, so we reject.
+   */
+  generateDotNetCert: boolean;
+  /**
+   * `devcontainer-dev-certs.autoProvision` host setting. When false, the
+   * user has disabled automatic provisioning entirely; we don't prompt
+   * or trust in response to an unsolicited push.
+   */
+  autoProvision: boolean;
   /** `devcontainerDevCerts.allowNonLocalContainerCertSans` host setting. */
   allowNonLocalSans: boolean;
   /** Returns the current dev cert thumbprint, or null when none exists. */
@@ -66,8 +77,12 @@ export interface AcceptContainerCertDeps {
 /**
  * Host-side handler for the reverse-sync command. Steps, in order:
  *
- *  1. Host opt-in (`acceptContainerDevCerts`). If off, hard-stop — the
- *     user has deliberately disabled this flow.
+ *  1. Host gating: gate on the SAME settings the host-generation flow
+ *     uses — `devcontainerDevCerts.generateDotNetCert` (the user opted
+ *     out of having any extension-managed dotnet dev cert on their
+ *     host) and `devcontainer-dev-certs.autoProvision` (the user
+ *     disabled automatic provisioning altogether). If either is off,
+ *     decline with `host-setting-disabled`.
  *  2. Parse + load the supplied PFX. Failure → `parse-failed`.
  *  3. Validate it actually is an ASP.NET dev cert (CN, validity, OID,
  *     version) — independent of whatever the workspace asserted.
@@ -82,7 +97,10 @@ export interface AcceptContainerCertDeps {
  *     has a dev cert with this thumbprint, return `{ accepted: true,
  *     alreadyTrusted: true }` without prompting.
  *  6. Modal consent prompt (one-time, gated on `containerCertProvisionConsented`
- *     in extension global state). Declining → `user-declined`.
+ *     in extension global state — distinct from the host-generation
+ *     consent because the user is approving trust of a cert that came
+ *     from a container they may or may not control). Declining →
+ *     `user-declined`.
  *  7. Save + trust the cert in the host platform store. The platform
  *     layer fires its own native prompts (macOS keychain, Windows MMC).
  *  8. Clear the certProvider cache so the next `getAllCertMaterial(V3)`
@@ -92,9 +110,15 @@ export async function acceptContainerDevCert(
   payload: AcceptContainerCertPayload,
   deps: AcceptContainerCertDeps
 ): Promise<AcceptContainerCertResult> {
-  if (!deps.acceptEnabled) {
+  if (!deps.generateDotNetCert) {
     log(
-      "acceptContainerDevCert: devcontainerDevCerts.acceptContainerDevCerts is disabled; declining."
+      "acceptContainerDevCert: devcontainerDevCerts.generateDotNetCert is false; declining (host opted out of managed dotnet dev certs)."
+    );
+    return { accepted: false, reason: "host-setting-disabled" };
+  }
+  if (!deps.autoProvision) {
+    log(
+      "acceptContainerDevCert: devcontainer-dev-certs.autoProvision is false; declining (host disabled automatic provisioning)."
     );
     return { accepted: false, reason: "host-setting-disabled" };
   }

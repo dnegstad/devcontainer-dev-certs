@@ -104,7 +104,8 @@ function makeDeps(
   const recordConsent = vi.fn(async () => undefined);
   const onAccepted = vi.fn();
   return {
-    acceptEnabled: true,
+    generateDotNetCert: true,
+    autoProvision: true,
     allowNonLocalSans: false,
     getCurrentThumbprint: async () => null,
     hasConsent: () => false,
@@ -129,9 +130,24 @@ describe("acceptContainerDevCert", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects when the host setting is disabled", async () => {
+  it("rejects when generateDotNetCert is false on the host", async () => {
     const { pfxBase64, thumbprint } = await makeDevPfx();
-    const deps = makeDeps({ acceptEnabled: false });
+    const deps = makeDeps({ generateDotNetCert: false });
+    const result = await acceptContainerDevCert(
+      { pfxBase64, thumbprint },
+      deps
+    );
+    expect(result).toEqual({
+      accepted: false,
+      reason: "host-setting-disabled",
+    });
+    expect(deps.acceptCertificate).not.toHaveBeenCalled();
+    expect(deps.promptUser).not.toHaveBeenCalled();
+  });
+
+  it("rejects when autoProvision is false on the host", async () => {
+    const { pfxBase64, thumbprint } = await makeDevPfx();
+    const deps = makeDeps({ autoProvision: false });
     const result = await acceptContainerDevCert(
       { pfxBase64, thumbprint },
       deps

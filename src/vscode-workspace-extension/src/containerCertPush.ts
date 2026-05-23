@@ -325,7 +325,7 @@ function reportAcceptOutcome(
   switch (result.reason) {
     case "host-setting-disabled":
       log(
-        `Container cert sync: host rejected ${thumbprint} — devcontainerDevCerts.acceptContainerDevCerts is disabled in host VS Code settings.`
+        `Container cert sync: host rejected ${thumbprint} — host has disabled managed dotnet dev certs (devcontainerDevCerts.generateDotNetCert) or automatic provisioning (devcontainer-dev-certs.autoProvision).`
       );
       // No toast — the user disabled the host setting deliberately.
       return;
