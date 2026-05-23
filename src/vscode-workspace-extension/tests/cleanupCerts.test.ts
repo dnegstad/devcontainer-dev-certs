@@ -1,10 +1,32 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+// Polyfill must load before any module that pulls in @peculiar/x509 (via
+// shared). tsyringe — a transitive dep of @peculiar/x509 — wires up
+// `@injectable` decorators against `Reflect.metadata` at module init.
+import "reflect-metadata";
+
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import {
+  Extension,
+  SubjectAlternativeNameExtension,
+  X509CertificateGenerator,
+  cryptoProvider,
+} from "@peculiar/x509";
+import { webcrypto } from "node:crypto";
 import type * as Shared from "@devcontainer-dev-certs/shared";
 import type { CertBundleV3, CertMaterialV3 } from "@devcontainer-dev-certs/shared";
-import { ASPNET_HTTPS_OID_DER } from "../src/util/pkcs12DevCertScan";
+import {
+  DevCert,
+  DevKey,
+  ASPNET_HTTPS_OID,
+  CURRENT_CERTIFICATE_VERSION,
+  SAN_DNS_NAMES,
+  SAN_IP_ADDRESSES,
+  buildPfx,
+} from "@devcontainer-dev-certs/shared";
+
+cryptoProvider.set(webcrypto as unknown as Crypto);
 
 let storeDir: string;
 let rootStoreDir: string;
@@ -43,22 +65,77 @@ afterEach(() => {
   cleanupDirs.length = 0;
 });
 
-// 40-character SHA-1 hex thumbprints for tests.
+// 40-character SHA-1 hex thumbprints used as FILENAME stems on disk. The
+// in-file thumbprint of the cached PFX bytes below is unrelated — cleanup
+// keys on the filename only (managedBundle.thumbprint must match the
+// filename stem to be filtered out), so we keep these constants stable
+// across tests for clarity.
 const MANAGED_THUMB = "A".repeat(40);
 const STALE_THUMB = "B".repeat(40);
 const ORPHAN_THUMB = "C".repeat(40);
 
+// One real dev-cert PFX shared across every test that needs "is a dev
+// cert" bytes on disk. Building this once in beforeAll keeps the suite
+// fast — generateKey is the dominant cost.
+let CACHED_DEV_PFX: Buffer | null = null;
+
+beforeAll(async () => {
+  CACHED_DEV_PFX = await buildRealDevCertPfx();
+}, 30_000);
+
+async function buildRealDevCertPfx(): Promise<Buffer> {
+  const keyPair = await webcrypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"]
+  );
+  const now = new Date();
+  const exp = new Date(now.getTime() + 30 * 86400_000);
+  const cert = await X509CertificateGenerator.create({
+    serialNumber: "01",
+    subject: "CN=localhost",
+    issuer: "CN=localhost",
+    notBefore: now,
+    notAfter: exp,
+    signingAlgorithm: { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    publicKey: keyPair.publicKey,
+    signingKey: keyPair.privateKey,
+    extensions: [
+      new SubjectAlternativeNameExtension(
+        [
+          ...SAN_DNS_NAMES.map((d) => ({ type: "dns" as const, value: d })),
+          ...SAN_IP_ADDRESSES.map((ip) => ({ type: "ip" as const, value: ip })),
+        ],
+        true
+      ),
+      new Extension(
+        ASPNET_HTTPS_OID,
+        false,
+        new Uint8Array([CURRENT_CERTIFICATE_VERSION]).buffer
+      ),
+    ],
+  });
+  const devCert = new DevCert(cert);
+  const devKey = await DevKey.fromCryptoKey(keyPair.privateKey);
+  return buildPfx({ cert: devCert, key: devKey });
+}
+
 function devCertPfx(): Buffer {
-  // Any buffer that contains the OID byte run satisfies scanPfxForDevCertOid's
-  // plaintext fast path.
-  return Buffer.concat([
-    Buffer.from("PFXHEADER"),
-    ASPNET_HTTPS_OID_DER,
-    Buffer.from("TRAILER"),
-  ]);
+  if (!CACHED_DEV_PFX) {
+    throw new Error("devCertPfx() called before beforeAll completed");
+  }
+  return CACHED_DEV_PFX;
 }
 
 function nonDevCertPfx(): Buffer {
+  // Random bytes — parsePfx fails to parse them, isAspNetDevCertPfx
+  // returns false (fail-closed). Same effective semantics as the old
+  // fixture; just no need to embed the OID byte run.
   return Buffer.from("NOT-A-DEV-CERT");
 }
 
@@ -104,11 +181,11 @@ describe("bundleHasManagedDevCert", () => {
   // Regression guard for the "generation disabled" scenario: without this
   // check, the cleanup command would classify every dev cert in My as
   // "other" because nothing is "ours" and would offer to delete them all.
-  it("guards against the bug it exists for: empty-managed scan flags every dev cert in My", () => {
+  it("guards against the bug it exists for: empty-managed scan flags every dev cert in My", async () => {
     fs.writeFileSync(path.join(storeDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
     const empty = buildManagedMyStoreThumbprints({ certs: [] });
-    const stale = findStaleDevCerts(empty);
+    const stale = await findStaleDevCerts(empty);
     expect(stale.length).toBe(2);
   });
 });
@@ -149,15 +226,19 @@ describe.skipIf(process.platform === "win32")("buildManagedMyStoreThumbprints", 
 });
 
 describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
-  it("returns empty when the My store directory is missing or empty", () => {
+  it("returns empty when the My store directory is missing or empty", async () => {
     // beforeEach left us with an empty My store; first call exercises
     // the "exists but contains nothing" branch.
-    expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
+    expect(
+      await findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))
+    ).toEqual([]);
     fs.rmSync(storeDir, { recursive: true });
-    expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
+    expect(
+      await findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))
+    ).toEqual([]);
   });
 
-  it("detects stale dev-cert PFXs in My, preserves managed and non-dev-cert files", () => {
+  it("detects stale dev-cert PFXs in My, preserves managed and non-dev-cert files", async () => {
     fs.writeFileSync(path.join(storeDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
     // Lacks the OID — must be left alone even though the filename matches.
@@ -165,7 +246,9 @@ describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
     // Wrong filename pattern — must be left alone.
     fs.writeFileSync(path.join(storeDir, "random.pfx"), devCertPfx());
 
-    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const stale = await findStaleDevCerts(
+      buildManagedMyStoreThumbprints(managedBundle())
+    );
     expect(stale).toHaveLength(1);
     expect(stale[0].thumbprint).toBe(STALE_THUMB);
     // No associated Root / trust files exist, so only the My PFX is gathered.
@@ -173,19 +256,21 @@ describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
     expect(stale[0].artifacts[0].location).toBe("my-store");
   });
 
-  it("gathers associated Root-store and trust-dir files for a stale My-store cert", () => {
+  it("gathers associated Root-store and trust-dir files for a stale My-store cert", async () => {
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(rootStoreDir, `${STALE_THUMB}.pfx`), devCertPfx());
     const stalePem = `aspnetcore-localhost-${STALE_THUMB}.pem`;
     fs.writeFileSync(path.join(trustDir, stalePem), "stale");
 
-    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const stale = await findStaleDevCerts(
+      buildManagedMyStoreThumbprints(managedBundle())
+    );
     expect(stale).toHaveLength(1);
     const locations = stale[0].artifacts.map((a) => a.location).sort();
     expect(locations).toEqual(["my-store", "root-store", "trust-dir"]);
   });
 
-  it("does NOT proactively scan Root or the trust dir — a file only there is ignored", () => {
+  it("does NOT proactively scan Root or the trust dir — a file only there is ignored", async () => {
     // Cert exists ONLY in Root + trust dir; nothing in My. Should be invisible
     // to findStaleDevCerts — My is the discovery driver.
     fs.writeFileSync(path.join(rootStoreDir, `${STALE_THUMB}.pfx`), devCertPfx());
@@ -194,10 +279,12 @@ describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
       "orphan"
     );
 
-    expect(findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))).toEqual([]);
+    expect(
+      await findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()))
+    ).toEqual([]);
   });
 
-  it("gathers associated files even when the producer used lowercase thumbprint filenames", () => {
+  it("gathers associated files even when the producer used lowercase thumbprint filenames", async () => {
     // Sibling lookups must preserve on-disk casing or they'll miss
     // lowercase artifacts on a case-sensitive filesystem.
     const lower = STALE_THUMB.toLowerCase();
@@ -208,7 +295,9 @@ describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
       "lc-pem"
     );
 
-    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const stale = await findStaleDevCerts(
+      buildManagedMyStoreThumbprints(managedBundle())
+    );
     expect(stale).toHaveLength(1);
     // Thumbprint is normalised to uppercase for display/comparison.
     expect(stale[0].thumbprint).toBe(STALE_THUMB);
@@ -221,10 +310,12 @@ describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
     }
   });
 
-  it("does not report associated files that don't exist on disk", () => {
+  it("does not report associated files that don't exist on disk", async () => {
     // Stale PFX in My but no matching Root PFX and no matching PEM.
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
-    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const stale = await findStaleDevCerts(
+      buildManagedMyStoreThumbprints(managedBundle())
+    );
     expect(stale).toHaveLength(1);
     expect(stale[0].artifacts).toHaveLength(1);
     expect(stale[0].artifacts[0].location).toBe("my-store");
@@ -232,7 +323,7 @@ describe.skipIf(process.platform === "win32")("findStaleDevCerts", () => {
 });
 
 describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
-  it("removes the My PFX and all associated Root/trust files, then rehashes", () => {
+  it("removes the My PFX and all associated Root/trust files, then rehashes", async () => {
     fs.writeFileSync(path.join(storeDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
     fs.writeFileSync(path.join(rootStoreDir, `${MANAGED_THUMB}.pfx`), devCertPfx());
@@ -250,7 +341,9 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
       "-----BEGIN CERTIFICATE-----\nSTALE\n-----END CERTIFICATE-----\n"
     );
 
-    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const stale = await findStaleDevCerts(
+      buildManagedMyStoreThumbprints(managedBundle())
+    );
     const result = cleanupStaleDevCerts(stale);
 
     expect(result.removedCerts).toHaveLength(1);
@@ -267,7 +360,7 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
     expect(fs.existsSync(path.join(trustDir, stalePem))).toBe(false);
   });
 
-  it("does not rehash when no trust-dir PEM was removed", () => {
+  it("does not rehash when no trust-dir PEM was removed", async () => {
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
     // No PEM for the stale cert; managed PEM is unrelated.
     const managedPem = `aspnetcore-localhost-${MANAGED_THUMB}.pem`;
@@ -276,7 +369,9 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
       "-----BEGIN CERTIFICATE-----\nMANAGED\n-----END CERTIFICATE-----\n"
     );
 
-    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const stale = await findStaleDevCerts(
+      buildManagedMyStoreThumbprints(managedBundle())
+    );
     const result = cleanupStaleDevCerts(stale);
 
     expect(result.rehashedTrustDir).toBe(false);
@@ -285,7 +380,7 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
 
   // If a downstream file can't be unlinked, the My PFX must survive so
   // the cert is re-discoverable on the next attempt.
-  it("keeps the My PFX when a downstream Root unlink fails — cert remains discoverable", () => {
+  it("keeps the My PFX when a downstream Root unlink fails — cert remains discoverable", async () => {
     fs.writeFileSync(path.join(storeDir, `${STALE_THUMB}.pfx`), devCertPfx());
     // Non-empty directory at the Root path → unlinkSync throws
     // (EISDIR / ENOTEMPTY) without needing chmod tricks that don't work as
@@ -299,7 +394,9 @@ describe.skipIf(process.platform === "win32")("cleanupStaleDevCerts", () => {
       "-----BEGIN CERTIFICATE-----\nSTALE\n-----END CERTIFICATE-----\n"
     );
 
-    const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(managedBundle()));
+    const stale = await findStaleDevCerts(
+      buildManagedMyStoreThumbprints(managedBundle())
+    );
     expect(stale).toHaveLength(1);
     const result = cleanupStaleDevCerts(stale);
 

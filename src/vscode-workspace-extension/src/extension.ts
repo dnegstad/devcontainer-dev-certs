@@ -217,7 +217,7 @@ async function detectStaleAndPromptCleanup(
   // Skip when we have no managed cert to preserve — see cleanupCommand.
   if (!bundleHasManagedDevCert(bundle)) return;
 
-  const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
+  const stale = await findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
   if (stale.length === 0) return;
 
   logStaleCandidates(stale);
@@ -279,7 +279,7 @@ async function cleanupCommand(): Promise<void> {
     return;
   }
 
-  const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
+  const stale = await findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
   if (stale.length === 0) {
     vscode.window.showInformationMessage(
       vscode.l10n.t(
