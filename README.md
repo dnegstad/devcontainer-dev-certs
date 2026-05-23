@@ -126,7 +126,15 @@ test/
 .github/workflows/                 CI/CD (build, extension packaging, feature publishing)
 ```
 
-## Feature Options
+## Configuration reference
+
+All configurable surfaces in one place. Three categories: the devcontainer feature options (set in `devcontainer.json`), the host VS Code settings (set on your local machine), and the workspace VS Code settings (set inside the Dev Container — and inherited by SSH/WSL remotes). The detailed prose sections that follow this reference cover the workflows these knobs participate in.
+
+A historical-naming note: two prefixes are in use. `devcontainerDevCerts.*` (camelCase) is the newer convention for settings that describe cert *content* the extensions share across the host/container boundary; `devcontainer-dev-certs.*` (hyphenated) is the older convention for extension behavior knobs. Both stay supported; we don't rename them to avoid churning user settings.
+
+### Devcontainer feature options
+
+Set under the feature entry in `devcontainer.json`:
 
 ```json
 {
@@ -140,12 +148,35 @@ test/
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container |
+| `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container. |
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override for non-standard base images. |
 | `generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert. Set to `false` to skip generation (useful when you only want to sync user-managed certs). |
 | `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` VS Code setting. |
 | `syncContainerCert` | `false` | **Reverse sync (opt-in).** When the container itself already has a valid ASP.NET dev certificate (e.g. baked into the image with `dotnet dev-certs https`), push it to the host so the host trusts it instead of generating its own. See "[Syncing a certificate from the container to the host](#syncing-a-certificate-from-the-container-to-the-host)". |
 | `extraCertDestinations` | `""` | Comma-separated list of additional directories to write cert artifacts to. Each entry is `<abs-dir>[=<format>]` where `format` is `pem`, `key`, `pem-bundle`, `pfx`, or `all` (default). Every synced cert is written under the directory as `{name}.{pem,key,pfx}` (and/or `{name}-bundle.pem`). Example: `/etc/nginx/certs=pem,/var/myapp`. |
+
+### Host VS Code settings
+
+Set in your host VS Code's user or workspace settings. Provided by the **Dev Container Dev Certificates (Host)** extension (`dnegstad.devcontainer-dev-certs-host`).
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `devcontainer-dev-certs.autoProvision` | `true` | Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to `false` to disable provisioning entirely (host-generation AND acceptance of container-pushed certs). |
+| `devcontainerDevCerts.generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert and trust it in the host OS store. When `false`, user-managed certificates (if any) are still synced, but no managed dev cert lives on the host — this also implicitly disables acceptance of container-pushed certs (a container push would land one in the same trust store the user opted out of). |
+| `devcontainerDevCerts.userCertificates` | `[]` | Host-managed certificates to sync from the host into dev containers. See "[User-managed certificates](#user-managed-certificates)" for the per-entry schema (`name`, `pfxPath`/`pemCertPath`, etc.). User-managed certs are never added to the host OS trust store. |
+| `devcontainerDevCerts.installUserCertsToDotNetStore` | `false` | When `true`, also copies every entry from `userCertificates` into the container's .NET X509Store. **Security note:** the on-disk PFX there is passwordless (Linux's `StoreName.My` enumeration can't accept per-file passwords), so opting in strips your user cert's password on the in-container copy. Per-entry exemption via `excludeFromDotNetStore: true`. The auto-generated dotnet-dev cert is always installed to the store regardless. |
+| `devcontainerDevCerts.allowNonLocalContainerCertSans` | `false` | When accepting a Dev Container-managed dev certificate (via `syncContainerCert`), override the default SAN restriction that limits trusted certificates to localhost / loopback / private IPs / docker host names. Only enable when you fully understand the SAN entries the container will push. Has no effect when `generateDotNetCert` or `autoProvision` is `false`. |
+
+### Workspace (Remote) VS Code settings
+
+Set in your workspace settings or user settings inside the Dev Container / remote. Provided by the **Dev Container Dev Certificates (Remote)** extension (`dnegstad.devcontainer-dev-certs-remote`).
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `devcontainer-dev-certs.autoInject` | `true` | Automatically inject and configure the dev cert when a remote session starts. Set to `false` to require manual invocation via the "Dev Certs: Inject Certificate into Remote" command. |
+| `devcontainer-dev-certs.sslCertDirs` | Standard distro paths | Colon-separated system CA certificate directories to include in `SSL_CERT_DIR` alongside the dev-certs trust directory. Used when the Dev Container feature isn't present (e.g. SSH remoting, WSL); the feature's own `sslCertDirs` option takes precedence inside containers built with the feature. |
+| `devcontainer-dev-certs.ensureSslCertDir` | `true` | Ensure `SSL_CERT_DIR` is configured in the remote environment when the Dev Container feature hasn't set it. |
+| `devcontainer-dev-certs.warnOnStaleDevCerts` | `true` | Show a warning when multiple dev certificates are detected in this Dev Container's .NET certificate stores after install — alongside the extension-managed certificate. Pairs with the "Dev Certs: Clean Up Other Dev Certificates in Dev Container" command. |
 
 ## User-managed certificates
 
