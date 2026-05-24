@@ -9,6 +9,7 @@ import {
   acceptContainerDevCert,
   type AcceptContainerCertPayload,
   type AcceptContainerCertResult,
+  type AcceptedContainerCert,
 } from "./containerCertAccept";
 import { trustInNss } from "./platform/nssTrust";
 import {
@@ -16,7 +17,6 @@ import {
   log,
   getOpenSslTrustDir,
   getPemFileName,
-  type LoadedCert,
   type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
 import type { CertBundle, CertBundleV3 } from "@devcontainer-dev-certs/shared";
@@ -197,10 +197,6 @@ export function activate(context: vscode.ExtensionContext): void {
           generateDotNetCert,
           autoProvision,
           allowNonLocalSans,
-          getCurrentThumbprint: async () => {
-            const status = await certManager.check();
-            return status.exists ? status.thumbprint : null;
-          },
           hasConsent: () =>
             context.globalState.get<boolean>(
               CONTAINER_CERT_CONSENT_KEY,
@@ -212,16 +208,8 @@ export function activate(context: vscode.ExtensionContext): void {
             ).then(() => undefined),
           promptUser: (cert, nonLocal) =>
             promptForContainerCertConsent(cert, nonLocal),
-          acceptCertificate: async (cert) => {
-            await certManager.acceptExternalCertificate(
-              cert.cert,
-              cert.key!,
-              cert.thumbprint
-            );
-          },
-          onAccepted: () => {
-            certProvider.clearCache();
-            ensureTerminalSslCertDir(context);
+          trustCertificate: async (cert) => {
+            await certManager.trustExternalCertificate(cert.cert);
           },
         });
 
@@ -340,7 +328,7 @@ async function promptForCertConsent(): Promise<boolean> {
  * the user can see exactly what they're agreeing to trust.
  */
 async function promptForContainerCertConsent(
-  cert: LoadedCert,
+  cert: AcceptedContainerCert,
   nonLocalSans: NonLocalSanEntry[]
 ): Promise<boolean> {
   const trust = vscode.l10n.t("Trust");

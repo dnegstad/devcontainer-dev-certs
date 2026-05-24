@@ -1,24 +1,34 @@
 import {
+  DevCert,
   isValidDevCert,
   log,
-  parsePfx,
   validateLocalSans,
-  type LoadedCert,
   type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
 
 /**
  * Wire-protocol payload sent by the workspace extension when it scans the
  * container's .NET store and finds a valid ASP.NET dev cert to push.
+ *
+ * Public cert only — the host's role in this flow is to trust the cert, not
+ * to act as a server for it. Sending the private key would leak it across
+ * the IPC boundary and onto the host's disk for no functional benefit;
+ * Kestrel uses its own copy of the key inside the container.
  */
 export interface AcceptContainerCertPayload {
   thumbprint: string;
-  /** Passwordless PFX bytes, base64-encoded. */
-  pfxBase64: string;
   /** PEM-encoded certificate, base64-encoded (UTF-8 PEM string). */
-  pemCertBase64?: string;
-  /** PEM-encoded private key, base64-encoded; absent for CA-only certs. */
-  pemKeyBase64?: string;
+  pemCertBase64: string;
+}
+
+/**
+ * Internal view of a parsed-and-validated container-pushed cert. Used by
+ * the consent prompt + the trust step. No private key — see the payload
+ * docs above for why.
+ */
+export interface AcceptedContainerCert {
+  cert: DevCert;
+  thumbprint: string;
 }
 
 export type AcceptContainerCertRejectReason =
@@ -30,7 +40,6 @@ export type AcceptContainerCertRejectReason =
 
 export interface AcceptContainerCertResult {
   accepted: boolean;
-  alreadyTrusted?: boolean;
   reason?: AcceptContainerCertRejectReason;
   /** Free-form supplemental detail (e.g. offending SAN entries). */
   detail?: string;
@@ -57,21 +66,25 @@ export interface AcceptContainerCertDeps {
   autoProvision: boolean;
   /** `devcontainerDevCerts.allowNonLocalContainerCertSans` host setting. */
   allowNonLocalSans: boolean;
-  /** Returns the current dev cert thumbprint, or null when none exists. */
-  getCurrentThumbprint: () => Promise<string | null>;
   /** True iff the user has previously consented to container-cert sync. */
   hasConsent: () => boolean;
   /** Persist consent for future pushes. */
   recordConsent: () => Promise<void>;
   /** Show the modal consent prompt. Returns true iff the user accepted. */
   promptUser: (
-    cert: LoadedCert,
+    cert: AcceptedContainerCert,
     nonLocalSansOverridden: NonLocalSanEntry[]
   ) => Promise<boolean>;
-  /** Install + trust the supplied cert. */
-  acceptCertificate: (cert: LoadedCert) => Promise<void>;
-  /** Invalidate the host certProvider's cache so the next pull serves this cert. */
-  onAccepted: () => void;
+  /**
+   * Trust the supplied cert in the host's OS trust store. The
+   * implementation is the same code path the host-generation flow uses,
+   * but called with NO private key — we don't sync or persist the key,
+   * and we don't write the cert into CurrentUser/My, the macOS login
+   * keychain, or the .NET store's `my/` dir. The trust step is
+   * public-cert-only on every supported platform (Root store / OpenSSL
+   * trust dir / NSS DBs / login keychain trust settings).
+   */
+  trustCertificate: (cert: AcceptedContainerCert) => Promise<void>;
 }
 
 /**
@@ -83,7 +96,7 @@ export interface AcceptContainerCertDeps {
  *     host) and `devcontainer-dev-certs.autoProvision` (the user
  *     disabled automatic provisioning altogether). If either is off,
  *     decline with `host-setting-disabled`.
- *  2. Parse + load the supplied PFX. Failure → `parse-failed`.
+ *  2. Parse the supplied PEM cert. Failure → `parse-failed`.
  *  3. Validate it actually is an ASP.NET dev cert (CN, validity, OID,
  *     version) — independent of whatever the workspace asserted.
  *     Failure → `not-valid-dev-cert`.
@@ -93,18 +106,23 @@ export interface AcceptContainerCertDeps {
  *     the cert with `non-local-sans`. Defends against a malicious or
  *     misconfigured container tricking the host into trusting a cert
  *     valid for arbitrary domains.
- *  5. Already-trusted short-circuit. If the host platform store already
- *     has a dev cert with this thumbprint, return `{ accepted: true,
- *     alreadyTrusted: true }` without prompting.
- *  6. Modal consent prompt (one-time, gated on `containerCertProvisionConsented`
+ *  5. Modal consent prompt (one-time, gated on `containerCertProvisionConsented`
  *     in extension global state — distinct from the host-generation
  *     consent because the user is approving trust of a cert that came
  *     from a container they may or may not control). Declining →
  *     `user-declined`.
- *  7. Save + trust the cert in the host platform store. The platform
- *     layer fires its own native prompts (macOS keychain, Windows MMC).
- *  8. Clear the certProvider cache so the next `getAllCertMaterial(V3)`
- *     call returns the freshly-trusted container cert.
+ *  6. Trust the cert in the host platform store. Public-cert-only:
+ *     writes the cert to the OS trust surfaces (.NET Root / OpenSSL
+ *     trust dir / NSS / login keychain / CurrentUser-Root) but NEVER
+ *     to a my-store location and NEVER with a private key — the host
+ *     is purely a trust anchor here, not a cert distribution point.
+ *     The platform layer fires its own native prompts (macOS keychain,
+ *     Windows MMC) on first trust of this thumbprint.
+ *
+ * Idempotent on repeat pushes of the same cert: each platform's
+ * `trustCertificate` is a no-op when the cert is already in the trust
+ * surfaces, so we don't bother short-circuiting based on a separate
+ * "already trusted" check.
  */
 export async function acceptContainerDevCert(
   payload: AcceptContainerCertPayload,
@@ -123,39 +141,23 @@ export async function acceptContainerDevCert(
     return { accepted: false, reason: "host-setting-disabled" };
   }
 
-  let loaded: LoadedCert;
+  let parsed: AcceptedContainerCert;
   try {
-    const pfxBytes = Buffer.from(payload.pfxBase64, "base64");
-    const { cert, key } = await parsePfx(pfxBytes, "");
-    loaded = {
-      cert,
-      key,
-      thumbprint: cert.thumbprintSha1,
-      isExpired: cert.notAfter.getTime() < Date.now(),
-    };
+    const pem = Buffer.from(payload.pemCertBase64, "base64").toString("utf-8");
+    const cert = new DevCert(pem);
+    parsed = { cert, thumbprint: cert.thumbprintSha1 };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    log(`acceptContainerDevCert: PFX parse failed: ${message}`);
+    log(`acceptContainerDevCert: PEM parse failed: ${message}`);
     return { accepted: false, reason: "parse-failed", detail: message };
   }
 
-  if (!loaded.key) {
-    log(
-      `acceptContainerDevCert: rejected ${loaded.thumbprint} — PFX contains no private key, refusing to install a CA-only cert as a dev cert.`
-    );
-    return {
-      accepted: false,
-      reason: "parse-failed",
-      detail: "PFX contained no private key",
-    };
-  }
-
-  if (loaded.thumbprint !== payload.thumbprint.toUpperCase()) {
+  if (parsed.thumbprint !== payload.thumbprint.toUpperCase()) {
     // Mismatched thumbprints mean the payload was tampered with in transit
     // OR the workspace miscomputed — either way, refuse silently and treat
     // it as a parse failure for log consistency.
     log(
-      `acceptContainerDevCert: thumbprint mismatch — payload claimed ${payload.thumbprint.toUpperCase()}, actual ${loaded.thumbprint}.`
+      `acceptContainerDevCert: thumbprint mismatch — payload claimed ${payload.thumbprint.toUpperCase()}, actual ${parsed.thumbprint}.`
     );
     return {
       accepted: false,
@@ -164,20 +166,20 @@ export async function acceptContainerDevCert(
     };
   }
 
-  if (!isValidDevCert(loaded.cert)) {
+  if (!isValidDevCert(parsed.cert)) {
     log(
-      `acceptContainerDevCert: rejected ${loaded.thumbprint} — fails isValidDevCert (CN/validity/OID/version).`
+      `acceptContainerDevCert: rejected ${parsed.thumbprint} — fails isValidDevCert (CN/validity/OID/version).`
     );
     return { accepted: false, reason: "not-valid-dev-cert" };
   }
 
-  const sanResult = validateLocalSans(loaded.cert);
+  const sanResult = validateLocalSans(parsed.cert);
   if (!sanResult.ok && !deps.allowNonLocalSans) {
     const detail = sanResult.nonLocalEntries
       .map((e) => `${e.type}:${e.value}`)
       .join(", ");
     log(
-      `acceptContainerDevCert: rejected ${loaded.thumbprint} — non-local SAN entries: ${detail}. Override via devcontainerDevCerts.allowNonLocalContainerCertSans.`
+      `acceptContainerDevCert: rejected ${parsed.thumbprint} — non-local SAN entries: ${detail}. Override via devcontainerDevCerts.allowNonLocalContainerCertSans.`
     );
     return { accepted: false, reason: "non-local-sans", detail };
   }
@@ -185,38 +187,26 @@ export async function acceptContainerDevCert(
     !sanResult.ok && deps.allowNonLocalSans ? sanResult.nonLocalEntries : [];
   if (nonLocalOverridden.length > 0) {
     log(
-      `acceptContainerDevCert: ${loaded.thumbprint} has non-local SAN entries but allowNonLocalContainerCertSans is true; proceeding. Non-local entries: ${nonLocalOverridden
+      `acceptContainerDevCert: ${parsed.thumbprint} has non-local SAN entries but allowNonLocalContainerCertSans is true; proceeding. Non-local entries: ${nonLocalOverridden
         .map((e) => `${e.type}:${e.value}`)
         .join(", ")}`
     );
   }
 
-  // Already-trusted short-circuit. If the platform store already holds a
-  // dev cert with this thumbprint, no work to do — surface the success
-  // without re-prompting or re-trusting.
-  const existingThumbprint = await deps.getCurrentThumbprint();
-  if (existingThumbprint && existingThumbprint === loaded.thumbprint) {
-    log(
-      `acceptContainerDevCert: ${loaded.thumbprint} already trusted on host; no action needed.`
-    );
-    return { accepted: true, alreadyTrusted: true };
-  }
-
   if (!deps.hasConsent()) {
-    const consented = await deps.promptUser(loaded, nonLocalOverridden);
+    const consented = await deps.promptUser(parsed, nonLocalOverridden);
     if (!consented) {
       log(
-        `acceptContainerDevCert: user declined trusting ${loaded.thumbprint}.`
+        `acceptContainerDevCert: user declined trusting ${parsed.thumbprint}.`
       );
       return { accepted: false, reason: "user-declined" };
     }
     await deps.recordConsent();
   }
 
-  await deps.acceptCertificate(loaded);
-  deps.onAccepted();
+  await deps.trustCertificate(parsed);
 
-  log(`acceptContainerDevCert: ${loaded.thumbprint} trusted on host.`);
+  log(`acceptContainerDevCert: ${parsed.thumbprint} trusted on host.`);
   return { accepted: true };
 }
 

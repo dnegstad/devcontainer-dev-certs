@@ -242,24 +242,20 @@ describe("pushContainerCertToHost", () => {
     expect(spy).toHaveBeenCalledTimes(1);
     const [cmd, payload] = spy.mock.calls[0] as [
       string,
-      { thumbprint: string; pfxBase64: string },
+      { thumbprint: string; pemCertBase64: string; pfxBase64?: string },
     ];
     expect(cmd).toBe("devcontainer-dev-certs.acceptContainerDevCert");
     expect(payload.thumbprint).toBe(thumbprint);
-    expect(payload.pfxBase64.length).toBeGreaterThan(0);
-  });
-
-  it("surfaces alreadyTrusted without erroring", async () => {
-    const dir = makeDotNetStoreDir(tmpHome);
-    await writeDevPfxInDir(dir);
-    vi.spyOn(vscode.commands, "executeCommand").mockImplementation(
-      async (_cmd: string): Promise<AcceptContainerCertResult> => ({
-        accepted: true,
-        alreadyTrusted: true,
-      })
-    );
-    const result = await pushContainerCertToHost();
-    expect(result).toEqual({ accepted: true, alreadyTrusted: true });
+    // Pin the public-cert-only wire contract: the payload must carry a
+    // PEM-encoded cert and MUST NOT carry the PFX (private key would
+    // accompany it). Sending the private key would leak it to the host
+    // for no functional gain — the host only needs to trust the cert.
+    expect(payload.pemCertBase64.length).toBeGreaterThan(0);
+    expect(payload).not.toHaveProperty("pfxBase64");
+    expect(payload).not.toHaveProperty("pemKeyBase64");
+    const decoded = Buffer.from(payload.pemCertBase64, "base64").toString("utf-8");
+    expect(decoded).toContain("BEGIN CERTIFICATE");
+    expect(decoded).not.toContain("PRIVATE KEY");
   });
 
   it("falls back gracefully when the host command isn't registered", async () => {

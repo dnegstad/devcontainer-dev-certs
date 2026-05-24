@@ -21,8 +21,6 @@ import {
  */
 export interface AcceptContainerCertResult {
   accepted: boolean;
-  /** When `accepted`, indicates the host already had this cert trusted. */
-  alreadyTrusted?: boolean;
   /**
    * Failure code. `host-setting-disabled` means the user hasn't opted in
    * on the host; `user-declined` means the consent prompt was rejected;
@@ -246,16 +244,15 @@ export async function pushContainerCertToHost(): Promise<
     return null;
   }
 
-  const pfxBytes = fs.readFileSync(scan.pfxPath);
+  // Public cert only on the wire. The host's job is to trust the cert,
+  // not to act as a server for it — Kestrel keeps using its own copy of
+  // the private key inside the container. Not sending the key keeps it
+  // off the host's disk and out of the cross-host IPC channel entirely.
   const payload = {
     thumbprint: scan.loaded.thumbprint,
-    pfxBase64: pfxBytes.toString("base64"),
     pemCertBase64: Buffer.from(scan.loaded.cert.pem, "utf-8").toString(
       "base64"
     ),
-    pemKeyBase64: scan.loaded.key
-      ? Buffer.from(scan.loaded.key.pem, "utf-8").toString("base64")
-      : undefined,
   };
 
   log(
@@ -306,12 +303,6 @@ function reportAcceptOutcome(
   thumbprint: string
 ): void {
   if (result.accepted) {
-    if (result.alreadyTrusted) {
-      log(
-        `Container cert sync: host already trusts ${thumbprint}; no action taken on host.`
-      );
-      return;
-    }
     log(`Container cert sync: host accepted and trusted ${thumbprint}.`);
     void vscode.window.showInformationMessage(
       vscode.l10n.t(

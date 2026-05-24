@@ -65,26 +65,32 @@ export class CertManager {
   }
 
   /**
-   * Install and trust an externally-supplied certificate (e.g. one pushed
-   * from a Dev Container via the syncContainerCert reverse-sync flow).
-   * Does NOT generate — the caller has already chosen + validated this
-   * cert. Replaces any existing dev cert in the platform store with the
-   * supplied one (`saveCertificate` is keyed by thumbprint), then walks
-   * the same OS trust path the normal generation flow uses.
+   * Trust an externally-supplied certificate (e.g. one pushed from a Dev
+   * Container via the syncContainerCert reverse-sync flow) in the host
+   * OS trust store. Public-cert-only: the cert lands in every trust
+   * surface the platform supports (.NET Root / OpenSSL trust dir / NSS
+   * databases on Linux; login keychain trust on macOS; CurrentUser-Root
+   * on Windows) but NEVER in CurrentUser/My, the keychain's identity
+   * slot, or the .NET store's `my/` directory.
+   *
+   * The host has no use for the private key in this flow — Kestrel runs
+   * in the container and uses its own copy of the key there. Not syncing
+   * the key keeps it off the host's disk entirely.
+   *
+   * Does NOT update `currentCert`. The host's auto-generation flow
+   * (`generate()` / `trust()`) is a separate state machine that the
+   * container-push path doesn't feed into; if the user also has
+   * `generateDotNetCert: true` and a subsequent `getAllCertMaterial`
+   * pull arrives, the host will generate its own (separate) cert as
+   * normal.
    */
-  async acceptExternalCertificate(
-    cert: GeneratedCert["cert"],
-    key: GeneratedCert["key"],
-    thumbprint: string
+  async trustExternalCertificate(
+    cert: GeneratedCert["cert"]
   ): Promise<void> {
     const store = await this.getStore();
-
-    log(`Installing externally-supplied dev certificate ${thumbprint}...`);
-    await store.saveCertificate(cert, key, thumbprint);
-
-    this.currentCert = { cert, key, thumbprint };
-
-    log("Trusting externally-supplied certificate in OS store...");
+    log(
+      `Trusting externally-supplied dev certificate ${cert.thumbprintSha1} in OS store (public cert only)...`
+    );
     await store.trustCertificate(cert);
     log("Externally-supplied certificate trusted.");
   }
