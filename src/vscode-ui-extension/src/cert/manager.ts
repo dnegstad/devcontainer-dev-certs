@@ -67,15 +67,25 @@ export class CertManager {
   /**
    * Trust an externally-supplied certificate (e.g. one pushed from a Dev
    * Container via the syncContainerCert reverse-sync flow) in the host
-   * OS trust store. Public-cert-only: the cert lands in every trust
-   * surface the platform supports (.NET Root / OpenSSL trust dir / NSS
-   * databases on Linux; login keychain trust on macOS; CurrentUser-Root
-   * on Windows) but NEVER in CurrentUser/My, the keychain's identity
-   * slot, or the .NET store's `my/` directory.
+   * OS trust store.
    *
-   * The host has no use for the private key in this flow — Kestrel runs
-   * in the container and uses its own copy of the key there. Not syncing
-   * the key keeps it off the host's disk entirely.
+   * Delegates directly to `store.trustCertificate(cert)` — the SAME hook
+   * the host-generation flow (`trust()`) uses on its final step — so
+   * "trusted on the host" means the same thing regardless of whether
+   * the cert was generated here or accepted from a container. On Linux
+   * that's `.NET Root store + OpenSSL trust dir + NSS browser DBs` (the
+   * NSS step uses the same `linuxNssTrustReporter` callback the host
+   * generation flow wires up). On macOS, login keychain trust policy.
+   * On Windows, CurrentUser/Root via certutil.
+   *
+   * Public-cert-only: the cert lands in every trust surface listed
+   * above but NEVER in CurrentUser/My, the keychain's identity slot, or
+   * the .NET store's `my/` directory. Skipping `saveCertificate` is
+   * deliberate — the host doesn't need (and shouldn't store) the
+   * private key, because Kestrel runs in the container with its own
+   * copy of the key. Future changes to this method MUST preserve both
+   * properties: (a) trust goes through `store.trustCertificate`; (b)
+   * no `saveCertificate` call. `tests/manager.test.ts` pins both.
    *
    * Does NOT update `currentCert`. The host's auto-generation flow
    * (`generate()` / `trust()`) is a separate state machine that the
@@ -89,7 +99,7 @@ export class CertManager {
   ): Promise<void> {
     const store = await this.getStore();
     log(
-      `Trusting externally-supplied dev certificate ${cert.thumbprintSha1} in OS store (public cert only)...`
+      `Trusting externally-supplied dev certificate ${cert.thumbprintSha1} (public cert only, via the same platform trust path as host-generated)...`
     );
     await store.trustCertificate(cert);
     log("Externally-supplied certificate trusted.");

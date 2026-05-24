@@ -220,4 +220,41 @@ describe("CertManager", () => {
       }
     });
   });
+
+  // Pins the design contract from issue #63: trust for a container-pushed
+  // cert MUST flow through the same `store.trustCertificate(cert)` hook
+  // the host-generation flow uses. That hook is where the per-platform
+  // trust surfaces live — on Linux it does `trustInDotNetRootStore` +
+  // `trustViaOpenSsl` + `trustInNssBrowsers` (NSS browser trust!), on
+  // macOS it sets login keychain trust policy, on Windows it adds to
+  // CurrentUser/Root. Going through `trustCertificate` is what keeps
+  // "trusted on the host" mean the same thing regardless of where the
+  // cert originated. The save/`my/` step is INTENTIONALLY skipped — the
+  // host never holds the private key in this flow.
+  describe("trustExternalCertificate (reverse-sync)", () => {
+    it("invokes the same store.trustCertificate hook as the generation flow", async () => {
+      const generated = await makeTestCert();
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.trustCertificate).toHaveBeenCalledTimes(1);
+      expect(store.trustCertificate).toHaveBeenCalledWith(generated.cert);
+    });
+
+    it("does NOT call saveCertificate (no private key sync, no my/ write)", async () => {
+      const generated = await makeTestCert();
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.saveCertificate).not.toHaveBeenCalled();
+    });
+
+    it("does not consult findExistingDevCert — the caller supplied the cert", async () => {
+      const generated = await makeTestCert();
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.findExistingDevCert).not.toHaveBeenCalled();
+    });
+  });
 });
