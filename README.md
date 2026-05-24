@@ -90,6 +90,14 @@ The solution has three components that work together:
 
 The two extensions communicate using VS Code's cross-host `executeCommand()` routing. The remote extension detects whether the host extension is installed and prompts to install it if missing. This architecture is transport-agnostic — it works for devcontainers today and can support SSH remoting, WSL, or any future VS Code remote backend.
 
+### Suppressing dotnet's first-run certificate auto-generation
+
+When the host is the dev cert source (the default flow — `generateDotNetCert: true` and `syncContainerCert: false`), the devcontainer feature also exports `DOTNET_GENERATE_ASPNET_CERTIFICATE=false` inside the container. Without it, the first `dotnet run` / `dotnet new webapi` / `dotnet build` of an HTTPS-enabled project triggers dotnet's implicit `CertificateManager` flow, which writes a self-signed cert into `~/.dotnet/corefx/cryptography/x509stores/my/` at roughly the same time the remote extension is trying to install OUR cert there. Whichever write lands last wins on disk, but the OS trust + .NET Root-store state may have been driven by the other side — yielding a "partially valid certificate on first run" combo where TLS works for some clients and fails for others.
+
+The override is **gated** on the host being the source: it's only set when `generateDotNetCert: true` AND `syncContainerCert: false`. When `syncContainerCert: true` (the container is the source), dotnet's implicit auto-generation might literally BE the source — typically a `dotnet run` somewhere bootstrapping the cert this feature then pushes to the host — so suppressing it would break the source. When both options are disabled and you've opted out of every managed flow, the override stays off so dotnet behaves normally for users still relying on its own cert provisioning.
+
+The override only affects the IMPLICIT path. Explicit `dotnet dev-certs https` commands always work regardless of the env var; the `syncContainerCert` flow that relies on a container-build step running `dotnet dev-certs https --trust` is unaffected.
+
 ## Repository Layout
 
 ```
