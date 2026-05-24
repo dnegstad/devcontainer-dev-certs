@@ -136,7 +136,17 @@ In addition to the auto-generated dev cert, you can sync arbitrary host-side cer
 
 Each entry supplies exactly one of `pfxPath` (+ optional `pfxPassword`) or `pemCertPath` (+ optional `pemKeyPath`). Omitting the key produces a CA-only entry. User-managed certificates are **never** added to the host OS trust store — the assumption is you already trust them on the host if you're syncing them in. PFX passwords are preserved end-to-end (no decrypt/re-encrypt round-trip strips them on the wire).
 
-See the [main README](https://github.com/dnegstad/devcontainer-dev-certs#user-managed-certificates) for the full schema and password-handling details.
+Per-entry options:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | yes | Filename stem used inside the container (`{name}.pem`, etc.). 1-64 chars from `[A-Za-z0-9._-]`, no leading dot. |
+| `pfxPath` | one of | Absolute path on the host to a PFX/PKCS#12 file. |
+| `pfxPassword` | optional | Password for the PFX (or, for `pemCertPath` sources, the password used when synthesizing the `.pfx` for extra destinations). |
+| `pemCertPath` | one of | Absolute path on the host to a PEM-encoded certificate. |
+| `pemKeyPath` | optional | Absolute path on the host to a PEM-encoded private key. Omit for CA-only entries. |
+| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust dir + .NET Root store. |
+| `excludeFromDotNetStore` | optional, default `false` | When `installUserCertsToDotNetStore` is on globally, exempt this single cert from the `my/` write (avoids the password-stripping copy for sensitive entries). |
 
 ## Container-to-host sync (opt-in)
 
@@ -150,9 +160,15 @@ The default flow is host-as-source. If you have a Dev Container that already pro
 
 2. No new host setting is needed — the same `devcontainerDevCerts.generateDotNetCert` + `devcontainer-dev-certs.autoProvision` settings that gate host-generation also gate accepting a container-pushed cert. The host independently re-validates the incoming certificate (ASP.NET dev-cert format + local-only SAN entries by default) and prompts you once before trusting it.
 
-The host only ever trusts the **public** certificate — the private key never leaves the container. To override the default SAN-local restriction (e.g. for a cert that legitimately covers non-local addresses), set `devcontainerDevCerts.allowNonLocalContainerCertSans: true`. The consent prompt surfaces every non-local SAN entry when you've enabled the override so you can see what you're agreeing to trust.
+The host only ever trusts the **public** certificate — the private key never leaves the container. The trust step goes through the same OS-level path host-generated certs use: on Linux that includes the .NET Root store, the OpenSSL trust directory, and NSS browser databases; on macOS the login keychain trust policy; on Windows `CurrentUser/Root` via `certutil`. The cert is NOT written to `CurrentUser/My`, the macOS keychain identity slot, or the .NET `my/` directory.
 
-See the [main README](https://github.com/dnegstad/devcontainer-dev-certs#syncing-a-certificate-from-the-container-to-the-host) for the full reverse-sync narrative and the SAN allowlist.
+By default the host rejects any cert whose SAN entries reach outside well-known local scopes:
+
+- **DNS** — `localhost`, `host.docker.internal`, `host.containers.internal`, `gateway.docker.internal`; suffix match on `.localhost`, `.dev.localhost`, `.dev.internal` (wildcards like `*.dev.localhost` handled by stripping the leading `*.` and re-checking).
+- **IPv4** — 127.0.0.0/8 (loopback), 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (RFC1918 private), 169.254.0.0/16 (link-local).
+- **IPv6** — `::1` (loopback), `fc00::/7` (unique local), `fe80::/10` (link-local).
+
+This matches the SAN set baked into the default ASP.NET dev cert. To allow a cert with SAN entries outside this set (rare; security-sensitive), set `devcontainerDevCerts.allowNonLocalContainerCertSans: true`. The consent prompt surfaces every non-local SAN entry when the override is enabled so you can see exactly what you're agreeing to trust.
 
 ## Settings
 

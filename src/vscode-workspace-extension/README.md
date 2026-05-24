@@ -87,7 +87,7 @@ When `syncContainerCert: true` is set on the devcontainer feature, this extensio
 
 Enabling `syncContainerCert` implicitly overrides `generateDotNetCert` for that container — the workspace extension will skip pulling a host-generated dotnet dev cert, since the container is the source. User-managed certificates configured via `userCertificates` are still pulled normally.
 
-See the [main README](https://github.com/dnegstad/devcontainer-dev-certs#syncing-a-certificate-from-the-container-to-the-host) for the full reverse-sync narrative including the host-side SAN-local restriction.
+The host independently re-validates the pushed cert and rejects any SAN entry outside well-known local scopes (loopback / RFC1918 private IPs / docker host names / `.localhost` / `.dev.localhost` / `.dev.internal` / IPv6 ULA + link-local). An explicit `devcontainerDevCerts.allowNonLocalContainerCertSans` host setting is available for cases that legitimately need non-local SANs.
 
 ### Stale dev cert cleanup
 
