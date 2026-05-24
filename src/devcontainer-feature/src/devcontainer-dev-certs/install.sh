@@ -101,12 +101,22 @@ if [ -n "${EXTRA_CERT_DESTINATIONS}" ]; then
     done
 fi
 
-# Append KEY="VALUE" to /etc/environment with proper escaping for the PAM
-# parser (pam_env): backslashes and double quotes inside the value must be
-# escaped. Always quote, even for values without special chars, so unquoted
-# spaces don't silently truncate the variable. Reject embedded newlines —
-# pam_env is line-oriented and an injected newline would smuggle an
-# additional env assignment into the file.
+# Append KEY="VALUE" to /etc/environment with full shell-metachar escaping.
+#
+# Two consumers we need to be safe for:
+#  - pam_env (the primary reader of /etc/environment on PAM-based logins):
+#    line-oriented, parses KEY=VALUE with backslash escapes inside double
+#    quotes. \$, \`, \", \\ all decode to the literal character. Newlines
+#    are not allowed in values — they'd split the record.
+#  - Shell sourcing (some distros' /etc/profile does `. /etc/environment`,
+#    and individual users sometimes add it to their own dotfiles): bash
+#    inside double quotes evaluates $..., $(...), and `...` — so a value
+#    containing `$(rm -rf $HOME)` would execute when sourced if we only
+#    escape \ and ". Escape $, backticks, \, and " here so the written
+#    line is inert under either reader.
+#
+# Reject embedded newlines outright — there's no safe-via-escaping path
+# for them in /etc/environment's line format.
 append_env() {
     local key="$1"
     local value="$2"
@@ -118,7 +128,21 @@ append_env() {
     esac
     local escaped="${value//\\/\\\\}"
     escaped="${escaped//\"/\\\"}"
+    escaped="${escaped//\$/\\\$}"
+    escaped="${escaped//\`/\\\`}"
     echo "${key}=\"${escaped}\"" >> /etc/environment
+}
+
+# Quote a value for safe single-quoted embedding in a shell script. Single
+# quotes prevent every form of bash expansion ($, $(...), `...`, $VAR), so
+# wrapping the user-supplied bytes in single quotes in /etc/profile.d/* is
+# the most reliable defense — the only character that has to be encoded is
+# the single quote itself, via the standard `'\''` end-quote-escape-restart
+# pattern.
+shell_single_quote() {
+    local value="$1"
+    # Replace every ' with '\'' so the value can be wrapped in '…'.
+    printf "'%s'" "${value//\'/\'\\\'\'}"
 }
 
 # Surface configuration to processes in the container. Two sinks, neither
@@ -143,23 +167,35 @@ PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
 : > "${PROFILE_SCRIPT}"
 chmod 0644 "${PROFILE_SCRIPT}"
 
-# Append `export KEY="VALUE"` to the profile.d script with shell escaping
-# (backslash and double quote). Newlines in feature options were rejected
-# upstream by the per-option validation loop, so we don't re-check here.
+# Append `export KEY='VALUE'` to the profile.d script. Single quotes — not
+# double — because every byte of `VALUE` comes from an untrusted feature
+# option (anything the user puts in devcontainer.json) and this file is
+# sourced by every login shell on the container. Double-quoted strings
+# would happily evaluate `$(...)`, backticks, and `$VAR` substitutions at
+# source time, turning any unvalidated character in a feature option into
+# a code-execution vector. The single-quote wrapping via `shell_single_quote`
+# keeps the value byte-literal regardless of what it contains. The
+# per-option newline validation upstream still applies; we don't re-check
+# here.
 append_profile() {
     local key="$1"
     local value="$2"
-    local escaped="${value//\\/\\\\}"
-    escaped="${escaped//\"/\\\"}"
-    echo "export ${key}=\"${escaped}\"" >> "${PROFILE_SCRIPT}"
+    local quoted
+    quoted="$(shell_single_quote "${value}")"
+    echo "export ${key}=${quoted}" >> "${PROFILE_SCRIPT}"
 }
 
-# $HOME is intentionally left unexpanded so each user picks up their own
-# trust directory at login. SSL_CERT_DIRS has been validated against
-# /^/[A-Za-z0-9._/+@%-]+(:/[A-Za-z0-9._/+@%-]+)*$/ above, so the only
-# remaining shell-meaningful character that can reach this line is `$`
-# (via $HOME). All other inputs are safe to embed verbatim.
-echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\"" >> "${PROFILE_SCRIPT}"
+# SSL_CERT_DIR is the one profile.d line that needs `$HOME` to remain
+# unexpanded at install time so each user picks up their own trust
+# directory at login. Emit two adjacent shell tokens — a double-quoted
+# segment carrying just `$HOME` + the constant prefix, then a single-
+# quoted segment carrying the user-supplied SSL_CERT_DIRS. Bash
+# concatenates adjacent quoted strings, so the resulting value is
+# `<expanded HOME>/.aspnet/dev-certs/trust:<literal user value>`. Even if
+# the SSL_CERT_DIRS regex validation above is later loosened, the user
+# portion stays inert because of the single quotes.
+SSL_CERT_DIRS_SQ="$(shell_single_quote "${SSL_CERT_DIRS}")"
+echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:\"${SSL_CERT_DIRS_SQ}" >> "${PROFILE_SCRIPT}"
 
 append_profile "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_profile "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
