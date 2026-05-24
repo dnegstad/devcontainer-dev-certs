@@ -64,13 +64,31 @@ const defaultSslDirs = feature.options?.sslCertDirs?.default;
 
 // install.sh writes the trust dir + SSL_CERT_DIRS to /etc/profile.d (login
 // shells, $HOME-expanded) and /etc/environment (PAM, REMOTE_USER_HOME-expanded).
+// The profile.d write is sourced by every login shell, so the user-supplied
+// SSL_CERT_DIRS must be embedded in a form that's inert under bash expansion
+// (no $(...), no backticks, no $VAR substitution). Assert the secure shape:
+//   1. SSL_CERT_DIRS_SQ is built via `shell_single_quote "${SSL_CERT_DIRS}"`.
+//   2. The profile.d line concatenates a double-quoted segment carrying
+//      "$HOME/.aspnet/dev-certs/trust:" with that single-quoted segment, so
+//      $HOME expands per-user at login while the user value stays literal.
 check(
   "install.sh writes SSL_CERT_DIR to /etc/profile.d/devcontainer-dev-certs.sh",
-  installSh.includes("/etc/profile.d/devcontainer-dev-certs.sh") &&
-    installSh.includes(
-      'export SSL_CERT_DIR=\\"\\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\\"'
-    ),
-  "expected install.sh to write `export SSL_CERT_DIR=\"$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\"` to /etc/profile.d/devcontainer-dev-certs.sh"
+  installSh.includes("/etc/profile.d/devcontainer-dev-certs.sh"),
+  "expected install.sh to reference /etc/profile.d/devcontainer-dev-certs.sh"
+);
+check(
+  "install.sh builds SSL_CERT_DIRS_SQ via shell_single_quote (defense-in-depth)",
+  installSh.includes(
+    'SSL_CERT_DIRS_SQ="$(shell_single_quote "${SSL_CERT_DIRS}")"'
+  ),
+  "expected install.sh to wrap ${SSL_CERT_DIRS} via shell_single_quote so $(...) / backticks / $VAR in a malicious feature option can't execute when the profile.d file is sourced"
+);
+check(
+  "install.sh emits the SSL_CERT_DIR profile.d line in the secure concatenated shape",
+  installSh.includes(
+    'echo "export SSL_CERT_DIR=\\"\\$HOME/.aspnet/dev-certs/trust:\\"${SSL_CERT_DIRS_SQ}"'
+  ),
+  "expected install.sh to emit `export SSL_CERT_DIR=\"$HOME/.aspnet/dev-certs/trust:\"${SSL_CERT_DIRS_SQ}` (double-quoted $HOME segment + single-quoted user portion)"
 );
 check(
   "install.sh appends SSL_CERT_DIR to /etc/environment with REMOTE_USER_HOME",
@@ -105,6 +123,54 @@ for (const [optName, _optDef] of Object.entries(feature.options ?? {})) {
     "not found in install.sh"
   );
 }
+
+// --- profile.d writes must go through the secure helpers ---
+//
+// Every value the user can set in devcontainer.json eventually lands in
+// /etc/profile.d/devcontainer-dev-certs.sh, which is sourced by every login
+// shell. If any of those writes drops back to a raw `echo "export X=\"$VAL\""`
+// double-quoted form, a malicious feature-option value containing `$(...)` /
+// backticks / `$VAR` will execute at login. The two safe paths are:
+//   - `append_profile "KEY" "${VALUE}"` — wraps VALUE in single quotes via
+//     shell_single_quote.
+//   - The inline SSL_CERT_DIR line, which uses `${SSL_CERT_DIRS_SQ}`
+//     (already independently checked above).
+// Anything else gets flagged here.
+console.log("\nprofile.d writes route through shell_single_quote:");
+const PROFILE_OPTIONS = [
+  "GENERATE_DOTNET_CERT",
+  "SYNC_USER_CERTIFICATES",
+  "SYNC_CONTAINER_CERT",
+  "EXTRA_CERT_DESTINATIONS",
+];
+for (const envName of PROFILE_OPTIONS) {
+  const usesAppendProfile = installSh.includes(
+    `append_profile "DEVCONTAINER_DEV_CERTS_${
+      envName === "GENERATE_DOTNET_CERT"
+        ? "GENERATE_DOTNET"
+        : envName === "SYNC_USER_CERTIFICATES"
+          ? "SYNC_USER"
+          : envName === "SYNC_CONTAINER_CERT"
+            ? "SYNC_FROM_CONTAINER"
+            : "EXTRA_DESTINATIONS"
+    }" "\${${envName}}"`
+  );
+  check(
+    `${envName} is written via append_profile (not raw echo)`,
+    usesAppendProfile,
+    `expected an \`append_profile "DEVCONTAINER_DEV_CERTS_..." "\${${envName}}"\` call; without it a feature option containing \`$(rm -rf /)\` would execute at login`
+  );
+}
+check(
+  "install.sh defines shell_single_quote (used by append_profile + SSL_CERT_DIR)",
+  /shell_single_quote\s*\(\s*\)\s*\{/.test(installSh),
+  "expected a `shell_single_quote()` helper that single-quote-wraps untrusted values for safe embedding in /etc/profile.d/*.sh"
+);
+check(
+  "append_profile delegates to shell_single_quote",
+  /append_profile\s*\(\s*\)\s*\{[\s\S]*?shell_single_quote/.test(installSh),
+  "expected append_profile to route the value through shell_single_quote — double-quoted emission would re-introduce the command-injection risk"
+);
 
 // --- Summary ---
 
