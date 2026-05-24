@@ -142,6 +142,24 @@ append_env() {
 shell_single_quote() {
     local value="$1"
     # Replace every ' with '\'' so the value can be wrapped in '…'.
+    #
+    # Bash-escaping note: `\'` inside the pattern half of
+    # `${var//pat/repl}` matches a literal single quote, even though
+    # the whole expansion is itself inside double quotes. Two layers
+    # of parsing are at play and they're easy to conflate:
+    #   - The outer string parser sees `"${value//\'/\'\\\'\'}"` as a
+    #     double-quoted string. In a plain double-quoted string `\` is
+    #     only special before $ ` " \ <newline>, so a stray `\'` would
+    #     pass through as the two characters `\` and `'`.
+    #   - But INSIDE `${...//pat/repl}` bash hands the pattern off to
+    #     its glob/pattern parser, where `\X` means "literal X" for
+    #     any X. So the pattern matches just `'` (one character), not
+    #     `\'` (two characters). The same applies to the replacement.
+    # Verified with `x="a'b"; echo "${x//\'/Y}"` printing `aYb`.
+    # Tested round-trips through `source` for embedded / leading /
+    # trailing / consecutive quotes and the empty string; tested that
+    # `$(...)` and backticks embedded in a quoted value land inside
+    # the single-quoted segment and do NOT execute when sourced.
     printf "'%s'" "${value//\'/\'\\\'\'}"
 }
 
