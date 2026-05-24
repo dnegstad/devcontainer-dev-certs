@@ -121,31 +121,57 @@ append_env() {
     echo "${key}=\"${escaped}\"" >> /etc/environment
 }
 
-# Set SSL_CERT_DIR for the container. The feature manifest can't set this via
-# containerEnv because ${containerEnv:HOME} isn't resolvable at containerEnv
-# bake time, and remoteEnv isn't permitted in a feature under strict-schema
-# validation. Writing it here at install time covers both default and
-# user-overridden sslCertDirs uniformly.
+# Surface configuration to processes in the container. Two sinks, neither
+# alone enough on its own — write to BOTH:
 #
-#   /etc/profile.d/devcontainer-dev-certs.sh — sourced by login shells; $HOME
-#     expands per user, which is what VS Code's userEnvProbe picks up.
-#   /etc/environment — read by pam_env on PAM-based logins (sshd); needs the
-#     resolved REMOTE_USER_HOME baked in since pam_env doesn't expand $HOME.
+#   /etc/profile.d/devcontainer-dev-certs.sh — sourced by login shells.
+#     This is the path that reaches the VS Code extension host process:
+#     `userEnvProbe` (default `loginInteractiveShell`) captures env from
+#     `bash -lic env` and injects it into every spawned extension. Vars
+#     written here also show up in integrated terminals.
+#   /etc/environment — read by pam_env on PAM-based logins (sshd, console).
+#     Not loaded by `docker exec`, which is how VS Code attaches in the
+#     typical devcontainer flow, so this sink alone misses the extension
+#     host. Kept as the fallback path for non-VS-Code consumers (e.g.
+#     an SSH session into a long-running container).
+#
+# SSL_CERT_DIR needs `$HOME` expansion per user, so it goes into profile.d
+# unexpanded and into /etc/environment with a resolved `_REMOTE_USER_HOME`
+# (pam_env doesn't expand `$HOME`). The other feature-option vars are plain
+# string values and go to both sinks with the same content.
 PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
+: > "${PROFILE_SCRIPT}"
+chmod 0644 "${PROFILE_SCRIPT}"
+
+# Append `export KEY="VALUE"` to the profile.d script with shell escaping
+# (backslash and double quote). Newlines in feature options were rejected
+# upstream by the per-option validation loop, so we don't re-check here.
+append_profile() {
+    local key="$1"
+    local value="$2"
+    local escaped="${value//\\/\\\\}"
+    escaped="${escaped//\"/\\\"}"
+    echo "export ${key}=\"${escaped}\"" >> "${PROFILE_SCRIPT}"
+}
+
 # $HOME is intentionally left unexpanded so each user picks up their own
 # trust directory at login. SSL_CERT_DIRS has been validated against
 # /^/[A-Za-z0-9._/+@%-]+(:/[A-Za-z0-9._/+@%-]+)*$/ above, so the only
 # remaining shell-meaningful character that can reach this line is `$`
 # (via $HOME). All other inputs are safe to embed verbatim.
-echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\"" > "${PROFILE_SCRIPT}"
-chmod 0644 "${PROFILE_SCRIPT}"
+echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\"" >> "${PROFILE_SCRIPT}"
+
+append_profile "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
+append_profile "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
+append_profile "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
+append_profile "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
 
 SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
 append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_RESOLVED}"
 
-# Surface the feature options to the running container so the remote extension
-# can read them via process.env. extraCertDestinations can contain spaces
-# (users routinely separate CSV entries with `, `), so unconditionally quote.
+# Keep the same values in /etc/environment for non-VS-Code PAM-based
+# consumers. extraCertDestinations can contain spaces (users routinely
+# separate CSV entries with `, `), so unconditionally quote in both sinks.
 append_env "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
