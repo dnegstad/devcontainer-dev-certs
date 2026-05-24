@@ -87,17 +87,24 @@ export async function findBestContainerDevCert(): Promise<ScanResult | null> {
       // so no password is supplied.
       loaded = await loadPfx(filePath, "");
     } catch (err: unknown) {
-      // Match the host's parse-failure path: only emit a warning if the
-      // filename looks canonical (the cert is plausibly one of ours), so
-      // unrelated tooling's .pfx files stay silent.
-      classifyCandidate(
+      // Match the host's parse-failure path: only surface this at all if
+      // the filename looks canonical (`aspnetcore-localhost-<thumb>.pfx`
+      // or `<thumb>.pfx`). Other `.pfx` files in the .NET store may
+      // belong to unrelated tooling — staying silent for those keeps
+      // the Remote output channel free of spam. classifyCandidate
+      // returns null for non-canonical names; only when it returns a
+      // skipped result do we add the upstream parse-error detail to
+      // help diagnose a botched dev cert.
+      const classified = classifyCandidate(
         { kind: "parseFailure", source: filePath, thumbprintHint },
         { onSkipped: (r) => logSkipReport(r) }
       );
-      const message = err instanceof Error ? err.message : String(err);
-      log(
-        `Container cert sync: could not parse ${filePath}: ${message}`
-      );
+      if (classified?.kind === "skipped") {
+        const message = err instanceof Error ? err.message : String(err);
+        log(
+          `Container cert sync: could not parse ${filePath}: ${message}`
+        );
+      }
       continue;
     }
 

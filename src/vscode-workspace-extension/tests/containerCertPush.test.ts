@@ -143,6 +143,8 @@ describe("findBestContainerDevCert", () => {
   beforeEach(() => {
     tmpHome = makeTmpHome();
     restoreHome = patchHome(tmpHome).restore;
+    (vscode as unknown as { __resetLogMessages: () => void })
+      .__resetLogMessages();
   });
 
   afterEach(() => {
@@ -200,8 +202,48 @@ describe("findBestContainerDevCert", () => {
     const dir = makeDotNetStoreDir(tmpHome);
     fs.writeFileSync(path.join(dir, "random-tool.pfx"), Buffer.from("garbage"));
     const { thumbprint } = await writeDevPfxInDir(dir);
+
+    const logs = (vscode as unknown as { logMessages: string[] }).logMessages;
+    const baseline = logs.length;
     const result = await findBestContainerDevCert();
     expect(result?.loaded.thumbprint).toBe(thumbprint);
+
+    // Non-canonical .pfx files in the .NET store may belong to unrelated
+    // tooling. Nothing about `random-tool.pfx` should reach the Remote
+    // output channel — neither the classifier's skip message NOR the
+    // upstream parse-error detail. Regression guard for the earlier bug
+    // where the parse-error log was emitted unconditionally.
+    const newLogs = logs.slice(baseline);
+    for (const line of newLogs) {
+      expect(line).not.toContain("random-tool.pfx");
+    }
+  });
+
+  it("logs a parse-error line ONLY for canonical-filename .pfx files", async () => {
+    // The other half of the contract from the previous test: when the
+    // filename DOES match the canonical dev-cert pattern but the bytes
+    // fail to parse, the user gets both a 'skipped' log line (from the
+    // shared classifier) AND the upstream parse-error detail so they
+    // can diagnose why their dev cert isn't being picked up.
+    const dir = makeDotNetStoreDir(tmpHome);
+    const canonicalThumb = "A".repeat(40);
+    const canonicalName = `aspnetcore-localhost-${canonicalThumb}.pfx`;
+    fs.writeFileSync(path.join(dir, canonicalName), Buffer.from("garbage"));
+
+    const logs = (vscode as unknown as { logMessages: string[] }).logMessages;
+    const baseline = logs.length;
+    const result = await findBestContainerDevCert();
+    expect(result).toBeNull();
+
+    const newLogs = logs.slice(baseline);
+    const mentioningCanonical = newLogs.filter((l) =>
+      l.includes(canonicalName)
+    );
+    expect(
+      mentioningCanonical.length,
+      `expected at least one log line mentioning ${canonicalName}, got:\n${newLogs.join("\n")}`
+    ).toBeGreaterThan(0);
+    expect(newLogs.some((l) => l.includes("could not parse"))).toBe(true);
   });
 });
 
