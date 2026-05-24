@@ -167,24 +167,23 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     const pemFileName = getPemFileName(thumbprint);
     const pemPath = path.join(trustDir, pemFileName);
 
-    // Sweep PEMs from any previous dev cert rotation. Otherwise the old
-    // file lingers in the trust dir, gets a hash symlink during rehash,
-    // and OpenSSL clients keep trusting the prior (potentially expired
-    // or revoked) cert alongside the new one.
-    for (const entry of fs.readdirSync(trustDir)) {
-      if (
-        entry.startsWith("aspnetcore-localhost-") &&
-        entry.endsWith(".pem") &&
-        entry !== pemFileName
-      ) {
-        try {
-          fs.unlinkSync(path.join(trustDir, entry));
-        } catch {
-          // Best effort — a concurrent install may have removed it.
-        }
-      }
-    }
-
+    // Purely additive: write the new PEM, but do NOT delete other
+    // `aspnetcore-localhost-*.pem` files in the trust dir. The previous
+    // implementation swept "old rotations" defensively, but that turned
+    // every `trustCertificate` call into an implicit revocation of every
+    // other dev cert in the trust dir — including the host-generated
+    // cert when the container-push reverse-sync flow trusts an
+    // additional one, and vice versa. Removing trust from a cert the
+    // user (or another flow) explicitly trusted is the cleanup
+    // command's job — gated by an explicit user prompt — not
+    // trustCertificate's. The cleanup sweep continues to handle
+    // legitimately stale artifacts; this method stays additive so the
+    // generation flow and the reverse-sync flow can coexist without
+    // ping-ponging trust.
+    //
+    // Writing to the exact same path on a same-thumbprint repeat call
+    // is idempotent (overwrites identical content); rehashing afterward
+    // is a no-op when nothing changed.
     fs.writeFileSync(pemPath, cert.pem, { mode: 0o644 });
     await this.rehashDirectory(trustDir);
   }

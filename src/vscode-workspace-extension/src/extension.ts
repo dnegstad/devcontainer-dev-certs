@@ -128,13 +128,27 @@ export function activate(context: vscode.ExtensionContext): void {
  * Activation-time orchestration: push first (when enabled), then pull. Both
  * sides are awaited sequentially so the host has the freshly-pushed cert in
  * its platform store by the time the pull runs.
+ *
+ * The push side is best-effort and must not block the pull. If
+ * pushContainerCertToHost throws (vs its normal return-null pattern on a
+ * known-fail mode), surface the error to the log channel and continue —
+ * skipping the pull would also skip user-managed certs, extra
+ * destinations, the Kestrel default cert env wiring, and the stale-cert
+ * cleanup detection, none of which depend on the reverse-sync.
  */
 async function runActivationSync(
   context: vscode.ExtensionContext,
   syncFromContainer: boolean
 ): Promise<void> {
   if (syncFromContainer) {
-    await pushContainerCertToHost();
+    try {
+      await pushContainerCertToHost();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(
+        `Container cert sync: push failed with an unexpected error; continuing with the pull. ${message}`
+      );
+    }
   }
   await injectCertificate(context);
 }

@@ -295,11 +295,15 @@ describe("acceptContainerDevCert", () => {
     expect(deps.recordConsent).not.toHaveBeenCalled();
   });
 
-  it("repeat pushes of the same cert call trustCertificate idempotently (no short-circuit)", async () => {
-    // The handler no longer queries the platform store for an
-    // already-trusted thumbprint — each platform's trustCertificate is
-    // idempotent at the OS layer. This test pins the behavior: same
-    // cert pushed twice → trustCertificate invoked twice, no rejection.
+  it("repeat pushes of the same cert call trustCertificate twice at the handler level — idempotency is enforced one layer down in CertManager.trustExternalCertificate via store.isCertTrusted", async () => {
+    // The handler does NOT query the platform store for an already-
+    // trusted thumbprint itself. The downstream `trustCertificate`
+    // dep injected by `extension.ts` IS responsible for the
+    // verify-on-disk short-circuit (it calls store.isCertTrusted
+    // before invoking store.trustCertificate). This test pins
+    // handler-level behavior: same cert pushed twice → the dep is
+    // invoked twice — the dep itself decides whether to make a real
+    // platform-trust call.
     const { pemCertBase64, thumbprint } = await makeDevPem();
     const deps = makeDeps({ hasConsent: () => true });
     const first = await acceptContainerDevCert(
@@ -313,6 +317,55 @@ describe("acceptContainerDevCert", () => {
     expect(first).toEqual({ accepted: true });
     expect(second).toEqual({ accepted: true });
     expect(deps.trustCertificate).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns parse-failed (not a thrown TypeError) when payload.thumbprint is missing", async () => {
+    const { pemCertBase64 } = await makeDevPem();
+    const deps = makeDeps();
+    // Cast to bypass the type — simulating a malformed wire payload.
+    const result = await acceptContainerDevCert(
+      { pemCertBase64 } as unknown as AcceptContainerCertPayload,
+      deps
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("parse-failed");
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+    expect(deps.recordConsent).not.toHaveBeenCalled();
+  });
+
+  it("returns parse-failed when payload.pemCertBase64 is missing", async () => {
+    const deps = makeDeps();
+    const result = await acceptContainerDevCert(
+      { thumbprint: "ABCD" } as unknown as AcceptContainerCertPayload,
+      deps
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("parse-failed");
+  });
+
+  it("does NOT persist consent when trustCertificate throws — next push re-prompts the user", async () => {
+    // Critical UX invariant: if the platform-level trust step fails
+    // (macOS keychain dialog cancelled, NSS DB not writable, etc.)
+    // the consent must stay UN-persisted so the next push re-shows
+    // the modal. Otherwise the user is silently stuck in
+    // hasConsent()===true while trust keeps failing with no
+    // surfaceable retry.
+    const { pemCertBase64, thumbprint } = await makeDevPem();
+    const deps = makeDeps({
+      trustCertificate: vi.fn(async () => {
+        throw new Error("simulated trust failure");
+      }),
+    });
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+    // The outer try/catch maps the throw to parse-failed.
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("parse-failed");
+    expect(deps.promptUser).toHaveBeenCalledTimes(1);
+    // KEY ASSERTION: consent was NOT persisted.
+    expect(deps.recordConsent).not.toHaveBeenCalled();
   });
 });
 

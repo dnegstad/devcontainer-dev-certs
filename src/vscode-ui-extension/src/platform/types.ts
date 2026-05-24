@@ -63,6 +63,18 @@ export interface PlatformCertificateStore {
   trustCertificate(cert: DevCert): Promise<void>;
 
   /**
+   * Verify on-disk / OS trust state for a specific certificate. Callers
+   * use this to short-circuit redundant `trustCertificate` calls — on
+   * macOS in particular, `security add-trusted-cert` is not a true
+   * no-op for an already-trusted cert (it re-touches the trust-settings
+   * record and may re-prompt for the keychain password). The cache that
+   * the host's CertProvider maintains is a goal-state, not a record of
+   * machine state — every trust operation re-verifies trust here
+   * before deciding whether to invoke trustCertificate again.
+   */
+  isCertTrusted(cert: DevCert): Promise<boolean>;
+
+  /**
    * Remove dev certificates from all stores.
    */
   removeCertificates(): Promise<void>;

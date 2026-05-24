@@ -180,6 +180,19 @@ export abstract class BaseCertificateStore implements PlatformCertificateStore {
   abstract removeCertificates(): Promise<void>;
 
   /**
+   * Public wrapper around `isTrusted` that satisfies the
+   * `PlatformCertificateStore.isCertTrusted` contract — verify the
+   * current on-disk / OS trust state for a specific certificate. Lets
+   * callers (notably `CertManager.trustExternalCertificate`) decide
+   * whether the platform-level trust step needs to run at all,
+   * avoiding redundant `security add-trusted-cert` / `certutil
+   * -addstore` calls that aren't true no-ops.
+   */
+  async isCertTrusted(cert: DevCert): Promise<boolean> {
+    return this.isTrusted(cert, cert.thumbprintSha1);
+  }
+
+  /**
    * Platform-specific trust verification.
    * Called by checkStatus() to determine if the certificate is trusted.
    */

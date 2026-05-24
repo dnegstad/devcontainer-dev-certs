@@ -98,6 +98,22 @@ export class CertManager {
     cert: GeneratedCert["cert"]
   ): Promise<void> {
     const store = await this.getStore();
+
+    // Verify on-disk state before invoking the platform trust step.
+    // Skipping a redundant call matters on macOS where
+    // `security add-trusted-cert` is not a no-op for an already-trusted
+    // cert (re-touches the trust-settings record, may re-prompt for
+    // the keychain password). The same cache-as-goal-state /
+    // verify-on-disk pattern is used by the host-generation flow's
+    // `trust()` method, just expressed differently because it goes
+    // through `checkStatus()` instead of a direct `isCertTrusted`.
+    if (await store.isCertTrusted(cert)) {
+      log(
+        `Externally-supplied dev certificate ${cert.thumbprintSha1} is already trusted on host; skipping platform trust call.`
+      );
+      return;
+    }
+
     log(
       `Trusting externally-supplied dev certificate ${cert.thumbprintSha1} (public cert only, via the same platform trust path as host-generated)...`
     );

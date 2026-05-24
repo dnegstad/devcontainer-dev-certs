@@ -128,6 +128,26 @@ export async function acceptContainerDevCert(
   payload: AcceptContainerCertPayload,
   deps: AcceptContainerCertDeps
 ): Promise<AcceptContainerCertResult> {
+  // Top-level guard: every uncaught exception inside the handler maps to a
+  // structured `parse-failed` result instead of escaping past the command
+  // boundary. The workspace's containerCertPush.ts checks the result.reason
+  // and routes per-reason UX; a raw rejection from executeCommand would
+  // collapse into its generic "Failed to push" toast and lose that signal.
+  // Specific reject branches inside the body still return their own
+  // typed reasons (host-setting-disabled, not-valid-dev-cert, etc.).
+  try {
+    return await acceptContainerDevCertInner(payload, deps);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(`acceptContainerDevCert: unexpected error: ${message}`);
+    return { accepted: false, reason: "parse-failed", detail: message };
+  }
+}
+
+async function acceptContainerDevCertInner(
+  payload: AcceptContainerCertPayload,
+  deps: AcceptContainerCertDeps
+): Promise<AcceptContainerCertResult> {
   if (!deps.generateDotNetCert) {
     log(
       "acceptContainerDevCert: devcontainerDevCerts.generateDotNetCert is false; declining (host opted out of managed dotnet dev certs)."
@@ -139,6 +159,24 @@ export async function acceptContainerDevCert(
       "acceptContainerDevCert: devcontainer-dev-certs.autoProvision is false; declining (host disabled automatic provisioning)."
     );
     return { accepted: false, reason: "host-setting-disabled" };
+  }
+
+  // Validate the payload shape BEFORE parsing — a missing or non-string
+  // thumbprint would otherwise throw on the .toUpperCase() call later and
+  // bypass the structured reject path.
+  if (typeof payload?.pemCertBase64 !== "string") {
+    return {
+      accepted: false,
+      reason: "parse-failed",
+      detail: "payload.pemCertBase64 missing or not a string",
+    };
+  }
+  if (typeof payload?.thumbprint !== "string") {
+    return {
+      accepted: false,
+      reason: "parse-failed",
+      detail: "payload.thumbprint missing or not a string",
+    };
   }
 
   let parsed: AcceptedContainerCert;
@@ -193,7 +231,8 @@ export async function acceptContainerDevCert(
     );
   }
 
-  if (!deps.hasConsent()) {
+  const needsConsent = !deps.hasConsent();
+  if (needsConsent) {
     const consented = await deps.promptUser(parsed, nonLocalOverridden);
     if (!consented) {
       log(
@@ -201,10 +240,19 @@ export async function acceptContainerDevCert(
       );
       return { accepted: false, reason: "user-declined" };
     }
-    await deps.recordConsent();
   }
 
+  // Run the trust step BEFORE persisting consent. If trustCertificate
+  // throws (macOS keychain dialog cancelled, NSS DB not writable, etc.)
+  // we let the outer try/catch convert it to `parse-failed` — and
+  // crucially the consent stays UN-persisted, so the next push retries
+  // the modal prompt with the same fresh state instead of silently
+  // re-trying trust without UX.
   await deps.trustCertificate(parsed);
+
+  if (needsConsent) {
+    await deps.recordConsent();
+  }
 
   log(`acceptContainerDevCert: ${parsed.thumbprint} trusted on host.`);
   return { accepted: true };

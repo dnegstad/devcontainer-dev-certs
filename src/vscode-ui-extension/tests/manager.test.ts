@@ -36,6 +36,11 @@ function makeFakeStore(
     findExistingDevCert: vi.fn().mockResolvedValue(null),
     saveCertificate: vi.fn().mockResolvedValue(undefined),
     trustCertificate: vi.fn().mockResolvedValue(undefined),
+    // Default to NOT trusted so trustExternalCertificate's verify-on-disk
+    // short-circuit doesn't accidentally skip the trustCertificate call
+    // in tests that pre-date that check. Tests that want to assert the
+    // short-circuit fires override this to true.
+    isCertTrusted: vi.fn().mockResolvedValue(false),
     removeCertificates: vi.fn().mockResolvedValue(undefined),
     checkStatus: vi.fn().mockResolvedValue({
       exists: false,
@@ -255,6 +260,33 @@ describe("CertManager", () => {
       await manager.trustExternalCertificate(generated.cert);
 
       expect(store.findExistingDevCert).not.toHaveBeenCalled();
+    });
+
+    it("verifies on-disk trust state via store.isCertTrusted before invoking trustCertificate", async () => {
+      const generated = await makeTestCert();
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.isCertTrusted).toHaveBeenCalledTimes(1);
+      expect(store.isCertTrusted).toHaveBeenCalledWith(generated.cert);
+    });
+
+    it("short-circuits when isCertTrusted returns true — no redundant platform trust call", async () => {
+      // Idempotency contract: repeated trust calls for an already-
+      // trusted cert must NOT re-invoke the platform trust step. On
+      // macOS in particular, `security add-trusted-cert` is not a
+      // true no-op for an already-trusted cert and can re-prompt for
+      // the keychain password; the manager guards against that here.
+      const generated = await makeTestCert();
+      store = makeFakeStore({
+        isCertTrusted: vi.fn().mockResolvedValue(true),
+      });
+      mockedCreateStore.mockResolvedValue(store);
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.isCertTrusted).toHaveBeenCalledTimes(1);
+      expect(store.trustCertificate).not.toHaveBeenCalled();
     });
   });
 });
