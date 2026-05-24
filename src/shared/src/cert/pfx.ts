@@ -172,8 +172,19 @@ export async function buildPfx(opts: BuildPfxOptions): Promise<Buffer> {
   const outerCi = encodeDataContentInfo(authSafe);
 
   const macSalt = randomBytes(MAC_SALT_LENGTH);
-  // Purpose 3 = MAC-key derivation per RFC 7292 §B.3.
-  const macKey = pkcs12B2Kdf(password, macSalt, 3, PBKDF2_ITERATIONS, 32);
+  // Purpose 3 = MAC-key derivation per RFC 7292 §B.3. Our writer always
+  // uses the RFC §B.1 password form (BMPString + null terminator) so the
+  // MAC is verifiable by any spec-compliant reader, including pkijs and
+  // CryptoAPI. The read path additionally accepts .NET-on-Linux's
+  // no-terminator form — see `verifyPfxMac`.
+  const macKey = pkcs12B2Kdf(
+    bmpStringWithNullTerminator(password),
+    macSalt,
+    3,
+    PBKDF2_ITERATIONS,
+    32,
+    "sha256"
+  );
   const mac = createHmac("sha256", macKey).update(authSafe).digest();
   const macData = encodeMacData(mac, macSalt, PBKDF2_ITERATIONS);
 
@@ -455,32 +466,46 @@ function encodeMacData(mac: Buffer, salt: Buffer, iterations: number): Buffer {
 }
 
 // ---------------------------------------------------------------------------
-// PKCS#12 B.2 KDF (RFC 7292 §B.2). Used here only to derive the outer-MAC
-// key. PBKDF2-SHA-256 covers all the PBES2 paths above.
+// PKCS#12 B.2 KDF (RFC 7292 §B.2). Used to derive the outer-MAC key on both
+// the write and read paths; the read path drives it across all four MAC
+// digest algorithms PKCS#12 implementations use in practice (SHA-1/256/384
+// /512), so the function is parameterized by hash. PBKDF2-SHA-256 covers
+// all the PBES2 paths above and is unrelated to this KDF.
 // ---------------------------------------------------------------------------
 
+type Pkcs12KdfHash = "sha1" | "sha256" | "sha384" | "sha512";
+
+const PKCS12_HASH_PARAMS: Record<
+  Pkcs12KdfHash,
+  { digestLength: number; blockSize: number }
+> = {
+  sha1: { digestLength: 20, blockSize: 64 },
+  sha256: { digestLength: 32, blockSize: 64 },
+  sha384: { digestLength: 48, blockSize: 128 },
+  sha512: { digestLength: 64, blockSize: 128 },
+};
+
 function pkcs12B2Kdf(
-  password: string,
+  passwordBytes: Buffer,
   salt: Buffer,
   purpose: 1 | 2 | 3,
   iterations: number,
-  outputLength: number
+  outputLength: number,
+  hashName: Pkcs12KdfHash
 ): Buffer {
-  const u = 32; // SHA-256 digest length
-  const v = 64; // SHA-256 block size
+  const { digestLength: u, blockSize: v } = PKCS12_HASH_PARAMS[hashName];
 
-  const passwordBmp = bmpStringWithNullTerminator(password);
   const D = Buffer.alloc(v, purpose);
   const S = repeatToBlock(salt, v);
-  const P = repeatToBlock(passwordBmp, v);
+  const P = repeatToBlock(passwordBytes, v);
   const I = Buffer.concat([S, P]);
 
   const c = Math.ceil(outputLength / u);
   const A = Buffer.alloc(c * u);
   for (let i = 0; i < c; i++) {
-    let A_i = createHash("sha256").update(D).update(I).digest();
+    let A_i = createHash(hashName).update(D).update(I).digest();
     for (let j = 1; j < iterations; j++) {
-      A_i = createHash("sha256").update(A_i).digest();
+      A_i = createHash(hashName).update(A_i).digest();
     }
     A_i.copy(A, i * u);
 
@@ -501,11 +526,25 @@ function pkcs12B2Kdf(
 }
 
 function bmpStringWithNullTerminator(s: string): Buffer {
-  // Per RFC 7292 §B.1: a supplied password (even the empty string) is
-  // encoded as UTF-16BE with a 2-byte null terminator. Returning Buffer(0)
-  // here would diverge from every other PKCS#12 implementation when the
-  // password is the empty string — the MAC wouldn't verify on read-back.
+  // RFC 7292 §B.1 password form: UTF-16BE + a 2-byte null terminator. The
+  // empty password becomes 00 00 (not 0 bytes). This is what our writer,
+  // OpenSSL, Windows-side .NET, and pkijs all use.
   const buf = Buffer.alloc((s.length + 1) * 2);
+  for (let i = 0; i < s.length; i++) {
+    buf.writeUInt16BE(s.charCodeAt(i), i * 2);
+  }
+  return buf;
+}
+
+function bmpStringWithoutTerminator(s: string): Buffer {
+  // .NET-on-Linux historically encodes the MAC password as UTF-16BE
+  // WITHOUT the trailing 00 00 terminator (effectively
+  // `Encoding.BigEndianUnicode.GetBytes(password)`). The empty password
+  // becomes 0 bytes, which the RFC-compliant `00 00` form can't reproduce
+  // because of the trailing terminator. `dotnet dev-certs https --trust`
+  // on Linux produces PFXes MACd with this form, so the reader has to
+  // accept it as an alternate convention.
+  const buf = Buffer.alloc(s.length * 2);
   for (let i = 0; i < s.length; i++) {
     buf.writeUInt16BE(s.charCodeAt(i), i * 2);
   }
@@ -521,9 +560,184 @@ function repeatToBlock(src: Buffer, blockSize: number): Buffer {
 }
 
 // ---------------------------------------------------------------------------
-// Read path — pkijs handles parsing PBES2/AES PFXes correctly. Only the write
-// path needed to be lifted out of pkijs.
+// Read path — pkijs handles parsing PBES2/AES SafeContents correctly, but its
+// outer-MAC verification is strict RFC 7292 §B.1 (BMPString + null
+// terminator). `dotnet dev-certs` on Linux emits PFXes MACd against the
+// no-terminator form (`Encoding.BigEndianUnicode.GetBytes(password)`), so we
+// do MAC verification ourselves and accept either convention.
 // ---------------------------------------------------------------------------
+
+interface PfxMacContext {
+  /** The OCTET-STRING value the MAC was computed over (BER-encoded AuthenticatedSafe). */
+  authSafeContent: Buffer;
+  /** Digest algorithm OID (SHA-1 / SHA-256 / SHA-384 / SHA-512). */
+  digestAlgorithmOid: string;
+  /** The MAC bytes from the file. */
+  macDigest: Buffer;
+  /** Salt fed to the B.2 KDF. */
+  macSalt: Buffer;
+  /** Iteration count for the B.2 KDF (default 1 per RFC 7292). */
+  iterations: number;
+}
+
+/** OID → Node `createHash`/`createHmac` algorithm name. */
+const DIGEST_OID_TO_NODE: Record<string, Pkcs12KdfHash> = {
+  "1.3.14.3.2.26": "sha1",
+  "2.16.840.1.101.3.4.2.1": "sha256",
+  "2.16.840.1.101.3.4.2.2": "sha384",
+  "2.16.840.1.101.3.4.2.3": "sha512",
+};
+
+/**
+ * Walk the PFX BER structure to extract the MAC parameters and the exact
+ * bytes that were MACd. Returns null if the PFX has no macData (uncommon
+ * but allowed by RFC 7292) or if the structure doesn't parse — callers
+ * treat null as "no MAC to verify".
+ *
+ * We don't rely on pkijs's parsed view here because the field we need most
+ * — the raw OCTET STRING value inside the [0] EXPLICIT of the authSafe
+ * ContentInfo — isn't directly exposed by pkijs's PFX object, and walking
+ * the BER ourselves is shorter than reconstructing it from pkijs's parsed
+ * tree.
+ */
+function extractPfxMacContext(pfxBytes: Buffer): PfxMacContext | null {
+  const buf = pfxBytes;
+
+  const readTlv = (
+    p: number
+  ): { tag: number; valueOff: number; endOff: number } | null => {
+    if (p + 2 > buf.length) return null;
+    const tag = buf[p];
+    let i = p + 1;
+    let length = buf[i++];
+    if (length & 0x80) {
+      const n = length & 0x7f;
+      if (n === 0 || i + n > buf.length) return null;
+      length = 0;
+      for (let k = 0; k < n; k++) length = (length << 8) | buf[i++];
+    }
+    if (i + length > buf.length) return null;
+    return { tag, valueOff: i, endOff: i + length };
+  };
+
+  const decodeOid = (b: Buffer): string => {
+    if (b.length === 0) return "";
+    const parts: number[] = [Math.floor(b[0] / 40), b[0] % 40];
+    let val = 0;
+    for (let i = 1; i < b.length; i++) {
+      val = (val << 7) | (b[i] & 0x7f);
+      if ((b[i] & 0x80) === 0) {
+        parts.push(val);
+        val = 0;
+      }
+    }
+    return parts.join(".");
+  };
+
+  const top = readTlv(0);
+  if (!top || top.tag !== 0x30) return null;
+  const version = readTlv(top.valueOff);
+  if (!version || version.tag !== 0x02) return null;
+  const authSafeCi = readTlv(version.endOff);
+  if (!authSafeCi || authSafeCi.tag !== 0x30) return null;
+  const oidT = readTlv(authSafeCi.valueOff);
+  if (!oidT || oidT.tag !== 0x06) return null;
+  const explicit = readTlv(oidT.endOff);
+  if (!explicit || (explicit.tag & 0xe0) !== 0xa0) return null;
+  const octet = readTlv(explicit.valueOff);
+  if (!octet || octet.tag !== 0x04) return null;
+  const authSafeContent = Buffer.from(
+    buf.subarray(octet.valueOff, octet.endOff)
+  );
+
+  if (authSafeCi.endOff >= top.endOff) return null;
+  const macData = readTlv(authSafeCi.endOff);
+  if (!macData || macData.tag !== 0x30) return null;
+  const digestInfo = readTlv(macData.valueOff);
+  if (!digestInfo || digestInfo.tag !== 0x30) return null;
+  const algId = readTlv(digestInfo.valueOff);
+  if (!algId || algId.tag !== 0x30) return null;
+  const algOidT = readTlv(algId.valueOff);
+  if (!algOidT || algOidT.tag !== 0x06) return null;
+  const digestAlgorithmOid = decodeOid(
+    buf.subarray(algOidT.valueOff, algOidT.endOff)
+  );
+  const macDigestTlv = readTlv(algId.endOff);
+  if (!macDigestTlv || macDigestTlv.tag !== 0x04) return null;
+  const macDigest = Buffer.from(
+    buf.subarray(macDigestTlv.valueOff, macDigestTlv.endOff)
+  );
+  const macSaltTlv = readTlv(digestInfo.endOff);
+  if (!macSaltTlv || macSaltTlv.tag !== 0x04) return null;
+  const macSalt = Buffer.from(
+    buf.subarray(macSaltTlv.valueOff, macSaltTlv.endOff)
+  );
+
+  let iterations = 1;
+  if (macSaltTlv.endOff < macData.endOff) {
+    const iterTlv = readTlv(macSaltTlv.endOff);
+    if (iterTlv && iterTlv.tag === 0x02) {
+      iterations = 0;
+      for (let i = iterTlv.valueOff; i < iterTlv.endOff; i++) {
+        iterations = (iterations << 8) | buf[i];
+      }
+    }
+  }
+
+  return {
+    authSafeContent,
+    digestAlgorithmOid,
+    macDigest,
+    macSalt,
+    iterations,
+  };
+}
+
+/**
+ * Verify the PFX outer MAC against both empty-password conventions in
+ * use in the wild:
+ *   1. RFC 7292 §B.1 form (UTF-16BE + null terminator) — our writer,
+ *      OpenSSL, CryptoAPI / Windows .NET.
+ *   2. No-terminator form (`Encoding.BigEndianUnicode.GetBytes(password)`)
+ *      — `dotnet dev-certs` on Linux and other pre-modern .NET-on-Linux
+ *      PFX writers.
+ *
+ * Returns true on first match, false if both conventions reject.
+ * Returns true when the PFX has no MAC at all (unprotected).
+ */
+function verifyPfxMac(pfxBytes: Buffer, password: string): boolean {
+  const ctx = extractPfxMacContext(pfxBytes);
+  if (!ctx) return true; // No macData → nothing to verify.
+
+  const hashName = DIGEST_OID_TO_NODE[ctx.digestAlgorithmOid];
+  if (!hashName) {
+    throw new Error(
+      `PFX MAC uses unsupported digest algorithm (OID ${ctx.digestAlgorithmOid}).`
+    );
+  }
+
+  const keyLen = PKCS12_HASH_PARAMS[hashName].digestLength;
+  const candidates: Buffer[] = [
+    bmpStringWithNullTerminator(password),
+    bmpStringWithoutTerminator(password),
+  ];
+
+  for (const pwBytes of candidates) {
+    const macKey = pkcs12B2Kdf(
+      pwBytes,
+      ctx.macSalt,
+      3,
+      ctx.iterations,
+      keyLen,
+      hashName
+    );
+    const computed = createHmac(hashName, macKey)
+      .update(ctx.authSafeContent)
+      .digest();
+    if (computed.equals(ctx.macDigest)) return true;
+  }
+  return false;
+}
 
 export interface ParsedPfx {
   cert: DevCert;
@@ -539,14 +753,23 @@ export async function parsePfx(
   password?: string
 ): Promise<ParsedPfx> {
   ensureEngine();
-  const passwordBuf = passwordToArrayBuffer(password ?? "");
-  const ab = bufferToArrayBuffer(pfxBytes);
+  const pwd = password ?? "";
+  const passwordBuf = passwordToArrayBuffer(pwd);
+  const pfxBuffer = Buffer.from(pfxBytes);
+  const ab = bufferToArrayBuffer(pfxBuffer);
   const pfx = pkijs.PFX.fromBER(ab);
 
-  // Outer integrity check uses the PKCS#12 B.2 KDF, which pkijs supports
-  // for both modern (SHA-2) and legacy (SHA-1) MACs, so this part works
-  // regardless of how the inner SafeContents were encrypted.
-  await pfx.parseInternalValues({ password: passwordBuf, checkIntegrity: true });
+  // Skip pkijs's MAC verification — its B.2 KDF requires the RFC 7292 §B.1
+  // password form (BMPString + null terminator), which `dotnet dev-certs`
+  // on Linux disagrees with. `verifyPfxMac` below accepts both that form
+  // and the .NET-Linux no-terminator form.
+  await pfx.parseInternalValues({
+    password: passwordBuf,
+    checkIntegrity: false,
+  });
+  if (!verifyPfxMac(pfxBuffer, pwd)) {
+    throw new Error("Integrity for the PKCS#12 data is broken!");
+  }
 
   const authSafe = pfx.parsedValue?.authenticatedSafe;
   if (!authSafe) throw new Error("PFX has no authenticated safe");
