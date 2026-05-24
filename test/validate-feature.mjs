@@ -172,31 +172,46 @@ check(
   "expected append_profile to route the value through shell_single_quote — double-quoted emission would re-introduce the command-injection risk"
 );
 
-// --- DOTNET_GENERATE_ASPNET_CERTIFICATE suppression ---
+// --- DOTNET_GENERATE_ASPNET_CERTIFICATE suppression (gated) ---
 //
 // dotnet auto-generates an HTTPS dev cert on first `dotnet run` /
-// `dotnet new webapi` / `dotnet build` of an HTTPS-enabled project if
-// `DOTNET_GENERATE_ASPNET_CERTIFICATE` isn't set to false. That implicit
-// generation races with our managed pipeline (host generation, container
-// push, or user-managed certs), producing a partially-trusted cert on
-// disk on first run. install.sh sets the env var to false in BOTH
-// sinks so dotnet skips its implicit step regardless of which session
-// type the user lands in. Explicit `dotnet dev-certs https` commands
-// are unaffected.
-console.log("\nDOTNET_GENERATE_ASPNET_CERTIFICATE suppression:");
+// `dotnet new webapi` / `dotnet build` of an HTTPS-enabled project. When
+// the HOST is the dev cert source (default: generateDotNetCert=true,
+// syncContainerCert=false), that implicit auto-gen races our workspace
+// install of the host-generated cert — leaving a partially-trusted cert
+// combo. install.sh suppresses the auto-gen by writing
+// DOTNET_GENERATE_ASPNET_CERTIFICATE=false, but ONLY when the host is
+// the source: when syncContainerCert is on, the container's own pipeline
+// (possibly dotnet's auto-gen itself) is the source and suppressing it
+// would break the source.
+console.log("\nDOTNET_GENERATE_ASPNET_CERTIFICATE suppression (gated):");
 check(
-  "install.sh sets DOTNET_GENERATE_ASPNET_CERTIFICATE=false in /etc/profile.d",
+  "install.sh writes DOTNET_GENERATE_ASPNET_CERTIFICATE=false to /etc/profile.d when host-source conditions hold",
   installSh.includes(
     'append_profile "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"'
   ),
-  "expected `append_profile \"DOTNET_GENERATE_ASPNET_CERTIFICATE\" \"false\"` — without it, dotnet's first-run implicit cert generation races our managed pipeline"
+  "expected an `append_profile \"DOTNET_GENERATE_ASPNET_CERTIFICATE\" \"false\"` call — without it, dotnet's first-run implicit cert generation races our host-managed install"
 );
 check(
-  "install.sh sets DOTNET_GENERATE_ASPNET_CERTIFICATE=false in /etc/environment",
+  "install.sh writes DOTNET_GENERATE_ASPNET_CERTIFICATE=false to /etc/environment when host-source conditions hold",
   installSh.includes(
     'append_env "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"'
   ),
-  "expected `append_env \"DOTNET_GENERATE_ASPNET_CERTIFICATE\" \"false\"` — PAM-based sessions (sshd, console) need the same suppression as the login-shell path"
+  "expected an `append_env \"DOTNET_GENERATE_ASPNET_CERTIFICATE\" \"false\"` call — PAM-based sessions (sshd, console) need the same suppression as the login-shell path"
+);
+check(
+  "install.sh gates the DOTNET_GENERATE_ASPNET_CERTIFICATE writes on SYNC_CONTAINER_CERT != true AND GENERATE_DOTNET_CERT = true",
+  /SUPPRESS_DOTNET_AUTOGEN="false"\s*\nif \[ "\$\{SYNC_CONTAINER_CERT\}" != "true" \] && \[ "\$\{GENERATE_DOTNET_CERT\}" = "true" \]; then\s*\n\s*SUPPRESS_DOTNET_AUTOGEN="true"\s*\n\s*append_profile "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"/.test(
+    installSh
+  ),
+  "expected the profile.d write to be guarded by a conditional that flips SUPPRESS_DOTNET_AUTOGEN to true only when the host is the dev cert source (syncContainerCert != true && generateDotNetCert = true)"
+);
+check(
+  "install.sh's /etc/environment write reuses the SUPPRESS_DOTNET_AUTOGEN gate",
+  /if \[ "\$\{SUPPRESS_DOTNET_AUTOGEN\}" = "true" \]; then\s*\n\s*append_env "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"/.test(
+    installSh
+  ),
+  "expected the /etc/environment write to be guarded by the same SUPPRESS_DOTNET_AUTOGEN flag so both sinks stay in lockstep"
 );
 
 // --- Summary ---

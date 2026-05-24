@@ -202,29 +202,41 @@ append_profile "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
 append_profile "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
 append_profile "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
 
-# Suppress dotnet's own first-run HTTPS dev certificate provisioning.
+# Suppress dotnet's first-run HTTPS dev cert provisioning ONLY when the
+# host is the source.
 #
-# Without this, the first `dotnet run` / `dotnet new webapi` / `dotnet
-# build` of an HTTPS-enabled project triggers dotnet's implicit
-# CertificateManager flow, which writes a fresh self-signed cert into
-# ~/.dotnet/corefx/cryptography/x509stores/my/ — at the same time the
-# workspace extension is also trying to put OUR cert there. Whichever
-# write lands last wins on disk, but the OS trust + .NET Root-store
-# state may have been driven by the other side, so the runtime ends up
-# with a half-trusted, half-orphaned cert combo (the "partially valid
-# certificate on first run" race). Setting this env var to false tells
-# dotnet to skip that implicit provisioning step; explicit `dotnet
-# dev-certs https` invocations (used by users who opt into
-# syncContainerCert with a container-build step) still work — the env
-# var only gates the IMPLICIT first-run path.
+# The race: on `dotnet run` / `dotnet new webapi` / `dotnet build` of an
+# HTTPS-enabled project, dotnet's implicit CertificateManager flow
+# writes a fresh self-signed cert into ~/.dotnet/corefx/cryptography/
+# x509stores/my/. If the workspace extension is also trying to put OUR
+# cert there at the same time, whichever write lands last wins on disk,
+# but the OS trust + .NET Root-store state may have been driven by the
+# other side — leaving a half-trusted, half-orphaned cert combo (the
+# "partially valid certificate on first run" symptom).
 #
-# This is set unconditionally — installing this feature means the user
-# wants OUR managed cert pipeline (host generation, container push, or
-# user-managed certs) to be the source. Letting dotnet race us would
-# undo the value of installing the feature in the first place. Users
-# who specifically want dotnet's implicit auto-generation should not
-# install this feature.
-append_profile "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
+# Gating rules:
+#   - `syncContainerCert: true` → the container is the source, and the
+#     container-side "generate" step might literally BE dotnet's
+#     implicit auto-gen (some users rely on `dotnet run` to bootstrap
+#     the cert that we then push to the host). Suppressing it here
+#     would break that source. Leave dotnet's auto-gen ALONE.
+#   - `generateDotNetCert: false` AND `syncContainerCert: false` → the
+#     user opted out of every managed dotnet dev cert flow. There's
+#     nothing to race with; let dotnet behave normally for users who
+#     still want HTTPS via the dotnet-managed cert.
+#   - `generateDotNetCert: true` AND `syncContainerCert: false` (the
+#     default) → the host is generating and the workspace is installing
+#     into `my/`. THIS is where the race lives, so set false.
+#
+# `DOTNET_GENERATE_ASPNET_CERTIFICATE=false` only gates dotnet's
+# IMPLICIT path; explicit `dotnet dev-certs https` commands still
+# work regardless, so the syncContainerCert case can still use them
+# directly if it wants.
+SUPPRESS_DOTNET_AUTOGEN="false"
+if [ "${SYNC_CONTAINER_CERT}" != "true" ] && [ "${GENERATE_DOTNET_CERT}" = "true" ]; then
+    SUPPRESS_DOTNET_AUTOGEN="true"
+    append_profile "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
+fi
 
 SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
 append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_RESOLVED}"
@@ -236,10 +248,12 @@ append_env "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
-# DOTNET_GENERATE_ASPNET_CERTIFICATE — see the matching append_profile call
-# above for the full rationale. Mirrored into /etc/environment so PAM-based
-# sessions (sshd, console) see the same suppression.
-append_env "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
+# Mirror the dotnet-autogen suppression into /etc/environment so PAM-based
+# sessions (sshd, console) see the same gating logic as login shells. Same
+# conditional as the profile.d write above — see the comment there.
+if [ "${SUPPRESS_DOTNET_AUTOGEN}" = "true" ]; then
+    append_env "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
+fi
 
 # Set ownership
 if id "${REMOTE_USER}" &>/dev/null; then
@@ -281,4 +295,8 @@ echo "  SSL_CERT_DIR:         ${SSL_CERT_DIR_RESOLVED}"
 echo "  generateDotNetCert:   ${GENERATE_DOTNET_CERT}"
 echo "  syncUserCertificates: ${SYNC_USER_CERTIFICATES}"
 echo "  syncContainerCert:    ${SYNC_CONTAINER_CERT}"
-echo "  DOTNET_GENERATE_ASPNET_CERTIFICATE: false (suppressing dotnet's first-run cert auto-generation in favor of our managed pipeline)"
+if [ "${SUPPRESS_DOTNET_AUTOGEN}" = "true" ]; then
+    echo "  DOTNET_GENERATE_ASPNET_CERTIFICATE: false (host generates the dev cert — suppressing dotnet's racing first-run auto-gen)"
+else
+    echo "  DOTNET_GENERATE_ASPNET_CERTIFICATE: unset (leaving dotnet's default behavior — host is not the dev cert source for this container)"
+fi
