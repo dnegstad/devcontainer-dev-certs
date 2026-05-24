@@ -1,3 +1,7 @@
+// Polyfill must load before any module that pulls in @peculiar/x509 (via
+// shared). tsyringe — a transitive dep of @peculiar/x509 — wires up
+// `@injectable` decorators against `Reflect.metadata` at module init.
+import "reflect-metadata";
 import * as vscode from "vscode";
 import {
   installDotNetDevCert,
@@ -17,6 +21,10 @@ import {
   type CleanupResult,
   type StaleDevCert,
 } from "./cleanupCerts";
+import {
+  findBestContainerDevCert,
+  pushContainerCertToHost,
+} from "./containerCertPush";
 import {
   createDefaultKestrelDebugProvider,
   kestrelDefaultEnvHolder,
@@ -92,19 +100,84 @@ export function activate(context: vscode.ExtensionContext): void {
     log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
   }
 
+  // Reverse-sync: if the feature opted into pushing the container's own
+  // dev cert to the host, run that before the standard pull so that the
+  // push lands first and any subsequent pull naturally returns the cert
+  // we just trusted on the host. This block is fully independent of the
+  // normal flow — if no cert is found, or the host setting is off, the
+  // pull below still runs as usual.
+  const syncFromContainer = isTruthyEnv(
+    process.env["DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER"],
+    false
+  );
+  if (syncFromContainer) {
+    log(
+      "syncContainerCert enabled — scanning container for a dev certificate to push to the host."
+    );
+  }
+
   if (config.get<boolean>("autoInject", true)) {
     log("Auto-inject enabled, requesting certificate material...");
-    void injectCertificate(context);
+    void runActivationSync(context, syncFromContainer);
+  } else if (syncFromContainer) {
+    void pushContainerCertToHost();
   }
+}
+
+/**
+ * Activation-time orchestration: push first (when enabled), then pull. Both
+ * sides are awaited sequentially so the host has the freshly-pushed cert in
+ * its platform store by the time the pull runs.
+ *
+ * The push side is best-effort and must not block the pull. If
+ * pushContainerCertToHost throws (vs its normal return-null pattern on a
+ * known-fail mode), surface the error to the log channel and continue —
+ * skipping the pull would also skip user-managed certs, extra
+ * destinations, the Kestrel default cert env wiring, and the stale-cert
+ * cleanup detection, none of which depend on the reverse-sync.
+ */
+async function runActivationSync(
+  context: vscode.ExtensionContext,
+  syncFromContainer: boolean
+): Promise<void> {
+  if (syncFromContainer) {
+    try {
+      await pushContainerCertToHost();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      log(
+        `Container cert sync: push failed with an unexpected error; continuing with the pull. ${message}`
+      );
+    }
+  }
+  await injectCertificate(context);
 }
 
 async function injectCertificate(
   context: vscode.ExtensionContext
 ): Promise<void> {
-  const includeDotNetDev = isTruthyEnv(
+  // syncContainerCert takes precedence over the generateDotNetCert
+  // feature option. When the container is the source of its own dev
+  // cert (pushing it to the host), it would be self-defeating to ALSO
+  // ask the host to generate a different dotnet dev cert and send it
+  // back — we'd end up with two trusted dev certs in the container's
+  // .NET store. Setting includeDotNetDev=false here drops the
+  // host-generated cert out of the pull entirely. User-managed certs
+  // (syncUserCertificates) are unaffected.
+  const syncFromContainer = isTruthyEnv(
+    process.env["DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER"],
+    false
+  );
+  const generateDotNetEnv = isTruthyEnv(
     process.env["DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET"],
     true
   );
+  const includeDotNetDev = syncFromContainer ? false : generateDotNetEnv;
+  if (syncFromContainer && generateDotNetEnv) {
+    log(
+      "syncContainerCert is enabled; the container's own dev cert is the source, so the dotnet dev cert is not pulled from the host (overriding generateDotNetCert)."
+    );
+  }
   const includeUserCerts = isTruthyEnv(
     process.env["DEVCONTAINER_DEV_CERTS_SYNC_USER"],
     true
@@ -197,6 +270,43 @@ async function injectCertificate(
   }
 }
 
+/**
+ * Build the "preserve" set for the cleanup sweep. Starts from
+ * `buildManagedMyStoreThumbprints(bundle)` (host-supplied) and, when
+ * `syncContainerCert` is on, also adds whatever dev cert is currently
+ * sitting in the container's .NET store — that cert IS this container's
+ * managed dotnet dev cert (the source we push to the host), and the
+ * sweep must not delete it. Without this, enabling syncContainerCert
+ * would leave the bundle empty of dotnet-dev certs (we forced
+ * includeDotNetDev=false on the pull) and cleanup would classify the
+ * source cert as stale.
+ *
+ * Returns both the thumbprint set and whether we found ANY managed dev
+ * cert — the cleanup paths use the latter as a safety guard: if no
+ * managed cert is known, the sweep would delete every dev cert on disk,
+ * so we refuse to operate.
+ */
+async function resolveManagedDevCertContext(
+  bundle: CertBundleV3,
+  syncFromContainer: boolean
+): Promise<{
+  thumbprints: ReadonlySet<string>;
+  hasManagedDevCert: boolean;
+}> {
+  const set = new Set<string>(buildManagedMyStoreThumbprints(bundle));
+  let hasManagedDevCert = bundleHasManagedDevCert(bundle);
+
+  if (syncFromContainer) {
+    const scan = await findBestContainerDevCert();
+    if (scan) {
+      set.add(scan.loaded.thumbprint.toUpperCase());
+      hasManagedDevCert = true;
+    }
+  }
+
+  return { thumbprints: set, hasManagedDevCert };
+}
+
 /** Post-install detection path. Single prompt; "Clean Up" runs the
  *  sweep immediately. */
 async function detectStaleAndPromptCleanup(
@@ -205,10 +315,17 @@ async function detectStaleAndPromptCleanup(
   const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
   if (!config.get<boolean>(WARN_STALE_CONFIG_KEY, true)) return;
 
-  // Skip when we have no managed cert to preserve — see cleanupCommand.
-  if (!bundleHasManagedDevCert(bundle)) return;
+  const syncFromContainer = isTruthyEnv(
+    process.env["DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER"],
+    false
+  );
+  const { thumbprints, hasManagedDevCert } =
+    await resolveManagedDevCertContext(bundle, syncFromContainer);
 
-  const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
+  // Skip when we have no managed cert to preserve — see cleanupCommand.
+  if (!hasManagedDevCert) return;
+
+  const stale = await findStaleDevCerts(thumbprints);
   if (stale.length === 0) return;
 
   logStaleCandidates(stale);
@@ -239,10 +356,18 @@ async function detectStaleAndPromptCleanup(
 /** Command-palette entry. Re-resolves the bundle so a stale snapshot
  *  can't drive deletion, then runs the same prompt + sweep as detection. */
 async function cleanupCommand(): Promise<void> {
-  const includeDotNetDev = isTruthyEnv(
+  // Mirror the same precedence the activation pull uses: syncContainerCert
+  // overrides generateDotNetCert (the container is the source of its own
+  // dev cert, so we don't ask the host for one).
+  const syncFromContainer = isTruthyEnv(
+    process.env["DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER"],
+    false
+  );
+  const generateDotNetEnv = isTruthyEnv(
     process.env["DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET"],
     true
   );
+  const includeDotNetDev = syncFromContainer ? false : generateDotNetEnv;
   const includeUserCerts = isTruthyEnv(
     process.env["DEVCONTAINER_DEV_CERTS_SYNC_USER"],
     true
@@ -259,18 +384,21 @@ async function cleanupCommand(): Promise<void> {
     return;
   }
 
+  const { thumbprints, hasManagedDevCert } =
+    await resolveManagedDevCertContext(bundle, syncFromContainer);
+
   // No managed cert → nothing to preserve, so the sweep would delete
   // every dev cert on disk. Refuse with an explanation.
-  if (!bundleHasManagedDevCert(bundle)) {
+  if (!hasManagedDevCert) {
     vscode.window.showWarningMessage(
       vscode.l10n.t(
-        "Dev Certs: This Dev Container isn't managing a dev certificate (generation disabled via DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET, or the host extension didn't provide one). The cleanup command preserves the extension-managed certificate and won't run when none exists."
+        "Dev Certs: This Dev Container isn't managing a dev certificate (generation disabled via DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET, no container-side cert when syncContainerCert is on, or the host extension didn't provide one). The cleanup command preserves the extension-managed certificate and won't run when none exists."
       )
     );
     return;
   }
 
-  const stale = findStaleDevCerts(buildManagedMyStoreThumbprints(bundle));
+  const stale = await findStaleDevCerts(thumbprints);
   if (stale.length === 0) {
     vscode.window.showInformationMessage(
       vscode.l10n.t(

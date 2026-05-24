@@ -1,10 +1,19 @@
 // Minimal vscode module stub for workspace extension tests.
 
+// Captured output-channel lines from the shared `log()` helper. Tests can
+// snapshot / clear / assert against this array to verify what was (and
+// wasn't) written to the Remote output channel.
+export const logMessages: string[] = [];
+
+export function __resetLogMessages() {
+  logMessages.length = 0;
+}
+
 export const window = {
   createOutputChannel(_name: string) {
     return {
-      appendLine(_msg: string) {
-        // no-op in tests
+      appendLine(msg: string) {
+        logMessages.push(msg);
       },
       show(_preserveFocus?: boolean) {
         // no-op in tests

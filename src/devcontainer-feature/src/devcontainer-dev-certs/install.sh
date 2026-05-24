@@ -6,6 +6,7 @@ TRUST_NSS="${TRUSTNSS:-false}"
 SSL_CERT_DIRS="${SSLCERTDIRS:-/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl}"
 GENERATE_DOTNET_CERT="${GENERATEDOTNETCERT:-true}"
 SYNC_USER_CERTIFICATES="${SYNCUSERCERTIFICATES:-true}"
+SYNC_CONTAINER_CERT="${SYNCCONTAINERCERT:-false}"
 EXTRA_CERT_DESTINATIONS="${EXTRACERTDESTINATIONS:-}"
 
 REMOTE_USER="${_REMOTE_USER:-vscode}"
@@ -25,7 +26,7 @@ fi
 # Validate that no feature option contains a newline. We append these to
 # /etc/environment, and an embedded newline would inject an extra env line
 # (potentially with a name the operator didn't intend).
-for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES EXTRA_CERT_DESTINATIONS; do
+for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS; do
     case "${!varname}" in
         *$'\n'*)
             echo "Error: feature option ${varname} must not contain newlines." >&2
@@ -100,12 +101,22 @@ if [ -n "${EXTRA_CERT_DESTINATIONS}" ]; then
     done
 fi
 
-# Append KEY="VALUE" to /etc/environment with proper escaping for the PAM
-# parser (pam_env): backslashes and double quotes inside the value must be
-# escaped. Always quote, even for values without special chars, so unquoted
-# spaces don't silently truncate the variable. Reject embedded newlines —
-# pam_env is line-oriented and an injected newline would smuggle an
-# additional env assignment into the file.
+# Append KEY="VALUE" to /etc/environment with full shell-metachar escaping.
+#
+# Two consumers we need to be safe for:
+#  - pam_env (the primary reader of /etc/environment on PAM-based logins):
+#    line-oriented, parses KEY=VALUE with backslash escapes inside double
+#    quotes. \$, \`, \", \\ all decode to the literal character. Newlines
+#    are not allowed in values — they'd split the record.
+#  - Shell sourcing (some distros' /etc/profile does `. /etc/environment`,
+#    and individual users sometimes add it to their own dotfiles): bash
+#    inside double quotes evaluates $..., $(...), and `...` — so a value
+#    containing `$(rm -rf $HOME)` would execute when sourced if we only
+#    escape \ and ". Escape $, backticks, \, and " here so the written
+#    line is inert under either reader.
+#
+# Reject embedded newlines outright — there's no safe-via-escaping path
+# for them in /etc/environment's line format.
 append_env() {
     local key="$1"
     local value="$2"
@@ -117,37 +128,150 @@ append_env() {
     esac
     local escaped="${value//\\/\\\\}"
     escaped="${escaped//\"/\\\"}"
+    escaped="${escaped//\$/\\\$}"
+    escaped="${escaped//\`/\\\`}"
     echo "${key}=\"${escaped}\"" >> /etc/environment
 }
 
-# Set SSL_CERT_DIR for the container. The feature manifest can't set this via
-# containerEnv because ${containerEnv:HOME} isn't resolvable at containerEnv
-# bake time, and remoteEnv isn't permitted in a feature under strict-schema
-# validation. Writing it here at install time covers both default and
-# user-overridden sslCertDirs uniformly.
+# Quote a value for safe single-quoted embedding in a shell script. Single
+# quotes prevent every form of bash expansion ($, $(...), `...`, $VAR), so
+# wrapping the user-supplied bytes in single quotes in /etc/profile.d/* is
+# the most reliable defense — the only character that has to be encoded is
+# the single quote itself, via the standard `'\''` end-quote-escape-restart
+# pattern.
+shell_single_quote() {
+    local value="$1"
+    # Replace every ' with '\'' so the value can be wrapped in '…'.
+    #
+    # Bash-escaping note: `\'` inside the pattern half of
+    # `${var//pat/repl}` matches a literal single quote, even though
+    # the whole expansion is itself inside double quotes. Two layers
+    # of parsing are at play and they're easy to conflate:
+    #   - The outer string parser sees `"${value//\'/\'\\\'\'}"` as a
+    #     double-quoted string. In a plain double-quoted string `\` is
+    #     only special before $ ` " \ <newline>, so a stray `\'` would
+    #     pass through as the two characters `\` and `'`.
+    #   - But INSIDE `${...//pat/repl}` bash hands the pattern off to
+    #     its glob/pattern parser, where `\X` means "literal X" for
+    #     any X. So the pattern matches just `'` (one character), not
+    #     `\'` (two characters). The same applies to the replacement.
+    # Verified with `x="a'b"; echo "${x//\'/Y}"` printing `aYb`.
+    # Tested round-trips through `source` for embedded / leading /
+    # trailing / consecutive quotes and the empty string; tested that
+    # `$(...)` and backticks embedded in a quoted value land inside
+    # the single-quoted segment and do NOT execute when sourced.
+    printf "'%s'" "${value//\'/\'\\\'\'}"
+}
+
+# Surface configuration to processes in the container. Two sinks, neither
+# alone enough on its own — write to BOTH:
 #
-#   /etc/profile.d/devcontainer-dev-certs.sh — sourced by login shells; $HOME
-#     expands per user, which is what VS Code's userEnvProbe picks up.
-#   /etc/environment — read by pam_env on PAM-based logins (sshd); needs the
-#     resolved REMOTE_USER_HOME baked in since pam_env doesn't expand $HOME.
+#   /etc/profile.d/devcontainer-dev-certs.sh — sourced by login shells.
+#     This is the path that reaches the VS Code extension host process:
+#     `userEnvProbe` (default `loginInteractiveShell`) captures env from
+#     `bash -lic env` and injects it into every spawned extension. Vars
+#     written here also show up in integrated terminals.
+#   /etc/environment — read by pam_env on PAM-based logins (sshd, console).
+#     Not loaded by `docker exec`, which is how VS Code attaches in the
+#     typical devcontainer flow, so this sink alone misses the extension
+#     host. Kept as the fallback path for non-VS-Code consumers (e.g.
+#     an SSH session into a long-running container).
+#
+# SSL_CERT_DIR needs `$HOME` expansion per user, so it goes into profile.d
+# unexpanded and into /etc/environment with a resolved `_REMOTE_USER_HOME`
+# (pam_env doesn't expand `$HOME`). The other feature-option vars are plain
+# string values and go to both sinks with the same content.
 PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
-# $HOME is intentionally left unexpanded so each user picks up their own
-# trust directory at login. SSL_CERT_DIRS has been validated against
-# /^/[A-Za-z0-9._/+@%-]+(:/[A-Za-z0-9._/+@%-]+)*$/ above, so the only
-# remaining shell-meaningful character that can reach this line is `$`
-# (via $HOME). All other inputs are safe to embed verbatim.
-echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}\"" > "${PROFILE_SCRIPT}"
+: > "${PROFILE_SCRIPT}"
 chmod 0644 "${PROFILE_SCRIPT}"
+
+# Append `export KEY='VALUE'` to the profile.d script. Single quotes — not
+# double — because every byte of `VALUE` comes from an untrusted feature
+# option (anything the user puts in devcontainer.json) and this file is
+# sourced by every login shell on the container. Double-quoted strings
+# would happily evaluate `$(...)`, backticks, and `$VAR` substitutions at
+# source time, turning any unvalidated character in a feature option into
+# a code-execution vector. The single-quote wrapping via `shell_single_quote`
+# keeps the value byte-literal regardless of what it contains. The
+# per-option newline validation upstream still applies; we don't re-check
+# here.
+append_profile() {
+    local key="$1"
+    local value="$2"
+    local quoted
+    quoted="$(shell_single_quote "${value}")"
+    echo "export ${key}=${quoted}" >> "${PROFILE_SCRIPT}"
+}
+
+# SSL_CERT_DIR is the one profile.d line that needs `$HOME` to remain
+# unexpanded at install time so each user picks up their own trust
+# directory at login. Emit two adjacent shell tokens — a double-quoted
+# segment carrying just `$HOME` + the constant prefix, then a single-
+# quoted segment carrying the user-supplied SSL_CERT_DIRS. Bash
+# concatenates adjacent quoted strings, so the resulting value is
+# `<expanded HOME>/.aspnet/dev-certs/trust:<literal user value>`. Even if
+# the SSL_CERT_DIRS regex validation above is later loosened, the user
+# portion stays inert because of the single quotes.
+SSL_CERT_DIRS_SQ="$(shell_single_quote "${SSL_CERT_DIRS}")"
+echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:\"${SSL_CERT_DIRS_SQ}" >> "${PROFILE_SCRIPT}"
+
+append_profile "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
+append_profile "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
+append_profile "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
+append_profile "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
+
+# Suppress dotnet's first-run HTTPS dev cert provisioning ONLY when the
+# host is the source.
+#
+# The race: on `dotnet run` / `dotnet new webapi` / `dotnet build` of an
+# HTTPS-enabled project, dotnet's implicit CertificateManager flow
+# writes a fresh self-signed cert into ~/.dotnet/corefx/cryptography/
+# x509stores/my/. If the workspace extension is also trying to put OUR
+# cert there at the same time, whichever write lands last wins on disk,
+# but the OS trust + .NET Root-store state may have been driven by the
+# other side — leaving a half-trusted, half-orphaned cert combo (the
+# "partially valid certificate on first run" symptom).
+#
+# Gating rules:
+#   - `syncContainerCert: true` → the container is the source, and the
+#     container-side "generate" step might literally BE dotnet's
+#     implicit auto-gen (some users rely on `dotnet run` to bootstrap
+#     the cert that we then push to the host). Suppressing it here
+#     would break that source. Leave dotnet's auto-gen ALONE.
+#   - `generateDotNetCert: false` AND `syncContainerCert: false` → the
+#     user opted out of every managed dotnet dev cert flow. There's
+#     nothing to race with; let dotnet behave normally for users who
+#     still want HTTPS via the dotnet-managed cert.
+#   - `generateDotNetCert: true` AND `syncContainerCert: false` (the
+#     default) → the host is generating and the workspace is installing
+#     into `my/`. THIS is where the race lives, so set false.
+#
+# `DOTNET_GENERATE_ASPNET_CERTIFICATE=false` only gates dotnet's
+# IMPLICIT path; explicit `dotnet dev-certs https` commands still
+# work regardless, so the syncContainerCert case can still use them
+# directly if it wants.
+SUPPRESS_DOTNET_AUTOGEN="false"
+if [ "${SYNC_CONTAINER_CERT}" != "true" ] && [ "${GENERATE_DOTNET_CERT}" = "true" ]; then
+    SUPPRESS_DOTNET_AUTOGEN="true"
+    append_profile "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
+fi
 
 SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
 append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_RESOLVED}"
 
-# Surface the feature options to the running container so the remote extension
-# can read them via process.env. extraCertDestinations can contain spaces
-# (users routinely separate CSV entries with `, `), so unconditionally quote.
+# Keep the same values in /etc/environment for non-VS-Code PAM-based
+# consumers. extraCertDestinations can contain spaces (users routinely
+# separate CSV entries with `, `), so unconditionally quote in both sinks.
 append_env "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
+append_env "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
+# Mirror the dotnet-autogen suppression into /etc/environment so PAM-based
+# sessions (sshd, console) see the same gating logic as login shells. Same
+# conditional as the profile.d write above — see the comment there.
+if [ "${SUPPRESS_DOTNET_AUTOGEN}" = "true" ]; then
+    append_env "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
+fi
 
 # Set ownership
 if id "${REMOTE_USER}" &>/dev/null; then
@@ -188,3 +312,9 @@ echo "  OpenSSL trust:        ${TRUST_DIR}"
 echo "  SSL_CERT_DIR:         ${SSL_CERT_DIR_RESOLVED}"
 echo "  generateDotNetCert:   ${GENERATE_DOTNET_CERT}"
 echo "  syncUserCertificates: ${SYNC_USER_CERTIFICATES}"
+echo "  syncContainerCert:    ${SYNC_CONTAINER_CERT}"
+if [ "${SUPPRESS_DOTNET_AUTOGEN}" = "true" ]; then
+    echo "  DOTNET_GENERATE_ASPNET_CERTIFICATE: false (host generates the dev cert — suppressing dotnet's racing first-run auto-gen)"
+else
+    echo "  DOTNET_GENERATE_ASPNET_CERTIFICATE: unset (leaving dotnet's default behavior — host is not the dev cert source for this container)"
+fi

@@ -65,6 +65,63 @@ export class CertManager {
   }
 
   /**
+   * Trust an externally-supplied certificate (e.g. one pushed from a Dev
+   * Container via the syncContainerCert reverse-sync flow) in the host
+   * OS trust store.
+   *
+   * Delegates directly to `store.trustCertificate(cert)` — the SAME hook
+   * the host-generation flow (`trust()`) uses on its final step — so
+   * "trusted on the host" means the same thing regardless of whether
+   * the cert was generated here or accepted from a container. On Linux
+   * that's `.NET Root store + OpenSSL trust dir + NSS browser DBs` (the
+   * NSS step uses the same `linuxNssTrustReporter` callback the host
+   * generation flow wires up). On macOS, login keychain trust policy.
+   * On Windows, CurrentUser/Root via certutil.
+   *
+   * Public-cert-only: the cert lands in every trust surface listed
+   * above but NEVER in CurrentUser/My, the keychain's identity slot, or
+   * the .NET store's `my/` directory. Skipping `saveCertificate` is
+   * deliberate — the host doesn't need (and shouldn't store) the
+   * private key, because Kestrel runs in the container with its own
+   * copy of the key. Future changes to this method MUST preserve both
+   * properties: (a) trust goes through `store.trustCertificate`; (b)
+   * no `saveCertificate` call. `tests/manager.test.ts` pins both.
+   *
+   * Does NOT update `currentCert`. The host's auto-generation flow
+   * (`generate()` / `trust()`) is a separate state machine that the
+   * container-push path doesn't feed into; if the user also has
+   * `generateDotNetCert: true` and a subsequent `getAllCertMaterial`
+   * pull arrives, the host will generate its own (separate) cert as
+   * normal.
+   */
+  async trustExternalCertificate(
+    cert: GeneratedCert["cert"]
+  ): Promise<void> {
+    const store = await this.getStore();
+
+    // Verify on-disk state before invoking the platform trust step.
+    // Skipping a redundant call matters on macOS where
+    // `security add-trusted-cert` is not a no-op for an already-trusted
+    // cert (re-touches the trust-settings record, may re-prompt for
+    // the keychain password). The same cache-as-goal-state /
+    // verify-on-disk pattern is used by the host-generation flow's
+    // `trust()` method, just expressed differently because it goes
+    // through `checkStatus()` instead of a direct `isCertTrusted`.
+    if (await store.isCertTrusted(cert)) {
+      log(
+        `Externally-supplied dev certificate ${cert.thumbprintSha1} is already trusted on host; skipping platform trust call.`
+      );
+      return;
+    }
+
+    log(
+      `Trusting externally-supplied dev certificate ${cert.thumbprintSha1} (public cert only, via the same platform trust path as host-generated)...`
+    );
+    await store.trustCertificate(cert);
+    log("Externally-supplied certificate trusted.");
+  }
+
+  /**
    * Ensure a cert exists and is trusted. Generates one if needed.
    */
   async trust(): Promise<void> {

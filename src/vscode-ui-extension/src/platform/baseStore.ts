@@ -2,201 +2,112 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { type PlatformCertificateStore, type CertificateStatus } from "./types";
-import { isValidDevCert, getCertificateVersion } from "../cert/generator";
-import { type DevCert, type DevKey } from "../cert/types";
-import { buildPfx, parsePfx } from "../cert/pfx";
-import { log } from "@devcontainer-dev-certs/shared";
+import {
+  log,
+  type DevCert,
+  type DevKey,
+  buildPfx,
+  parsePfx,
+  getCertificateVersion,
+  classifyCandidate as classifyCandidateShared,
+  selectBestDevCert as selectBestDevCertShared,
+  extractThumbprintHintFromFilename,
+  type CandidateInput,
+  type ClassifiedCandidate,
+  type SkipReport,
+  type UsableDevCert,
+} from "@devcontainer-dev-certs/shared";
+
+// Re-export the pure shared types so existing imports of
+// `../platform/baseStore` keep working without touching ~15 test files.
+export type {
+  ClassifiedCandidate,
+  CandidateInput,
+  CandidateMetadata,
+  UsableDevCert,
+} from "@devcontainer-dev-certs/shared";
+export { extractThumbprintHintFromFilename } from "@devcontainer-dev-certs/shared";
 
 /**
- * Resolved dev cert + private key that's ready to sync.
- */
-export interface UsableDevCert {
-  cert: DevCert;
-  key: DevKey;
-  thumbprint: string;
-}
-
-/**
- * Result of classifying a single dev-cert candidate.
- *
- * - `usable`: cert + key fully loadable and `isValidDevCert` passes; safe to
- *   pass into selection.
- * - `skipped`: would-be-valid candidate that we can't actually use (missing
- *   private key, parse failure, key not exportable from a system keychain,
- *   orphaned cache file, etc.). A diagnostic warning has already been logged
- *   at classification time; selection MUST exclude these.
- * - `null` return (not a kind): the input isn't a dev-cert candidate at all
- *   (e.g. unrelated cert in a shared store, expired, CN ≠ localhost). Silent
- *   — these aren't worth surfacing.
- */
-export type ClassifiedCandidate =
-  | { kind: "usable"; cert: DevCert; key: DevKey; thumbprint: string }
-  | { kind: "skipped"; thumbprint: string | null; reason: string };
-
-/**
- * Optional metadata describing a candidate when we don't (yet) have a parsed
- * cert object — e.g. when PowerShell hands us a `skipped[]` entry derived
- * from the Windows cert store, or when we're surfacing a keychain-only
- * entry on macOS.
- */
-export interface CandidateMetadata {
-  thumbprint?: string | null;
-  subjectCN?: string | null;
-  version?: number | null;
-  notBefore?: Date | null;
-  notAfter?: Date | null;
-}
-
-/**
- * Inputs to `classifyCandidate`. Exactly one of `loaded` / `forcedSkip` /
- * `parseFailure` must be set; `source` is the human-readable provenance
- * (file path, store path, "macOS login keychain") that appears in the
- * warning log.
- */
-export type CandidateInput =
-  | {
-      kind: "loaded";
-      source: string;
-      loaded: { cert: DevCert; key: DevKey | null; thumbprint: string };
-    }
-  | {
-      kind: "parseFailure";
-      source: string;
-      thumbprintHint?: string | null;
-    }
-  | {
-      kind: "forcedSkip";
-      source: string;
-      reason: string;
-      metadata?: CandidateMetadata;
-    };
-
-/**
- * Classify a single candidate into `usable` / `skipped`, or return `null`
- * for an input that isn't dev-cert-shaped (silent, not logged).
- *
- * Side effect: when the return is `kind: "skipped"`, a single human-readable
- * `log()` line is emitted at classification time so the warning surfaces
- * BEFORE any selection happens.
+ * Side-effectful host-side classifier wrapper. Delegates the pure
+ * classification to the shared module and emits the same localized "skipping
+ * ASP.NET dev cert ..." log line via `vscode.l10n.t` that the host has
+ * always produced. New container-side scan paths can call the shared
+ * `classifyCandidate` directly with their own (or no) localizer.
  */
 export function classifyCandidate(
   input: CandidateInput
 ): ClassifiedCandidate | null {
-  if (input.kind === "loaded") {
-    const { cert, key, thumbprint } = input.loaded;
-    const certPassesValidity = isValidDevCert(cert);
-
-    if (!certPassesValidity) {
-      // Not a dev cert (CN ≠ localhost, expired, no OID extension, version <
-      // MIN). Silent — there's nothing the user can act on.
-      return null;
-    }
-
-    if (!key) {
-      const reason = vscode.l10n.t(
-        "PFX contains certificate without matching private key"
-      );
-      logSkipReason(thumbprint, input.source, reason, {
-        subjectCN: cert.subjectCN,
-        version: getCertificateVersion(cert),
-        notBefore: cert.notBefore,
-        notAfter: cert.notAfter,
-      });
-      return { kind: "skipped", thumbprint, reason };
-    }
-
-    return { kind: "usable", cert, key, thumbprint };
-  }
-
-  if (input.kind === "parseFailure") {
-    // We only warn on parse failures for files whose name matches the
-    // canonical aspnetcore-localhost-<thumb>.pfx pattern (the caller passes
-    // the extracted hint). Generic .pfx files in a shared directory aren't
-    // ours to worry about.
-    if (!input.thumbprintHint) return null;
-    const reason = vscode.l10n.t(
-      "failed to parse PFX (corrupt or wrong password)"
-    );
-    logSkipReason(input.thumbprintHint, input.source, reason, {});
-    return { kind: "skipped", thumbprint: input.thumbprintHint, reason };
-  }
-
-  // forcedSkip — the reason has already been localized by the caller (the
-  // platform-specific store) since the wording is platform-specific.
-  logSkipReason(
-    input.metadata?.thumbprint ?? null,
-    input.source,
-    input.reason,
-    input.metadata ?? {}
-  );
-  return {
-    kind: "skipped",
-    thumbprint: input.metadata?.thumbprint ?? null,
-    reason: input.reason,
-  };
+  return classifyCandidateShared(input, {
+    onSkipped: (report) => emitHostSkipLog(report),
+  });
 }
 
 /**
- * Choose the best dev cert among a set of pre-classified usable candidates.
- * Sort key: highest version byte first, then latest `notAfter` as the
- * tiebreaker — mirrors .NET's `dotnet dev-certs` resolution behaviour.
- *
- * When more than one usable candidate is present, emits a single
- * multi-candidate selection warning so the user can see exactly which
- * thumbprints were considered. The warning is NOT emitted for unusable
- * candidates — those get their own warning at classification time.
+ * Side-effectful host-side selection wrapper. Delegates to the shared
+ * selector and emits the multi-candidate localized warning when more than
+ * one usable candidate is present.
  */
 export function selectBestDevCert(
   usable: UsableDevCert[],
   context: string
 ): UsableDevCert | null {
-  if (usable.length === 0) return null;
-
-  const sorted = [...usable].sort((a, b) => {
-    const versionA = getCertificateVersion(a.cert);
-    const versionB = getCertificateVersion(b.cert);
-    if (versionA !== versionB) return versionB - versionA;
-    return b.cert.notAfter.getTime() - a.cert.notAfter.getTime();
+  return selectBestDevCertShared(usable, context, {
+    onMultipleCandidates: ({ selected, candidates }) => {
+      const header = vscode.l10n.t(
+        "Multiple valid ASP.NET dev certs found in {0}; selected {1}.",
+        context,
+        selected.thumbprint
+      );
+      const candidatesHeader = vscode.l10n.t("  Candidates:");
+      const selectedTag = vscode.l10n.t("[selected]");
+      const skippedTag = vscode.l10n.t("[skipped] ");
+      const lines = [
+        header,
+        candidatesHeader,
+        ...candidates.map((c, i) =>
+          vscode.l10n.t(
+            "    {0} thumbprint={1} version={2} notBefore={3} notAfter={4}",
+            i === 0 ? selectedTag : skippedTag,
+            c.thumbprint,
+            getCertificateVersion(c.cert),
+            c.cert.notBefore.toISOString(),
+            c.cert.notAfter.toISOString()
+          )
+        ),
+      ];
+      log(lines.join("\n"));
+    },
   });
-
-  const selected = sorted[0];
-
-  if (sorted.length > 1) {
-    const header = vscode.l10n.t(
-      "Multiple valid ASP.NET dev certs found in {0}; selected {1}.",
-      context,
-      selected.thumbprint
-    );
-    const candidatesHeader = vscode.l10n.t("  Candidates:");
-    const selectedTag = vscode.l10n.t("[selected]");
-    const skippedTag = vscode.l10n.t("[skipped] ");
-    const lines = [
-      header,
-      candidatesHeader,
-      ...sorted.map((c, i) =>
-        vscode.l10n.t(
-          "    {0} thumbprint={1} version={2} notBefore={3} notAfter={4}",
-          i === 0 ? selectedTag : skippedTag,
-          c.thumbprint,
-          getCertificateVersion(c.cert),
-          c.cert.notBefore.toISOString(),
-          c.cert.notAfter.toISOString()
-        )
-      ),
-    ];
-    log(lines.join("\n"));
-  }
-
-  return selected;
 }
 
-function logSkipReason(
-  thumbprint: string | null,
-  source: string,
-  reason: string,
-  meta: CandidateMetadata
-): void {
+/**
+ * Render the localized "skipping ASP.NET dev cert" log line for one skipped
+ * candidate. Maps the shared classifier's reason code to a host-localized
+ * string. `forced` skips carry the caller's free-form reason verbatim — the
+ * platform stores (linuxStore / macStore / windowsStore) localize their own
+ * forced-skip reasons before handing them in, so we pass through.
+ */
+function emitHostSkipLog(report: SkipReport): void {
+  let localizedReason: string;
+  switch (report.reasonCode) {
+    case "missing-private-key":
+      localizedReason = vscode.l10n.t(
+        "PFX contains certificate without matching private key"
+      );
+      break;
+    case "parse-failed":
+      localizedReason = vscode.l10n.t(
+        "failed to parse PFX (corrupt or wrong password)"
+      );
+      break;
+    case "forced":
+      // Caller localized this string before classifyCandidate received it.
+      localizedReason = report.forcedReason ?? "";
+      break;
+  }
   const unknown = vscode.l10n.t("(unknown)");
+  const meta = report.metadata;
   const subjectCN = meta.subjectCN ?? unknown;
   const version =
     meta.version === undefined || meta.version === null
@@ -207,32 +118,15 @@ function logSkipReason(
   log(
     vscode.l10n.t(
       "Skipping ASP.NET dev cert {0} ({1}): {2}.\n  subjectCN={3} version={4} notBefore={5} notAfter={6}",
-      thumbprint ?? unknown,
-      source,
-      reason,
+      meta.thumbprint ?? unknown,
+      report.source,
+      localizedReason,
       subjectCN,
       version,
       notBefore,
       notAfter
     )
   );
-}
-
-/**
- * Extract the canonical SHA-1 thumbprint embedded in a PFX filename that
- * follows the `aspnetcore-localhost-<thumb>.pfx` or `<thumb>.pfx` patterns.
- * Returns null when the filename doesn't match — caller treats parse
- * failures on non-canonical names as silent (they aren't ours).
- */
-export function extractThumbprintHintFromFilename(
-  filename: string
-): string | null {
-  const base = path.basename(filename, ".pfx");
-  const aspnetMatch = base.match(/^aspnetcore-localhost-([0-9A-Fa-f]{40})$/);
-  if (aspnetMatch) return aspnetMatch[1].toUpperCase();
-  const bareMatch = base.match(/^([0-9A-Fa-f]{40})$/);
-  if (bareMatch) return bareMatch[1].toUpperCase();
-  return null;
 }
 
 /**
@@ -284,6 +178,19 @@ export abstract class BaseCertificateStore implements PlatformCertificateStore {
   abstract trustCertificate(cert: DevCert): Promise<void>;
 
   abstract removeCertificates(): Promise<void>;
+
+  /**
+   * Public wrapper around `isTrusted` that satisfies the
+   * `PlatformCertificateStore.isCertTrusted` contract — verify the
+   * current on-disk / OS trust state for a specific certificate. Lets
+   * callers (notably `CertManager.trustExternalCertificate`) decide
+   * whether the platform-level trust step needs to run at all,
+   * avoiding redundant `security add-trusted-cert` / `certutil
+   * -addstore` calls that aren't true no-ops.
+   */
+  async isCertTrusted(cert: DevCert): Promise<boolean> {
+    return this.isTrusted(cert, cert.thumbprintSha1);
+  }
 
   /**
    * Platform-specific trust verification.

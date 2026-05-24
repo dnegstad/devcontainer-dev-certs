@@ -1,14 +1,15 @@
 import * as fs from "fs";
 import * as path from "path";
 import {
+  ASPNET_HTTPS_OID,
   getDotNetRootStorePath,
   getDotNetStorePath,
   getOpenSslTrustDir,
   getPemFileName,
   getPfxFileName,
+  parsePfx,
 } from "@devcontainer-dev-certs/shared";
 import type { CertBundleV3 } from "@devcontainer-dev-certs/shared";
-import { scanPfxForDevCertOid } from "./util/pkcs12DevCertScan";
 import { rehashDirectory } from "./util/rehash";
 
 /**
@@ -87,14 +88,34 @@ export function buildManagedMyStoreThumbprints(
 }
 
 /**
+ * Identify whether a PFX byte stream is an ASP.NET dev certificate. Parses
+ * the PFX via the shared `parsePfx` (which handles modern PBES2/AES-256-CBC
+ * + PBKDF2-SHA-256) and looks for the ASP.NET dev-cert custom OID extension
+ * on the contained certificate. Fail-closed: any parse / decrypt / unknown-
+ * algorithm error returns false, so unidentifiable files are never deleted.
+ *
+ * Replaces the historical hand-rolled `scanPfxForDevCertOid` ASN.1 walker
+ * — same effective scope (PBES2-only cert bags, no legacy PBE-SHA1), one
+ * less code path to maintain.
+ */
+async function isAspNetDevCertPfx(bytes: Buffer): Promise<boolean> {
+  try {
+    const { cert } = await parsePfx(bytes, "");
+    return cert.hasExtension(ASPNET_HTTPS_OID);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Enumerate foreign dev certs in the .NET CurrentUser\My store and gather
  * the on-disk files that belong to each one — best-effort, never throws.
  * Only the My store is scanned; Root-store / trust-dir files are looked
  * up by thumbprint after the fact.
  */
-export function findStaleDevCerts(
+export async function findStaleDevCerts(
   managedMyStoreThumbprints: ReadonlySet<string>
-): StaleDevCert[] {
+): Promise<StaleDevCert[]> {
   const myStoreDir = getDotNetStorePath();
   if (!fs.existsSync(myStoreDir)) return [];
 
@@ -126,7 +147,7 @@ export function findStaleDevCerts(
       continue;
     }
     // Fail-closed: only delete files we positively identify as dev certs.
-    if (!scanPfxForDevCertOid(bytes, "")) continue;
+    if (!(await isAspNetDevCertPfx(bytes))) continue;
 
     const artifacts: StaleArtifact[] = [
       { location: "my-store", fullPath: myPath, identifier: normalThumb },

@@ -30,7 +30,9 @@
   "activationEvents": [
     "onStartupFinished",
     "onCommand:devcontainer-dev-certs.getCertMaterial",
-    "onCommand:devcontainer-dev-certs.getAllCertMaterial"
+    "onCommand:devcontainer-dev-certs.getAllCertMaterial",
+    "onCommand:devcontainer-dev-certs.getAllCertMaterialV3",
+    "onCommand:devcontainer-dev-certs.acceptContainerDevCert"
   ],
   "main": "./dist/extension.js",
   "l10n": "./l10n",
@@ -105,6 +107,11 @@
           "type": "boolean",
           "default": false,
           "description": "When true, copies every user certificate from devcontainerDevCerts.userCertificates into the container's .NET X509Store (~/.dotnet/corefx/cryptography/x509stores/my/) so X509Store(StoreName.My, StoreLocation.CurrentUser) enumerates them. SECURITY WARNING: .NET's StoreName.My enumeration on Linux opens each file with a null password and cannot accept per-file passwords, so each cert's copy stored there has its password stripped. The private key sits on disk in plain-text-equivalent form, protected only by file permissions (0o600). Leave this false (the default) unless you specifically need .NET store enumeration to find your user certs. The auto-generated dotnet-dev cert is always installed to the store regardless of this setting (it has no password to strip, and the store IS its canonical location). To exempt an individual cert from this global setting, add excludeFromDotNetStore: true to that entry."
+        },
+        "devcontainerDevCerts.allowNonLocalContainerCertSans": {
+          "type": "boolean",
+          "default": false,
+          "description": "When accepting a Dev Container-managed dev certificate (pushed via the syncContainerCert feature option), override the default SAN restriction that limits trusted certificates to localhost / loopback / private IP / docker host names. Enabling this lets a container push a cert with arbitrary DNS or IP entries — only do so when you fully understand and trust the entries the container will push. Has no effect when generateDotNetCert or autoProvision is false (which already gate the push acceptance)."
         },
         "devcontainerDevCerts.defaultKestrelCertificate": {
           "type": "string",

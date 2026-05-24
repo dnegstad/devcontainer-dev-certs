@@ -1,13 +1,28 @@
 {
-    "name": "Dev Certs Test",
-    "image": "mcr.microsoft.com/devcontainers/dotnet:10.0",
+    "name": "Dev Certs Test (Aspire)",
+    "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
     "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:3.0.1": {
+            "moby": false
+        },
+        "ghcr.io/devcontainers/features/dotnet:2.5.0": {
+            "version": "10.0.203"
+        },
         "./devcontainer-dev-certs": {}
     },
+    "mounts": [
+        {
+            "type": "volume",
+            "source": "aspire-cli",
+            "target": "/home/vscode/.aspire-cli"
+        }
+    ],
+    "onCreateCommand": "sudo bash .devcontainer/aspire-cli/install.sh",
     "customizations": {
         "vscode": {
             "extensions": [
                 "ms-dotnettools.csdevkit",
+                "microsoft-aspire.aspire-vscode",
                 "${containerWorkspaceFolder}/.devcontainer/devcontainer-dev-certs-remote.vsix"
             ]
         }

@@ -36,6 +36,11 @@ function makeFakeStore(
     findExistingDevCert: vi.fn().mockResolvedValue(null),
     saveCertificate: vi.fn().mockResolvedValue(undefined),
     trustCertificate: vi.fn().mockResolvedValue(undefined),
+    // Default to NOT trusted so trustExternalCertificate's verify-on-disk
+    // short-circuit doesn't accidentally skip the trustCertificate call
+    // in tests that pre-date that check. Tests that want to assert the
+    // short-circuit fires override this to true.
+    isCertTrusted: vi.fn().mockResolvedValue(false),
     removeCertificates: vi.fn().mockResolvedValue(undefined),
     checkStatus: vi.fn().mockResolvedValue({
       exists: false,
@@ -218,6 +223,70 @@ describe("CertManager", () => {
         const fs = await import("fs");
         fs.rmSync(dir, { recursive: true, force: true });
       }
+    });
+  });
+
+  // Pins the design contract from issue #63: trust for a container-pushed
+  // cert MUST flow through the same `store.trustCertificate(cert)` hook
+  // the host-generation flow uses. That hook is where the per-platform
+  // trust surfaces live — on Linux it does `trustInDotNetRootStore` +
+  // `trustViaOpenSsl` + `trustInNssBrowsers` (NSS browser trust!), on
+  // macOS it sets login keychain trust policy, on Windows it adds to
+  // CurrentUser/Root. Going through `trustCertificate` is what keeps
+  // "trusted on the host" mean the same thing regardless of where the
+  // cert originated. The save/`my/` step is INTENTIONALLY skipped — the
+  // host never holds the private key in this flow.
+  describe("trustExternalCertificate (reverse-sync)", () => {
+    it("invokes the same store.trustCertificate hook as the generation flow", async () => {
+      const generated = await makeTestCert();
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.trustCertificate).toHaveBeenCalledTimes(1);
+      expect(store.trustCertificate).toHaveBeenCalledWith(generated.cert);
+    });
+
+    it("does NOT call saveCertificate (no private key sync, no my/ write)", async () => {
+      const generated = await makeTestCert();
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.saveCertificate).not.toHaveBeenCalled();
+    });
+
+    it("does not consult findExistingDevCert — the caller supplied the cert", async () => {
+      const generated = await makeTestCert();
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.findExistingDevCert).not.toHaveBeenCalled();
+    });
+
+    it("verifies on-disk trust state via store.isCertTrusted before invoking trustCertificate", async () => {
+      const generated = await makeTestCert();
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.isCertTrusted).toHaveBeenCalledTimes(1);
+      expect(store.isCertTrusted).toHaveBeenCalledWith(generated.cert);
+    });
+
+    it("short-circuits when isCertTrusted returns true — no redundant platform trust call", async () => {
+      // Idempotency contract: repeated trust calls for an already-
+      // trusted cert must NOT re-invoke the platform trust step. On
+      // macOS in particular, `security add-trusted-cert` is not a
+      // true no-op for an already-trusted cert and can re-prompt for
+      // the keychain password; the manager guards against that here.
+      const generated = await makeTestCert();
+      store = makeFakeStore({
+        isCertTrusted: vi.fn().mockResolvedValue(true),
+      });
+      mockedCreateStore.mockResolvedValue(store);
+      const manager = new CertManager();
+      await manager.trustExternalCertificate(generated.cert);
+
+      expect(store.isCertTrusted).toHaveBeenCalledTimes(1);
+      expect(store.trustCertificate).not.toHaveBeenCalled();
     });
   });
 });

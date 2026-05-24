@@ -146,23 +146,33 @@ describe("LinuxCertificateStore", () => {
       );
     });
 
-    it("sweeps stale aspnetcore-localhost-*.pem from a previous rotation", async () => {
-      // Plant a stale dev-cert PEM with a different thumbprint.
+    it("is purely additive — does NOT remove other aspnetcore-localhost-*.pem files in the trust dir", async () => {
+      // Pin the post-fix contract: trustCertificate must never remove or
+      // modify other dev cert PEMs that happen to share the
+      // `aspnetcore-localhost-*.pem` filename pattern. The
+      // container-to-host reverse-sync flow and the host-generation
+      // flow can each result in a separate cert being trusted in the
+      // same directory; sweeping "other" PEMs as part of trust would
+      // turn every trust call into an implicit revocation of every
+      // other dev cert in the trust dir, ping-ponging trust between
+      // the two flows. Only the cleanup command (with explicit user
+      // approval via the modal prompt) may remove certificates from
+      // the trust dir.
       fs.mkdirSync(testTrustDir, { recursive: true });
-      const stalePem = path.join(
+      const otherPem = path.join(
         testTrustDir,
-        "aspnetcore-localhost-OLDTHUMBPRINT.pem"
+        "aspnetcore-localhost-OTHERTHUMBPRINT.pem"
       );
-      fs.writeFileSync(
-        stalePem,
-        "-----BEGIN CERTIFICATE-----\nstale\n-----END CERTIFICATE-----\n"
-      );
-      expect(fs.existsSync(stalePem)).toBe(true);
+      const otherContent =
+        "-----BEGIN CERTIFICATE-----\nother\n-----END CERTIFICATE-----\n";
+      fs.writeFileSync(otherPem, otherContent);
 
       const { cert } = await makeTestCert();
       await store.trustCertificate(cert);
 
-      expect(fs.existsSync(stalePem)).toBe(false);
+      // The other PEM is still present and its content is unchanged.
+      expect(fs.existsSync(otherPem)).toBe(true);
+      expect(fs.readFileSync(otherPem, "utf-8")).toBe(otherContent);
     });
 
     it("root store PFX contains only the public cert (no private key)", async () => {

@@ -77,7 +77,8 @@
     "package": "vsce package --no-dependencies"
   },
   "dependencies": {
-    "@devcontainer-dev-certs/shared": "*"
+    "@devcontainer-dev-certs/shared": "*",
+    "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

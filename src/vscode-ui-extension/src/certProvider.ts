@@ -187,9 +187,19 @@ export class CertProvider {
     autoProvision: boolean
   ): Promise<CachedCert | null> {
     if (this.cachedDotNet) {
+      // The cache identifies the cert we're managing; the on-disk
+      // trust state is re-verified every call. A hit MUST require
+      // both (a) the cert still in the platform store at the cached
+      // thumbprint AND (b) the cert is currently trusted. If trust
+      // state regressed underneath (an external tool revoked it, the
+      // OS trust store was cleared, the cleanup command removed an
+      // associated artifact), fall through to the re-trust path
+      // instead of serving a "ready" bundle that no longer reflects
+      // reality.
       const status = await this.certManager.check();
       if (
         status.exists &&
+        status.isTrusted &&
         status.thumbprint === this.cachedDotNet.v3.thumbprint
       ) {
         return this.cachedDotNet;
@@ -292,13 +302,43 @@ export class CertProvider {
     const installToDotNetStore =
       globalStoreOptIn && !config.excludeFromDotNetStore;
 
-    // The cache key includes the resolved store opt-in so toggling the
-    // global setting (or excludeFromDotNetStore on a single cert) rebuilds
-    // the material with the right dotNetStorePfxBase64 presence rather
-    // than serving a stale entry from before the toggle.
+    // The cache key MUST invalidate when the user changes:
+    //   - the cert content (covered by `loaded.thumbprint`)
+    //   - the resolved store opt-in (toggling globalStoreOptIn or
+    //     excludeFromDotNetStore changes whether dotNetStorePfxBase64
+    //     appears on the wire)
+    //   - the source file (mtime + size catches edits like a
+    //     re-encrypted PFX whose cert content is unchanged but whose
+    //     bytes differ; serving the cached old bytes against the new
+    //     pfxPassword setting would yield a PFX Kestrel can't open)
+    //   - the PFX password (for PEM sources we synthesize a PFX with
+    //     this password baked in; for PFX sources `defaultKestrelCert`
+    //     surfaces this password to Kestrel against the original file
+    //     bytes — either way, a password change requires rebuild)
+    //
+    // Source-file identity is `${size}@${mtimeNs}` from a single
+    // fs.statSync, cheap and avoids hashing large files. Stat failures
+    // (file removed mid-flight) collapse to a sentinel that forces a
+    // cache miss on the next call. The password is included as
+    // `${length}:${value}` so an empty password and an unset password
+    // produce distinct keys; the value lives in-memory only (Map key
+    // inside the CertProvider instance), it's already in the
+    // extension's process memory via the user's VS Code setting.
+    const sourcePath = hasPfx ? config.pfxPath! : config.pemCertPath!;
+    let sourceStat: string;
+    try {
+      const st = fs.statSync(sourcePath);
+      sourceStat = `${st.size}@${st.mtimeMs}`;
+    } catch {
+      sourceStat = "none";
+    }
+    const passwordTag =
+      config.pfxPassword === undefined
+        ? "unset"
+        : `${config.pfxPassword.length}:${config.pfxPassword}`;
     const cacheKey = `${config.name}:${loaded.thumbprint}:${
       installToDotNetStore ? "store" : "nostore"
-    }`;
+    }:${passwordTag}:${sourceStat}`;
     const cached = this.cachedUser.get(cacheKey);
     if (cached) return cached;
 
