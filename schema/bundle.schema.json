@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/dnegstad/devcontainer-dev-certs/main/schema/bundle.schema.json",
+  "title": "devcontainer-dev-certs bundle",
+  "description": "Input schema for the `devcontainer-dev-certs-install --bundle-json` fallback installer. Use this when invoking the installer outside of VS Code (JetBrains, Vim, raw CLI, CI). Reference from your bundle file via `\"$schema\": \"https://raw.githubusercontent.com/dnegstad/devcontainer-dev-certs/main/schema/bundle.schema.json\"` to get autocomplete and validation in any editor that honors JSON Schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["certs"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Schema URL. Optional; present so editors can pick up validation without out-of-band configuration."
+    },
+    "certs": {
+      "type": "array",
+      "description": "Certificates to install into the container's .NET X509Store and (when trustInContainer is true) the OpenSSL trust directory.",
+      "items": { "$ref": "#/$defs/cert" }
+    },
+    "extraDestinations": {
+      "type": "array",
+      "description": "Additional directories to write cert artifacts to. Every cert in `certs` is written to every destination according to the destination's `format`. Useful for non-.NET workloads (nginx, Java keystores, Python requests bundles, etc.).",
+      "items": { "$ref": "#/$defs/extraDestination" }
+    }
+  },
+  "$defs": {
+    "cert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "thumbprint", "pemPath"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,64}$",
+          "description": "Filename stem used for this cert in extra destinations and (for user certs) in the OpenSSL trust directory. Constrained to [A-Za-z0-9._-], 1-64 chars."
+        },
+        "thumbprint": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]+$",
+          "description": "SHA-1 fingerprint of the certificate, hex-encoded with no separators. Used as the on-disk filename in the .NET X509Store (`{thumbprint}.pfx`) where Kestrel discovers it."
+        },
+        "pemPath": {
+          "type": "string",
+          "description": "Absolute path to the certificate in PEM form. Required; used to compute the OpenSSL trust-dir filename and to synthesize the root-store PFX when `rootPfxPath` is omitted."
+        },
+        "pfxPath": {
+          "type": "string",
+          "description": "Absolute path to a PFX (PKCS#12) containing the certificate and its private key. When present, copied verbatim to the .NET X509Store as `{thumbprint}.pfx`. Optional only for CA-only certs (no private key)."
+        },
+        "pemKeyPath": {
+          "type": "string",
+          "description": "Absolute path to the private key in PEM form. Optional; used when writing `{name}-bundle.pem` or `{name}.key` to extra destinations."
+        },
+        "rootPfxPath": {
+          "type": "string",
+          "description": "Absolute path to a public-cert-only PFX for installation into the .NET CurrentUser/Root store. Optional; synthesized via `openssl pkcs12 -nokeys` when omitted."
+        },
+        "trustInContainer": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true (default), install into the .NET CurrentUser/Root store and the OpenSSL trust directory in addition to CurrentUser/My. When false, only the My store is populated — useful when the cert is for serving only, not for trust."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["dotnet-dev", "user"],
+          "default": "user",
+          "description": "`dotnet-dev` uses the historic `aspnetcore-localhost-{thumbprint}.pem` filename in the OpenSSL trust directory; `user` (default) uses `{name}.pem`."
+        }
+      }
+    },
+    "extraDestination": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Absolute path of a directory to write cert artifacts into. Created if it does not exist."
+        },
+        "format": {
+          "type": "string",
+          "enum": ["pem", "key", "pem-bundle", "pfx", "all"],
+          "default": "all",
+          "description": "Which artifact(s) to write per cert. `pem` = `{name}.pem` (cert only); `key` = `{name}.key`; `pem-bundle` = `{name}-bundle.pem` (cert+key); `pfx` = `{name}.pfx`; `all` = every applicable artifact."
+        }
+      }
+    }
+  }
+}

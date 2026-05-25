@@ -1,0 +1,13 @@
+{
+    "name": "manual-setup-example",
+    "image": "mcr.microsoft.com/devcontainers/dotnet:9.0",
+    "features": {
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
+            "installFallbackTools": true
+        }
+    },
+    "mounts": [
+        "source=${localEnv:HOME}/.dev-certs,target=/host-dev-certs,type=bind,readonly"
+    ],
+    "postStartCommand": "devcontainer-dev-certs-install --bundle-json /host-dev-certs/bundle.json || true"
+}
