@@ -8,6 +8,12 @@ GENERATE_DOTNET_CERT="${GENERATEDOTNETCERT:-true}"
 SYNC_USER_CERTIFICATES="${SYNCUSERCERTIFICATES:-true}"
 SYNC_CONTAINER_CERT="${SYNCCONTAINERCERT:-false}"
 EXTRA_CERT_DESTINATIONS="${EXTRACERTDESTINATIONS:-}"
+INSTALL_FALLBACK_TOOLS="${INSTALLFALLBACKTOOLS:-false}"
+
+# Resolve our own source directory so the fallback script copy works
+# regardless of where the devcontainer CLI mounts us.
+FEATURE_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FALLBACK_BIN_PATH="/usr/local/bin/devcontainer-dev-certs-install"
 
 REMOTE_USER="${_REMOTE_USER:-vscode}"
 REMOTE_USER_HOME="${_REMOTE_USER_HOME:-/home/${REMOTE_USER}}"
@@ -26,7 +32,7 @@ fi
 # Validate that no feature option contains a newline. We append these to
 # /etc/environment, and an embedded newline would inject an extra env line
 # (potentially with a name the operator didn't intend).
-for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS; do
+for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS INSTALL_FALLBACK_TOOLS; do
     case "${!varname}" in
         *$'\n'*)
             echo "Error: feature option ${varname} must not contain newlines." >&2
@@ -47,6 +53,39 @@ if [ "${TRUST_NSS}" = "true" ]; then
         dnf install -y nss-tools
         dnf clean all
     fi
+fi
+
+# Install fallback-script prerequisites if requested. The script requires
+# openssl unconditionally and jq for the --bundle-json form; install only
+# what's missing so this is a no-op on images that already provide them.
+if [ "${INSTALL_FALLBACK_TOOLS}" = "true" ]; then
+    declare -a FALLBACK_PKGS=()
+    command -v openssl &>/dev/null || FALLBACK_PKGS+=("openssl")
+    command -v jq &>/dev/null || FALLBACK_PKGS+=("jq")
+    if [ "${#FALLBACK_PKGS[@]}" -gt 0 ]; then
+        if command -v apt-get &>/dev/null; then
+            apt-get update -y
+            apt-get install -y --no-install-recommends "${FALLBACK_PKGS[@]}"
+            rm -rf /var/lib/apt/lists/*
+        elif command -v apk &>/dev/null; then
+            apk add --no-cache "${FALLBACK_PKGS[@]}"
+        elif command -v dnf &>/dev/null; then
+            dnf install -y "${FALLBACK_PKGS[@]}"
+            dnf clean all
+        else
+            echo "Warning: installFallbackTools=true but no supported package manager found; skipping." >&2
+        fi
+    fi
+fi
+
+# Deliver the fallback installer to a stable PATH location so non-VS Code
+# consumers (JetBrains, Vim, raw CLI) have something to invoke. The script
+# is small and inert at rest, so we always copy regardless of options —
+# only its runtime prerequisites are gated by installFallbackTools above.
+if [ -f "${FEATURE_SRC_DIR}/scripts/setup-cert.sh" ]; then
+    install -m 0755 "${FEATURE_SRC_DIR}/scripts/setup-cert.sh" "${FALLBACK_BIN_PATH}"
+else
+    echo "Warning: scripts/setup-cert.sh not found under ${FEATURE_SRC_DIR}; fallback installer will not be available." >&2
 fi
 
 # Create .NET X509Store CurrentUser\My directory
@@ -220,6 +259,17 @@ append_profile "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
 append_profile "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
 append_profile "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
 
+# Path hints for non-VS Code consumers. These let a postStartCommand or an
+# editor "external tool" config invoke the installer and locate the trust
+# stores without hardcoding the canonical paths. We export the resolved
+# per-user paths into /etc/environment (pam_env can't expand $HOME) and the
+# $HOME-expanded form into profile.d so each user gets their own at login.
+append_profile "DEVCONTAINER_DEV_CERTS_INSTALL_BIN" "${FALLBACK_BIN_PATH}"
+# Profile.d entries that need per-user $HOME expansion at login time.
+echo "export DEVCONTAINER_DEV_CERTS_DOTNET_STORE_DIR=\"\$HOME/.dotnet/corefx/cryptography/x509stores/my\"" >> "${PROFILE_SCRIPT}"
+echo "export DEVCONTAINER_DEV_CERTS_DOTNET_ROOT_STORE_DIR=\"\$HOME/.dotnet/corefx/cryptography/x509stores/root\"" >> "${PROFILE_SCRIPT}"
+echo "export DEVCONTAINER_DEV_CERTS_TRUST_DIR=\"\$HOME/.aspnet/dev-certs/trust\"" >> "${PROFILE_SCRIPT}"
+
 # Suppress dotnet's first-run HTTPS dev cert provisioning ONLY when the
 # host is the source.
 #
@@ -266,6 +316,10 @@ append_env "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
+append_env "DEVCONTAINER_DEV_CERTS_INSTALL_BIN" "${FALLBACK_BIN_PATH}"
+append_env "DEVCONTAINER_DEV_CERTS_DOTNET_STORE_DIR" "${DOTNET_STORE_DIR}"
+append_env "DEVCONTAINER_DEV_CERTS_DOTNET_ROOT_STORE_DIR" "${DOTNET_ROOT_STORE_DIR}"
+append_env "DEVCONTAINER_DEV_CERTS_TRUST_DIR" "${TRUST_DIR}"
 # Mirror the dotnet-autogen suppression into /etc/environment so PAM-based
 # sessions (sshd, console) see the same gating logic as login shells. Same
 # conditional as the profile.d write above — see the comment there.
@@ -310,9 +364,11 @@ echo "  .NET cert store:      ${DOTNET_STORE_DIR}"
 echo "  .NET root store:      ${DOTNET_ROOT_STORE_DIR}"
 echo "  OpenSSL trust:        ${TRUST_DIR}"
 echo "  SSL_CERT_DIR:         ${SSL_CERT_DIR_RESOLVED}"
+echo "  fallback installer:   ${FALLBACK_BIN_PATH}"
 echo "  generateDotNetCert:   ${GENERATE_DOTNET_CERT}"
 echo "  syncUserCertificates: ${SYNC_USER_CERTIFICATES}"
 echo "  syncContainerCert:    ${SYNC_CONTAINER_CERT}"
+echo "  installFallbackTools: ${INSTALL_FALLBACK_TOOLS}"
 if [ "${SUPPRESS_DOTNET_AUTOGEN}" = "true" ]; then
     echo "  DOTNET_GENERATE_ASPNET_CERTIFICATE: false (host generates the dev cert — suppressing dotnet's racing first-run auto-gen)"
 else

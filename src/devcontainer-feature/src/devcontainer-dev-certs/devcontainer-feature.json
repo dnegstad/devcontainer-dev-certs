@@ -43,6 +43,11 @@
       "type": "string",
       "default": "",
       "description": "Comma-separated additional directories to write cert artifacts to. Each entry: <abs-dir>[=<format>] where format is pem|key|pem-bundle|pfx|all (defaults to all). Every synced cert is written under the directory as {name}.{pem,key,pfx} (and/or {name}-bundle.pem). Example: /etc/nginx/certs=pem,/var/myapp."
+    },
+    "installFallbackTools": {
+      "type": "boolean",
+      "default": false,
+      "description": "Install the runtime prerequisites (openssl, jq) that the fallback `devcontainer-dev-certs-install` script needs. The script is always delivered to /usr/local/bin/ regardless of this option — set this to true only when you intend to invoke it manually (e.g. for JetBrains / Vim / CLI users) and your base image does not already provide openssl and jq."
     }
   },
   "customizations": {
