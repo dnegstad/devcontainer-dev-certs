@@ -134,8 +134,7 @@ function devCertPfx(): Buffer {
 
 function nonDevCertPfx(): Buffer {
   // Random bytes — parsePfx fails to parse them, isAspNetDevCertPfx
-  // returns false (fail-closed). Same effective semantics as the old
-  // fixture; just no need to embed the OID byte run.
+  // returns false (fail-closed).
   return Buffer.from("NOT-A-DEV-CERT");
 }
 

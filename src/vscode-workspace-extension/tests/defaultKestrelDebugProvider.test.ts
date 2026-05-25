@@ -37,10 +37,10 @@ function resolve(
   if (!fn) throw new Error("provider lacks resolveDebugConfigurationWithSubstitutedVariables");
   // token arg is optional in the API; folder is too. Both are unused.
   const result = fn(undefined, config);
-  if (!result || result instanceof Promise) {
-    throw new Error("provider returned undefined or a promise unexpectedly");
+  if (!result || typeof (result as PromiseLike<unknown>).then === "function") {
+    throw new Error("provider returned undefined or a thenable unexpectedly");
   }
-  return result;
+  return result as vscode.DebugConfiguration;
 }
 
 describe("createDefaultKestrelDebugProvider", () => {

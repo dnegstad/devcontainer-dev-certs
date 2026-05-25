@@ -93,7 +93,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // the consent prompt, host-setting gating, and certProvider dispatch all
   // live here so we don't drift between versions.
   const resolveAndProvision = async (
-    args: GetAllCertMaterialArgs | undefined
+    args: Partial<GetAllCertMaterialArgs> | undefined
   ): Promise<GetAllCertMaterialArgs> => {
     const autoProvisionCfg = vscode.workspace
       .getConfiguration("devcontainer-dev-certs")
@@ -126,7 +126,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.getAllCertMaterial",
-      async (args: GetAllCertMaterialArgs | undefined): Promise<CertBundle> => {
+      async (
+        args: Partial<GetAllCertMaterialArgs> | undefined
+      ): Promise<CertBundle> => {
         try {
           const effective = await resolveAndProvision(args);
           const bundle = await certProvider.getAllCertMaterial(effective);
@@ -151,7 +153,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.getAllCertMaterialV3",
       async (
-        args: GetAllCertMaterialArgs | undefined
+        args: Partial<GetAllCertMaterialArgs> | undefined
       ): Promise<CertBundleV3> => {
         try {
           const effective = await resolveAndProvision(args);
@@ -388,7 +390,10 @@ async function promptForContainerCertConsent(
 }
 
 export interface ResolveDotnetProvisioningDeps {
-  args: GetAllCertMaterialArgs | undefined;
+  // Partial because the IPC entry points accept partial-or-missing args from
+  // pinned older workspace extensions; resolveDotnetProvisioning normalizes
+  // them into a fully-populated GetAllCertMaterialArgs before downstream use.
+  args: Partial<GetAllCertMaterialArgs> | undefined;
   hostWantsDotNet: boolean;
   autoProvision: boolean;
   checkCert: () => Promise<{ exists: boolean; isTrusted: boolean }>;
