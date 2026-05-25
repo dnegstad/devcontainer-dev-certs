@@ -58,7 +58,7 @@ async function writeDevPfxInDir(
     ["sign", "verify"]
   );
   const now = new Date();
-  const extensions = [
+  const extensions: Extension[] = [
     new SubjectAlternativeNameExtension(
       [
         ...SAN_DNS_NAMES.map((d) => ({ type: "dns" as const, value: d })),

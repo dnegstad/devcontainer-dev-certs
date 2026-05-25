@@ -4,6 +4,9 @@
   "private": true,
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@peculiar/x509": "^2.0.0",
     "asn1js": "^3.0.10",

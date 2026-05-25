@@ -127,6 +127,7 @@
     "watch": "node esbuild.mjs --watch",
     "test": "vitest run",
     "lint": "eslint src tests",
+    "typecheck": "tsc --noEmit -p tsconfig.lint.json",
     "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
