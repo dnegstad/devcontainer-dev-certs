@@ -13,12 +13,12 @@ import {
 } from "./containerCertAccept";
 import { trustInNss } from "./platform/nssTrust";
 import {
-  initLogger,
   log,
   getOpenSslTrustDir,
   getPemFileName,
   type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import type { CertBundle, CertBundleV3 } from "@devcontainer-dev-certs/shared";
 
 const CONTAINER_CERT_CONSENT_KEY = "containerCertProvisionConsented";

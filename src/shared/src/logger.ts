@@ -1,27 +1,41 @@
-import * as vscode from "vscode";
+/**
+ * Generic log sink interface — structurally compatible with
+ * `vscode.OutputChannel` so the VS Code extension hosts can plug their
+ * channel directly into `setLogSink`. Non-VS-Code consumers (the host CLI,
+ * scripts) supply their own implementation (typically a console wrapper) so
+ * the shared cert / platform layer can call `log()` without a `vscode`
+ * dependency.
+ */
+export interface LogSink {
+  appendLine(message: string): void;
+  /** Optional. Honored by `revealLogger`. */
+  show?(preserveFocus: boolean): void;
+}
 
-let channel: vscode.OutputChannel | undefined;
+let sink: LogSink | undefined;
 
 /**
- * Initialize the shared logger with an output channel.
- * Call once from the extension's activate() function.
- * Returns the channel so it can be registered as a disposable.
+ * Wire up the active log sink. `undefined` disables logging entirely. Safe
+ * to call repeatedly — the most recent call wins.
  */
-export function initLogger(channelName: string): vscode.OutputChannel {
-  channel = vscode.window.createOutputChannel(channelName);
-  return channel;
+export function setLogSink(newSink: LogSink | undefined): void {
+  sink = newSink;
 }
 
 /**
- * Log a timestamped message to the output channel.
- * Requires initLogger() to have been called first.
+ * Log a timestamped message to the active sink. No-op if no sink is set —
+ * the platform / cert layer calls this freely without coordinating with
+ * its hosts about whether logging is enabled.
  */
 export function log(message: string): void {
-  channel?.appendLine(`[${new Date().toISOString()}] ${message}`);
+  sink?.appendLine(`[${new Date().toISOString()}] ${message}`);
 }
 
-/** Reveal the shared output channel. `preserveFocus = true` so a
- *  concurrent prompt doesn't lose focus. No-op if uninitialised. */
+/**
+ * Reveal the active sink (VS Code OutputChannel.show). `preserveFocus = true`
+ * so a concurrent prompt doesn't lose focus. No-op if uninitialized or the
+ * sink doesn't implement `show`.
+ */
 export function revealLogger(): void {
-  channel?.show(true);
+  sink?.show?.(true);
 }

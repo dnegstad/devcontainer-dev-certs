@@ -1,4 +1,5 @@
-export { initLogger, log, revealLogger } from "./logger";
+export { log, revealLogger, setLogSink } from "./logger";
+export type { LogSink } from "./logger";
 export { identityLocalizer } from "./localizer";
 export type { Localizer } from "./localizer";
 export type {

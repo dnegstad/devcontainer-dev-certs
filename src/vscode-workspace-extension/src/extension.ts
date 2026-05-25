@@ -32,7 +32,8 @@ import {
 import { parseExtraCertDestinations } from "./util/destinations";
 import { ensureSslCertDir } from "./util/sslCertDir";
 import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
-import { initLogger, log, revealLogger } from "@devcontainer-dev-certs/shared";
+import { log, revealLogger } from "@devcontainer-dev-certs/shared";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import type {
   CertBundle,
   CertBundleV3,

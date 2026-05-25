@@ -3,6 +3,7 @@
   "private": true,
   "workspaces": [
     "src/shared",
+    "src/cli",
     "src/vscode-ui-extension",
     "src/vscode-workspace-extension"
   ],
