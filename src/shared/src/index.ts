@@ -68,3 +68,15 @@ export type {
   SelectBestOptions,
   UsableDevCert,
 } from "./cert/classify";
+export { generateCertificate } from "./cert/generator";
+export type { GenerateAlgorithm, GeneratedCert } from "./cert/generator";
+export {
+  exportPfx,
+  exportPem,
+  exportRootPfx,
+  exportLoadedCert,
+  certToPem,
+  keyToPem,
+  certToDer,
+} from "./cert/exporter";
+export type { ExportedLoadedCert } from "./cert/exporter";
