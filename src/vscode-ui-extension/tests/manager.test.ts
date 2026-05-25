@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type * as PlatformTypes from "../src/platform/types";
+import type * as PlatformTypes from "@devcontainer-dev-certs/shared/src/platform/types";
 import {
   type PlatformCertificateStore,
   type CertificateStatus,
@@ -7,8 +7,11 @@ import {
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 
-// Mock createPlatformStore so the CertManager uses our fake store.
-vi.mock("../src/platform/types", async (importOriginal) => {
+// Mock createPlatformStore so the CertManager uses our fake store. The
+// CertManager now lives in `@devcontainer-dev-certs/shared` and imports
+// `createPlatformStore` from the sibling `../platform/types`; the mock has
+// to target that exact module path so the shared CertManager sees it too.
+vi.mock("@devcontainer-dev-certs/shared/src/platform/types", async (importOriginal) => {
   const original = await importOriginal<typeof PlatformTypes>();
   return {
     ...original,
@@ -17,7 +20,7 @@ vi.mock("../src/platform/types", async (importOriginal) => {
 });
 
 import { CertManager } from "../src/cert/manager";
-import { createPlatformStore } from "../src/platform/types";
+import { createPlatformStore } from "@devcontainer-dev-certs/shared/src/platform/types";
 
 const mockedCreateStore = vi.mocked(createPlatformStore);
 

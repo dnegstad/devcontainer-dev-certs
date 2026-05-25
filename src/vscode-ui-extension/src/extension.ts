@@ -27,6 +27,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs"));
 
   const certManager = new CertManager({
+    localize: vscode.l10n.t,
     linuxNssTrustReporter: (result, pemPath) => {
       if (result.success) {
         log(`Linux NSS trust: ${result.message}`);

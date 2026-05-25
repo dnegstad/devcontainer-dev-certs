@@ -1,4 +1,6 @@
 export { initLogger, log, revealLogger } from "./logger";
+export { identityLocalizer } from "./localizer";
+export type { Localizer } from "./localizer";
 export type {
   CertMaterial,
   CertKind,
@@ -80,3 +82,42 @@ export {
   certToDer,
 } from "./cert/exporter";
 export type { ExportedLoadedCert } from "./cert/exporter";
+export { CertManager } from "./cert/manager";
+export type { CertManagerOptions } from "./cert/manager";
+
+// Platform trust-store layer — orchestrates per-OS dev-cert storage and
+// trust. Lives in shared so a future host CLI can share the implementation
+// with the VS Code extension.
+export {
+  createPlatformStore,
+} from "./platform/types";
+export type {
+  PlatformCertificateStore,
+  CertificateStatus,
+  CreatePlatformStoreOptions,
+  BaseStoreOptions,
+  LinuxNssTrustReporter,
+} from "./platform/types";
+export {
+  BaseCertificateStore,
+  classifyCandidate as classifyPlatformCandidate,
+  selectBestDevCert as selectBestPlatformDevCert,
+} from "./platform/baseStore";
+export type { ClassifyOptions as PlatformClassifyOptions } from "./platform/baseStore";
+export { LinuxCertificateStore } from "./platform/linuxStore";
+export type { LinuxCertificateStoreOptions } from "./platform/linuxStore";
+export { MacCertificateStore } from "./platform/macStore";
+export {
+  WindowsCertificateStore,
+} from "./platform/windowsStore";
+export type {
+  WindowsStoreLocation,
+  PsCandidate,
+  PsSkipped,
+  PsSkipReason,
+  PsEnumeration,
+} from "./platform/windowsStore";
+export { trustInNss } from "./platform/nssTrust";
+export type { NssTrustResult } from "./platform/nssTrust";
+export { runProcess } from "./platform/processUtil";
+export type { ProcessResult } from "./platform/processUtil";

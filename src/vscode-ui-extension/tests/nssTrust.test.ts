@@ -3,8 +3,11 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-// Mock runProcess to simulate certutil and which commands
-vi.mock("../src/platform/processUtil", () => ({
+// Mock runProcess to simulate certutil and which commands. Target the
+// shared internal module that `trustInNss` actually imports from — mocking
+// the extension's re-export shim would leave the implementation calling
+// the real runProcess.
+vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn(),
 }));
 
@@ -19,7 +22,7 @@ vi.mock("os", async (importOriginal) => {
 });
 
 import { trustInNss } from "../src/platform/nssTrust";
-import { runProcess } from "../src/platform/processUtil";
+import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
 

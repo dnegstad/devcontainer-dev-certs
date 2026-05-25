@@ -11,8 +11,13 @@ import { logMessages } from "./__mocks__/vscode";
 
 initLogger("test");
 
-// Mock runProcess so tests don't need an actual openssl binary.
-vi.mock("../src/platform/processUtil", () => ({
+// Mock runProcess so tests don't need an actual openssl binary. After the
+// platform-layer move into the shared package, the LinuxCertificateStore
+// imports `runProcess` from the shared internal path (`./processUtil`), so
+// the mock target has to be that same shared file — mocking the extension's
+// thin re-export shim won't intercept the import the implementation actually
+// uses.
+vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn().mockResolvedValue({
     exitCode: 0,
     stdout: "abcd1234\n",
@@ -24,16 +29,18 @@ vi.mock("../src/platform/processUtil", () => ({
 // Tests that exercise the NSS step explicitly construct a store with a
 // reporter; the default tests construct it without one, in which case the
 // step is skipped entirely and this mock is never invoked.
-vi.mock("../src/platform/nssTrust", () => ({
+vi.mock("@devcontainer-dev-certs/shared/src/platform/nssTrust", () => ({
   trustInNss: vi.fn(),
 }));
 
-// Override the shared paths to point at temp directories.
+// Override the shared paths to point at temp directories. The
+// LinuxCertificateStore imports these from the shared internal `paths`
+// module, so the mock has to target that same file.
 let testStoreDir: string;
 let testRootStoreDir: string;
 let testTrustDir: string;
 
-vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
+vi.mock("@devcontainer-dev-certs/shared/src/paths", async (importOriginal) => {
   const original = await importOriginal<typeof Shared>();
   return {
     ...original,
@@ -44,8 +51,8 @@ vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
 });
 
 import { LinuxCertificateStore } from "../src/platform/linuxStore";
-import { runProcess } from "../src/platform/processUtil";
-import { trustInNss } from "../src/platform/nssTrust";
+import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
+import { trustInNss } from "@devcontainer-dev-certs/shared/src/platform/nssTrust";
 
 const mockedRunProcess = vi.mocked(runProcess);
 const mockedTrustInNss = vi.mocked(trustInNss);

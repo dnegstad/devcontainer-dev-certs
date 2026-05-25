@@ -16,12 +16,14 @@ vi.mock("os", async (importOriginal) => {
 });
 
 // Mock runProcess so tests don't shell out to the real `security` CLI.
-vi.mock("../src/platform/processUtil", () => ({
+// Target the shared internal module since MacCertificateStore lives there
+// and imports its runProcess via the local `./processUtil`.
+vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn(),
 }));
 
 import { MacCertificateStore } from "../src/platform/macStore";
-import { runProcess } from "../src/platform/processUtil";
+import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
 
