@@ -23,7 +23,6 @@ import {
 export type {
   ClassifiedCandidate,
   CandidateInput,
-  CandidateMetadata,
   UsableDevCert,
 } from "@devcontainer-dev-certs/shared";
 export { extractThumbprintHintFromFilename } from "@devcontainer-dev-certs/shared";
