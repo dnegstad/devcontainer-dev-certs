@@ -85,6 +85,7 @@ export async function runBundle(
   };
 
   fs.mkdirSync(outDir, { recursive: true });
+  warnOnOutOfBundleDirPaths(entry, outDir, containerMount);
   const bundlePath = writeBundle({
     hostOutDir: outDir,
     containerMount,
@@ -92,4 +93,50 @@ export async function runBundle(
   });
   process.stderr.write(`Bundle: ${bundlePath}\n`);
   process.stderr.write(`Thumbprint: ${thumbprint}\n`);
+}
+
+/**
+ * Warn when a cert file referenced by the bundle is NOT under `outDir`.
+ * The writer only rewrites paths under `outDir` to the container mount;
+ * paths outside are left verbatim, which means the in-container
+ * installer will try to read them at their host-filesystem location —
+ * something it can only do if the user has also bind-mounted that
+ * location into the container. The vast majority of the time they
+ * haven't, and a silently-broken bundle is worse than a noisy one.
+ */
+function warnOnOutOfBundleDirPaths(
+  entry: BundleCertEntry,
+  outDir: string,
+  containerMount: string
+): void {
+  const candidates: Array<[string, string]> = [];
+  if (entry.hostPfxPath) candidates.push(["pfxPath", entry.hostPfxPath]);
+  candidates.push(["pemPath", entry.hostPemPath]);
+  if (entry.hostPemKeyPath)
+    candidates.push(["pemKeyPath", entry.hostPemKeyPath]);
+
+  const resolvedOutDir = path.resolve(outDir);
+  const outsideEntries = candidates.filter(([, p]) => {
+    const resolved = path.resolve(p);
+    return !(
+      resolved === resolvedOutDir ||
+      resolved.startsWith(resolvedOutDir + path.sep)
+    );
+  });
+
+  if (outsideEntries.length === 0) return;
+
+  process.stderr.write(
+    `[warn] Cert files reference paths outside --out-dir (${resolvedOutDir}):\n`
+  );
+  for (const [field, p] of outsideEntries) {
+    process.stderr.write(`         ${field}: ${p}\n`);
+  }
+  process.stderr.write(
+    `       The bundle references absolute host paths that the in-container\n` +
+      `       installer will read literally. If you only bind-mount ${resolvedOutDir}\n` +
+      `       to ${containerMount}, those paths won't resolve inside the container.\n` +
+      `       Either copy the cert files into --out-dir and re-run, or arrange\n` +
+      `       additional mounts so the referenced paths exist container-side.\n`
+  );
 }
