@@ -57,6 +57,23 @@ jobs:
       - name: Package Workspace Extension VSIX
         run: npm run package -w src/vscode-workspace-extension
 
+      - name: Build CLI
+        # Same workspace, same shared layer — `dcdc` is the host-side
+        # surface of the same code the extensions ship. Production build
+        # in release contexts so the published bundle matches what the
+        # extensions ship.
+        run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/cli
+
+      - name: Test CLI
+        run: npm test -w src/cli
+
+      - name: Verify CLI package metadata
+        # Guardrail: confirms `npm publish` would produce a valid
+        # tarball (correct `files`, `bin` resolution, no missing
+        # LICENSE/README) without actually publishing. Catches metadata
+        # regressions before they hit a real release.
+        run: npm pack --dry-run -w src/cli
+
       - name: Upload VSIX artifacts
         if: inputs.upload-vsix
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

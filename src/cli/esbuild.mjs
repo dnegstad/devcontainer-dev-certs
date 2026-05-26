@@ -5,7 +5,7 @@ const production = process.argv.includes("--production");
 await esbuild.build({
   entryPoints: ["src/index.ts"],
   bundle: true,
-  outfile: "dist/ddc.js",
+  outfile: "dist/dcdc.js",
   // `vscode` is a build-time stub used only by the shared package's
   // `loggerVscode.ts` helper, which the CLI never imports. Marking it
   // external prevents esbuild from trying to resolve a module that

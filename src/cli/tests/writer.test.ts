@@ -7,7 +7,7 @@ import { writeBundle, type BundleCertEntry } from "../src/bundle/writer";
 let tmpDir: string;
 
 beforeEach(() => {
-  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-writer-test-"));
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-writer-test-"));
 });
 
 afterEach(() => {

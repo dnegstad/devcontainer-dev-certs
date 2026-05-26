@@ -127,7 +127,7 @@ export type {
 } from "./platform/processUtil";
 
 // Backend abstraction — selectable cert-generator backends shared by the
-// host CLI (`ddc`) and the VS Code host extension. Lets both consumers
+// host CLI (`dcdc`) and the VS Code host extension. Lets both consumers
 // pick between the bundled native generator, the `dotnet dev-certs https`
 // pass-through, and (future) an Aspire-aware variant without each
 // having to reimplement availability detection / selection logic.

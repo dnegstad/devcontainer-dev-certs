@@ -24,7 +24,7 @@ interface Check {
 }
 
 /**
- * `ddc doctor` — read-only diagnostics: which backends are available, what
+ * `dcdc doctor` — read-only diagnostics: which backends are available, what
  * `--backend auto` would pick, host trust-store state for the cert (if any)
  * in the out-dir. Mirrors the in-container `devcontainer-dev-certs-install
  * --doctor` ergonomics: every check produces an `[ok]` / `[warn]` / `[fail]`
@@ -66,7 +66,7 @@ export async function runDoctor(
     checks.push({
       label: `out-dir ${outDir}`,
       status: "warn",
-      detail: "does not exist (run `ddc generate` to create it)",
+      detail: "does not exist (run `dcdc generate` to create it)",
     });
   }
 

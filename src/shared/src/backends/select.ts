@@ -33,7 +33,7 @@ async function autoSelect(): Promise<Backend> {
 
 /**
  * Report which backend `auto` would pick on this host without actually
- * constructing it. Useful for `ddc doctor` and for status surfaces in the
+ * constructing it. Useful for `dcdc doctor` and for status surfaces in the
  * VS Code host extension.
  */
 export async function describeAutoBackend(): Promise<BackendKind> {

@@ -34,9 +34,9 @@ describe("NativeBackend.generate with --no-trust", () => {
 
   beforeEach(() => {
     originalHome = process.env.HOME;
-    fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-nativebackend-home-"));
+    fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-nativebackend-home-"));
     process.env.HOME = fakeHome;
-    outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-nativebackend-out-"));
+    outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-nativebackend-out-"));
     backend = new NativeBackend();
   });
 

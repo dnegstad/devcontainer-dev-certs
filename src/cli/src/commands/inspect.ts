@@ -35,7 +35,7 @@ interface InspectReport {
 }
 
 /**
- * `ddc inspect <path>` — load a PFX or PEM (cert-only) and report its
+ * `dcdc inspect <path>` — load a PFX or PEM (cert-only) and report its
  * vital statistics. Text by default; `--json` switches to machine-readable.
  */
 export async function runInspect(

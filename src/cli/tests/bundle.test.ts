@@ -13,7 +13,7 @@ import { generateCertificate, exportPfx, exportPem, VALIDITY_DAYS } from "@devco
 import { runBundle } from "../src/commands/bundle";
 
 /**
- * `ddc bundle` is supposed to flag the silent-broken-bundle case: cert
+ * `dcdc bundle` is supposed to flag the silent-broken-bundle case: cert
  * files referenced by the bundle live outside the `--out-dir`, so the
  * containerize step in the writer leaves their absolute host paths
  * verbatim — and the in-container installer (which only ever sees the
@@ -48,9 +48,9 @@ function collectStderr(): string {
   return writeMock.mock.calls.map((c) => String(c[0])).join("");
 }
 
-describe("ddc bundle out-of-dir warning", () => {
+describe("dcdc bundle out-of-dir warning", () => {
   it("does not warn when cert files live inside --out-dir", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-bundle-test-in-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-test-in-"));
     cleanupDirs.push(dir);
     await makeCertFilesIn(dir);
 
@@ -66,8 +66,8 @@ describe("ddc bundle out-of-dir warning", () => {
   });
 
   it("warns when cert files are NOT under --out-dir", async () => {
-    const certDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-bundle-test-cert-"));
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-bundle-test-out-"));
+    const certDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-test-cert-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-test-out-"));
     cleanupDirs.push(certDir, outDir);
     await makeCertFilesIn(certDir);
 
@@ -87,8 +87,8 @@ describe("ddc bundle out-of-dir warning", () => {
   });
 
   it("flags every out-of-dir file, not just the first one", async () => {
-    const certDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-bundle-test-cert-multi-"));
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-bundle-test-out-multi-"));
+    const certDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-test-cert-multi-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-test-out-multi-"));
     cleanupDirs.push(certDir, outDir);
     await makeCertFilesIn(certDir);
 
@@ -109,7 +109,7 @@ describe("ddc bundle out-of-dir warning", () => {
   it("does not warn for the cert path itself when it's the same as the out-dir base", async () => {
     // Regression guard: a cert at exactly $OUT_DIR/cert.pfx and outDir
     // = $OUT_DIR should not trip the "outside" check.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-bundle-test-exact-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-test-exact-"));
     cleanupDirs.push(dir);
     await makeCertFilesIn(dir);
 

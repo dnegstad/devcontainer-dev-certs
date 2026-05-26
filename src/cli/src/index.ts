@@ -10,7 +10,7 @@ import type { BackendMode } from "@devcontainer-dev-certs/shared";
 const program = new Command();
 
 program
-  .name("ddc")
+  .name("dcdc")
   .description(
     "Host-side dev-cert toolkit. Generates, inspects, trusts, and bundles " +
       "ASP.NET-compatible HTTPS dev certs for use with dev containers — without VS Code."
@@ -128,6 +128,6 @@ program
 // Run.
 program.parseAsync(process.argv).catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`ddc: ${message}\n`);
+  process.stderr.write(`dcdc: ${message}\n`);
   process.exit(1);
 });

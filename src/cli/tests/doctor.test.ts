@@ -87,10 +87,10 @@ afterEach(() => {
   process.exitCode = 0;
 });
 
-describe("ddc doctor — Linux", () => {
+describe("dcdc doctor — Linux", () => {
   it("reports [ok] when openssl and certutil are both on PATH", async () => {
     const restore = stubPlatform("linux");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-linux-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-linux-"));
     cleanupDirs.push(outDir);
 
     mockedRunProcess.mockImplementation(async (cmd: string, args: string[]) => {
@@ -117,7 +117,7 @@ describe("ddc doctor — Linux", () => {
 
   it("reports [warn] when certutil is missing", async () => {
     const restore = stubPlatform("linux");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-linux-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-linux-"));
     cleanupDirs.push(outDir);
 
     mockedRunProcess.mockImplementation(async (cmd: string, args: string[]) => {
@@ -139,10 +139,10 @@ describe("ddc doctor — Linux", () => {
   });
 });
 
-describe("ddc doctor — macOS", () => {
+describe("dcdc doctor — macOS", () => {
   it("checks for the `security` keychain CLI", async () => {
     const restore = stubPlatform("darwin");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-mac-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-mac-"));
     cleanupDirs.push(outDir);
 
     mockedRunProcess.mockImplementation(async (cmd: string, args: string[]) => {
@@ -165,7 +165,7 @@ describe("ddc doctor — macOS", () => {
 
   it("does NOT run Linux-only checks on macOS", async () => {
     const restore = stubPlatform("darwin");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-mac-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-mac-"));
     cleanupDirs.push(outDir);
 
     try {
@@ -181,7 +181,7 @@ describe("ddc doctor — macOS", () => {
 
   it("warns when `security` isn't on PATH", async () => {
     const restore = stubPlatform("darwin");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-mac-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-mac-"));
     cleanupDirs.push(outDir);
 
     // Default mockedRunProcess returns exit 1 for everything — including
@@ -198,10 +198,10 @@ describe("ddc doctor — macOS", () => {
   });
 });
 
-describe("ddc doctor — Windows", () => {
+describe("dcdc doctor — Windows", () => {
   it("reports [ok] when both pwsh and certutil.exe resolve", async () => {
     const restore = stubPlatform("win32");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-win-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-win-"));
     cleanupDirs.push(outDir);
 
     mockedResolveSafeExecPath.mockImplementation((cmd: string) => {
@@ -224,7 +224,7 @@ describe("ddc doctor — Windows", () => {
 
   it("accepts powershell as a fallback when pwsh is absent, with a note", async () => {
     const restore = stubPlatform("win32");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-win-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-win-"));
     cleanupDirs.push(outDir);
 
     mockedResolveSafeExecPath.mockImplementation((cmd: string) => {
@@ -249,7 +249,7 @@ describe("ddc doctor — Windows", () => {
 
   it("warns when neither pwsh nor powershell is found", async () => {
     const restore = stubPlatform("win32");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-win-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-win-"));
     cleanupDirs.push(outDir);
 
     mockedResolveSafeExecPath.mockImplementation((cmd: string) => {
@@ -270,7 +270,7 @@ describe("ddc doctor — Windows", () => {
 
   it("warns when certutil.exe is missing", async () => {
     const restore = stubPlatform("win32");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-win-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-win-"));
     cleanupDirs.push(outDir);
 
     mockedResolveSafeExecPath.mockImplementation((cmd: string) => {
@@ -291,7 +291,7 @@ describe("ddc doctor — Windows", () => {
 
   it("does NOT shell out to `which` on Windows (uses resolveSafeExecPath)", async () => {
     const restore = stubPlatform("win32");
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "ddc-doctor-win-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-doctor-win-"));
     cleanupDirs.push(outDir);
 
     try {

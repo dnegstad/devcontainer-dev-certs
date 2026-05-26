@@ -20,7 +20,7 @@ const DEFAULT_OUT_DIR = path.join(os.homedir(), ".dev-certs");
 const DEFAULT_CONTAINER_MOUNT = "/host-dev-certs";
 
 /**
- * `ddc generate` — produce a fresh dev cert + bundle.json. Picks a backend
+ * `dcdc generate` — produce a fresh dev cert + bundle.json. Picks a backend
  * (native by default, dotnet pass-through on macOS when available, with
  * `--backend` to override) and runs the host trust step unless `--no-trust`
  * is passed.

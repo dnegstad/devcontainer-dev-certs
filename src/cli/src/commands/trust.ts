@@ -12,7 +12,7 @@ export interface TrustCommandOptions {
 }
 
 /**
- * `ddc trust <cert-path>` — add an existing cert to the host's OS trust
+ * `dcdc trust <cert-path>` — add an existing cert to the host's OS trust
  * store. Useful when the user already has a cert (generated elsewhere) and
  * just needs the host trust step. Goes through the shared
  * `PlatformCertificateStore.trustCertificate` — same hook the host

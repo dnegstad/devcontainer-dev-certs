@@ -24,7 +24,7 @@ import type { Backend, GenerateOptions, GenerateResult } from "./types";
  *
  * - `noTrust: true`: generate purely in memory and write only to
  *   `outDir`. The platform store is NOT touched. The typical caller
- *   here is `ddc generate --no-trust` for "give me cert files to
+ *   here is `dcdc generate --no-trust` for "give me cert files to
  *   bind-mount into a container" — that user has explicitly opted out
  *   of host-side cert installation, so we honor it by keeping our
  *   side effects bounded to `outDir`.

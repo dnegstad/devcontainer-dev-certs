@@ -1,5 +1,5 @@
 /**
- * Backend abstraction shared by `ddc` (host CLI) and the VS Code host
+ * Backend abstraction shared by `dcdc` (host CLI) and the VS Code host
  * extension. Lets both consumers pick between equivalent generators —
  * the bundled-in native cert primitives or the `dotnet dev-certs https`
  * CLI pass-through — without each having to reimplement the selection /
