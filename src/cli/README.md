@@ -153,8 +153,16 @@ Two backends today; both produce certs the in-container installer accepts.
 
 On Windows, the dotnet backend (and any other shell-out in this tool) resolves its command through PATH before spawning, so a malicious binary planted in the working directory can't hijack the lookup.
 
+## `--no-trust` semantics
+
+The two backends honor `--no-trust` differently:
+
+- **`--backend native --no-trust`** generates the cert purely in memory and writes only to `--out-dir`. The host's `.NET` X509 store and OS trust store are not touched. This is the right choice for "give me cert files to bind-mount into a container, don't install anything on my host."
+- **`--backend dotnet --no-trust`** skips the OS trust prompt, but `dotnet dev-certs https` still persists the cert into the `.NET` X509 store as a side effect — that's how `dotnet dev-certs` itself works, regardless of `--trust`. If you want strict file-only output, use the native backend.
+
+Without `--no-trust`, both backends write to the `.NET` X509 store and trust the cert in the OS — that's the host-trust contract (it's where `dotnet dev-certs --check`, host-running Kestrel, and the VS Code host extension all look for the cert).
+
 ## Limitations
 
 - **No published binary yet.** Build from source as described above.
-- **Native backend writes to the platform store even with `--no-trust`.** `--no-trust` skips the OS trust prompt but the cert still lands in `~/.dotnet/corefx/cryptography/x509stores/my/` (or the Windows store) because that's where the manager generates into. The flag controls the trust step, not the generation step.
 - **No reverse sync.** The VS Code workspace extension's `syncContainerCert` flow (pushing a container-side cert back to the host) needs the host extension's consent UI; there's no equivalent in the CLI.

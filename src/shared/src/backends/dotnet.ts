@@ -18,6 +18,16 @@ import type { Backend, GenerateOptions, GenerateResult } from "./types";
  * `dotnet dev-certs --format ...` only accepts one format per call, and
  * `--trust` only does anything on the first invocation anyway (it's
  * idempotent w.r.t. the OS trust store).
+ *
+ * `noTrust` only suppresses the OS-trust step here; it does NOT
+ * suppress the .NET store side effect. `dotnet dev-certs https`
+ * always persists the generated cert into the .NET X509Store
+ * regardless of `--trust`. If a caller needs strict isolation —
+ * cert files in `outDir` and nothing else — they should use the
+ * native backend, which honors `noTrust` by skipping the store
+ * entirely. We can't paper over this here without re-implementing
+ * what `dotnet dev-certs` does, which is the entire point of using
+ * the dotnet backend in the first place.
  */
 export class DotnetBackend implements Backend {
   readonly kind = "dotnet" as const;
