@@ -7,8 +7,8 @@ on:
         description: Use production build (minified, no sourcemaps)
         type: boolean
         default: false
-      upload-vsix:
-        description: Package and upload VSIX artifacts
+      upload-artifacts:
+        description: Package and upload release artifacts (VSIXes and CLI tarball) for downstream publish jobs.
         type: boolean
         default: false
 
@@ -74,12 +74,26 @@ jobs:
         # regressions before they hit a real release.
         run: npm pack --dry-run -w src/cli
 
+      - name: Package CLI tarball
+        if: inputs.upload-artifacts
+        # Produces the actual tarball the publish job will hand to
+        # `npm publish`. Pinned to `src/cli/dist/` so the upload-artifact
+        # step has a stable, single-file path.
+        run: npm pack -w src/cli --pack-destination src/cli/dist
+
       - name: Upload VSIX artifacts
-        if: inputs.upload-vsix
+        if: inputs.upload-artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vsix
           path: src/vscode-*-extension/*.vsix
+
+      - name: Upload CLI tarball
+        if: inputs.upload-artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cli-tarball
+          path: src/cli/dist/*.tgz
 
   windows-certificate-validation:
     name: Windows Certificate Validation

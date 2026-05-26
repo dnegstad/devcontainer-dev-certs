@@ -37,11 +37,12 @@ jobs:
         run: |
           NEXT="${{ steps.version.outputs.next }}"
 
-          # Extension package.json files
+          # Extension + CLI package.json files
           for f in \
             src/vscode-ui-extension/package.json \
             src/vscode-workspace-extension/package.json \
-            src/shared/package.json; do
+            src/shared/package.json \
+            src/cli/package.json; do
             jq --arg v "$NEXT" '.version = $v' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
           done
 
