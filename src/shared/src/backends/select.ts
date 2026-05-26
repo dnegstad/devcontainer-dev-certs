@@ -19,11 +19,6 @@ export async function selectBackend(mode: BackendMode): Promise<Backend> {
     }
     return backend;
   }
-  if (mode === "aspire") {
-    throw new Error(
-      "--backend aspire is not implemented yet. Use 'native' or 'dotnet'."
-    );
-  }
   if (mode === "auto") return autoSelect();
   throw new Error(`Unknown backend mode: ${String(mode)}`);
 }

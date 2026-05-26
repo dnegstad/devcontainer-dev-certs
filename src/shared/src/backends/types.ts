@@ -1,9 +1,9 @@
 /**
  * Backend abstraction shared by `ddc` (host CLI) and the VS Code host
  * extension. Lets both consumers pick between equivalent generators —
- * the bundled-in native cert primitives, the `dotnet dev-certs https` CLI
- * pass-through, or (future) an Aspire-aware backend — without each having
- * to reimplement the selection / availability-detection logic.
+ * the bundled-in native cert primitives or the `dotnet dev-certs https`
+ * CLI pass-through — without each having to reimplement the selection /
+ * availability-detection logic.
  *
  * The interface is deliberately narrow: each backend exposes
  * `isAvailable()` and `generate()`. Trust is bundled into `generate()` so
@@ -11,7 +11,7 @@
  * shell invocation) don't need a separate trust hook.
  */
 
-export type BackendKind = "native" | "dotnet" | "aspire";
+export type BackendKind = "native" | "dotnet";
 
 export type BackendMode = BackendKind | "auto";
 

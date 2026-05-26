@@ -53,10 +53,6 @@ describe("selectBackend", () => {
     await expect(selectBackend("dotnet")).rejects.toThrow(/not found on PATH/);
   });
 
-  it("rejects --backend aspire as not implemented in v0", async () => {
-    await expect(selectBackend("aspire")).rejects.toThrow(/not implemented yet/);
-  });
-
   it("auto-picks dotnet on macOS when dotnet is available", async () => {
     stubPlatform("darwin");
     mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });

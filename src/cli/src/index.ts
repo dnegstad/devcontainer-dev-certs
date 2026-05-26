@@ -22,7 +22,7 @@ program
   .option("-o, --out-dir <path>", "Directory to write artifacts to (default ~/.dev-certs).")
   .addOption(
     new Option("-b, --backend <mode>", "Backend selection.")
-      .choices(["auto", "native", "dotnet", "aspire"])
+      .choices(["auto", "native", "dotnet"])
       .default("auto")
   )
   .option("--no-trust", "Skip the host trust step (PFX / PEM are still emitted).")
