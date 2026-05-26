@@ -120,8 +120,11 @@ export type {
 } from "./platform/windowsStore";
 export { trustInNss } from "./platform/nssTrust";
 export type { NssTrustResult } from "./platform/nssTrust";
-export { runProcess } from "./platform/processUtil";
-export type { ProcessResult } from "./platform/processUtil";
+export { runProcess, resolveSafeExecPath } from "./platform/processUtil";
+export type {
+  ProcessResult,
+  ResolveSafeExecPathOptions,
+} from "./platform/processUtil";
 
 // Backend abstraction — selectable cert-generator backends shared by the
 // host CLI (`ddc`) and the VS Code host extension. Lets both consumers
