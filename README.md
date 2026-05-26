@@ -331,6 +331,17 @@ The companion-extension pattern is VS Code-specific, but the underlying containe
 
 For an end-to-end walkthrough — generating the cert on the host, mounting it in, wiring `postStartCommand` — see [`examples/manual-setup/`](examples/manual-setup/). The summary here is the reference.
 
+### `ddc` — the host-side CLI
+
+[`ddc`](src/cli/README.md) is the host-side CLI that produces the cert files and `bundle.json` the in-container installer below consumes. One command does generation, host trust, and bundle emission:
+
+```bash
+mkdir -p ~/.dev-certs
+ddc generate --out-dir ~/.dev-certs
+```
+
+It also exposes `ddc inspect` (cert details), `ddc bundle` (wrap an existing cert into a bundle.json), `ddc trust` (host-trust an existing cert), and `ddc doctor` (read-only diagnostics). See [`src/cli/README.md`](src/cli/README.md) for the full reference. Doing the steps by hand is documented in [`examples/manual-setup/`](examples/manual-setup/) for situations where the CLI isn't available.
+
 ### The fallback installer
 
 The feature delivers `devcontainer-dev-certs-install` to `/usr/local/bin/` during install. It writes to the same canonical paths the VS Code workspace extension uses — `~/.dotnet/corefx/cryptography/x509stores/{my,root}` and `~/.aspnet/dev-certs/trust/` (with c_rehash symlinks) — so Kestrel's `X509Store` fallback and OpenSSL clients discover certs installed this way exactly as they would extension-installed ones.
