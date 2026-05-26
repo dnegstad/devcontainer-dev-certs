@@ -54,6 +54,23 @@ export async function runInspect(
   }
 }
 
+/**
+ * Locate a sibling PEM private key next to a cert PEM, returning the
+ * first match or null. Probes both naming conventions:
+ *
+ * - `<stem>.key` — what our exporter writes, what `openssl` writes by
+ *   convention.
+ * - `<filename>.key` — what `dotnet dev-certs --format PEM
+ *   --export-path foo.pem` writes (`foo.pem.key`).
+ */
+function findSiblingKey(certPath: string): string | null {
+  const stem = certPath.replace(/\.[^.]+$/, "");
+  for (const candidate of [`${stem}.key`, `${certPath}.key`]) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 async function buildReport(certPath: string): Promise<InspectReport> {
   const ext = certPath.toLowerCase();
   const warnings: string[] = [];
@@ -69,12 +86,12 @@ async function buildReport(certPath: string): Promise<InspectReport> {
     hasPrivateKey = loaded.key !== null;
   } else {
     format = "pem";
-    // PEM inspection: opportunistically look for a sibling key by the
-    // conventional naming (`stem.key` next to `stem.pem`); if absent, treat
-    // it as a cert-only PEM.
-    const stem = certPath.replace(/\.[^.]+$/, "");
-    const candidateKeyPath = `${stem}.key`;
-    const keyPath = fs.existsSync(candidateKeyPath) ? candidateKeyPath : null;
+    // PEM inspection: opportunistically look for a sibling key. Two
+    // conventions are in the wild — `stem.key` (our exporter + openssl)
+    // and `filename.pem.key` (`dotnet dev-certs --format PEM
+    // --export-path foo.pem` writes `foo.pem.key`). Probe both so
+    // dotnet-generated key pairs aren't misreported as cert-only.
+    const keyPath = findSiblingKey(certPath);
     const loaded = loadPemPair(certPath, keyPath);
     cert = loaded.cert;
     hasPrivateKey = loaded.key !== null;

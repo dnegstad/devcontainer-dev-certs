@@ -40,7 +40,7 @@ export async function runBundle(
   const ext = resolvedCertPath.toLowerCase();
   let hostPfxPath: string | null = null;
   let hostPemPath: string;
-  let hostPemKeyPath: string | null = null;
+  let hostPemKeyPath: string | null;
   let thumbprint: string;
 
   const stem = path.join(
@@ -52,9 +52,11 @@ export async function runBundle(
     hostPfxPath = resolvedCertPath;
     const loaded = await loadPfx(resolvedCertPath);
     thumbprint = loaded.cert.thumbprintSha1;
-    // Look for sibling PEM files using common naming conventions.
+    // Look for sibling PEM cert + key. PEM cert is required (the
+    // in-container installer plants `{name}.pem` into the trust dir);
+    // PEM key is optional but needed for `pem-bundle` / `key` extra
+    // destination formats.
     const candidatePem = `${stem}.pem`;
-    const candidateKey = `${stem}.key`;
     if (fs.existsSync(candidatePem)) {
       hostPemPath = candidatePem;
     } else {
@@ -62,16 +64,23 @@ export async function runBundle(
         `Bundle requires a PEM cert next to the PFX. Looked for ${candidatePem}.`
       );
     }
-    if (fs.existsSync(candidateKey)) hostPemKeyPath = candidateKey;
+    hostPemKeyPath = findSiblingKey(candidatePem);
   } else {
     hostPemPath = resolvedCertPath;
-    const candidateKey = `${stem}.key`;
-    const keyPath = fs.existsSync(candidateKey) ? candidateKey : null;
-    const loaded = loadPemPair(resolvedCertPath, keyPath);
+    hostPemKeyPath = findSiblingKey(resolvedCertPath);
+    const loaded = loadPemPair(resolvedCertPath, hostPemKeyPath);
     thumbprint = loaded.cert.thumbprintSha1;
-    if (keyPath) hostPemKeyPath = candidateKey;
-    // Look for sibling PFX too.
-    if (fs.existsSync(`${stem}.pfx`)) hostPfxPath = `${stem}.pfx`;
+    // Sibling PKCS#12: accept either extension. Openssl writes `.p12`
+    // by default (`openssl pkcs12 -export -out ...`); the .NET tooling
+    // and our own exporter write `.pfx`. Probing only one would silently
+    // miss the other.
+    for (const pfxExt of [".pfx", ".p12"]) {
+      const candidate = `${stem}${pfxExt}`;
+      if (fs.existsSync(candidate)) {
+        hostPfxPath = candidate;
+        break;
+      }
+    }
   }
 
   const entry: BundleCertEntry = {
@@ -93,6 +102,23 @@ export async function runBundle(
   });
   process.stderr.write(`Bundle: ${bundlePath}\n`);
   process.stderr.write(`Thumbprint: ${thumbprint}\n`);
+}
+
+/**
+ * Locate a sibling PEM private key next to a cert PEM, returning the
+ * first match or null. Probes both naming conventions:
+ *
+ * - `<stem>.key` — what our exporter writes, what `openssl` writes by
+ *   convention.
+ * - `<filename>.key` — what `dotnet dev-certs --format PEM
+ *   --export-path foo.pem` writes (`foo.pem.key`).
+ */
+function findSiblingKey(certPath: string): string | null {
+  const stem = certPath.replace(/\.[^.]+$/, "");
+  for (const candidate of [`${stem}.key`, `${certPath}.key`]) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
 }
 
 /**

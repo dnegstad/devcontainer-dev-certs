@@ -123,3 +123,78 @@ describe("dcdc bundle out-of-dir warning", () => {
     expect(stderr).not.toContain("outside --out-dir");
   });
 });
+
+describe("ddc bundle sibling-file discovery", () => {
+  it("finds a sibling .p12 (openssl convention) next to a .pem", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-p12-"));
+    cleanupDirs.push(dir);
+    await makeCertFilesIn(dir);
+    // Rename the .pfx → .p12 to simulate the openssl naming convention.
+    fs.renameSync(
+      path.join(dir, "aspnetcore-dev.pfx"),
+      path.join(dir, "aspnetcore-dev.p12")
+    );
+
+    await runBundle(path.join(dir, "aspnetcore-dev.pem"), {
+      outDir: dir,
+      containerMount: "/host-dev-certs",
+      kind: "user",
+    });
+
+    const bundle = JSON.parse(
+      fs.readFileSync(path.join(dir, "bundle.json"), "utf-8")
+    ) as Record<string, unknown>;
+    const cert = (bundle.certs as Array<Record<string, string>>)[0];
+    expect(cert.pfxPath).toBe("/host-dev-certs/aspnetcore-dev.p12");
+  });
+
+  it("finds a sibling key with the dotnet `.pem.key` naming", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-pemkey-"));
+    cleanupDirs.push(dir);
+    await makeCertFilesIn(dir);
+    // Simulate `dotnet dev-certs --format PEM --export-path foo.pem`
+    // by renaming aspnetcore-dev.key → aspnetcore-dev.pem.key. The
+    // .pfx is removed so the key naming is what the test exercises.
+    fs.renameSync(
+      path.join(dir, "aspnetcore-dev.key"),
+      path.join(dir, "aspnetcore-dev.pem.key")
+    );
+    fs.unlinkSync(path.join(dir, "aspnetcore-dev.pfx"));
+
+    await runBundle(path.join(dir, "aspnetcore-dev.pem"), {
+      outDir: dir,
+      containerMount: "/host-dev-certs",
+      kind: "user",
+    });
+
+    const bundle = JSON.parse(
+      fs.readFileSync(path.join(dir, "bundle.json"), "utf-8")
+    ) as Record<string, unknown>;
+    const cert = (bundle.certs as Array<Record<string, string>>)[0];
+    expect(cert.pemKeyPath).toBe("/host-dev-certs/aspnetcore-dev.pem.key");
+  });
+
+  it("prefers the stem-based key naming when both conventions exist", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-bundle-bothkeys-"));
+    cleanupDirs.push(dir);
+    await makeCertFilesIn(dir);
+    // Add a dotnet-style key alongside the our-convention one. Probe
+    // order favors the stem form so an our-exporter cert wins.
+    fs.copyFileSync(
+      path.join(dir, "aspnetcore-dev.key"),
+      path.join(dir, "aspnetcore-dev.pem.key")
+    );
+
+    await runBundle(path.join(dir, "aspnetcore-dev.pem"), {
+      outDir: dir,
+      containerMount: "/host-dev-certs",
+      kind: "user",
+    });
+
+    const bundle = JSON.parse(
+      fs.readFileSync(path.join(dir, "bundle.json"), "utf-8")
+    ) as Record<string, unknown>;
+    const cert = (bundle.certs as Array<Record<string, string>>)[0];
+    expect(cert.pemKeyPath).toBe("/host-dev-certs/aspnetcore-dev.key");
+  });
+});
