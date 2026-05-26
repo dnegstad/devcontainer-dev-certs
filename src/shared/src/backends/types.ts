@@ -15,11 +15,24 @@ export type BackendKind = "native" | "dotnet";
 
 export type BackendMode = BackendKind | "auto";
 
+import type { LinuxNssTrustReporter } from "../platform/types";
+
 export interface GenerateOptions {
   /** Directory that receives PFX / PEM / key artifacts. */
   outDir: string;
   /** Skip the host trust step. PFX / PEM are still emitted. */
   noTrust: boolean;
+  /**
+   * Optional callback invoked after the Linux NSS browser-trust step
+   * with success/failure status and the PEM path. No-op on other
+   * platforms. The native backend forwards it to `CertManager`; the
+   * dotnet backend invokes `trustInNss` directly with it (because
+   * `dotnet dev-certs --trust` itself doesn't touch the NSS DBs that
+   * Firefox / Chromium read). Without a reporter, NSS failures are
+   * silent — surfacing them in a CLI stderr line or a VS Code toast
+   * is the consumer's job.
+   */
+  linuxNssTrustReporter?: LinuxNssTrustReporter;
 }
 
 export interface GenerateResult {

@@ -1,33 +1,46 @@
 import * as fs from "fs";
-import * as path from "path";
-import { loadPfx } from "../cert/loader";
+import { exportPem, exportPfx } from "../cert/exporter";
+import { trustInNss } from "../platform/nssTrust";
 import { runProcess } from "../platform/processUtil";
+import {
+  createPlatformStore,
+  type LinuxNssTrustReporter,
+} from "../platform/types";
 import type { Backend, GenerateOptions, GenerateResult } from "./types";
 
 /**
- * Dotnet backend: shells out to `dotnet dev-certs https`. On macOS this
- * is the canonical way to get a signed-binary-attributed keychain trust
- * prompt — the native backend's `security add-trusted-cert` invocation
- * works but has a less polished UX because the calling binary isn't a
- * notarized Apple cert-management tool. On Windows / Linux the two
- * backends end up writing to the same platform store, so the choice is
- * mostly stylistic.
+ * Dotnet backend: shells out to `dotnet dev-certs https` for the
+ * generate-and-trust step on macOS — where the dotnet binary is
+ * Apple-notarized and produces a cleaner keychain prompt than our
+ * `security add-trusted-cert` invocation does — and then re-exports
+ * the resulting cert from the platform store using our own primitives.
  *
- * Two-pass: one invocation to write the PFX (with `--trust` unless
- * `noTrust` is set), a second to write the PEM. We can't combine them —
- * `dotnet dev-certs --format ...` only accepts one format per call, and
- * `--trust` only does anything on the first invocation anyway (it's
- * idempotent w.r.t. the OS trust store).
+ * Why we don't use dotnet's `--export-path`:
  *
- * `noTrust` only suppresses the OS-trust step here; it does NOT
- * suppress the .NET store side effect. `dotnet dev-certs https`
- * always persists the generated cert into the .NET X509Store
- * regardless of `--trust`. If a caller needs strict isolation —
- * cert files in `outDir` and nothing else — they should use the
- * native backend, which honors `noTrust` by skipping the store
- * entirely. We can't paper over this here without re-implementing
- * what `dotnet dev-certs` does, which is the entire point of using
- * the dotnet backend in the first place.
+ * - `--no-password` is PEM-only in every currently-shipping .NET SDK
+ *   (6/7/8/9). PFX export requires a password, which we'd then have
+ *   to strip locally to match our passwordless convention — at which
+ *   point we're already loading and re-exporting, so we may as well
+ *   skip the broken flag combination.
+ * - `--format PEM --export-path foo.pem` writes `foo.pem` + `foo.pem.key`,
+ *   not `foo.pem` + `foo.key`. The latter is what our `bundle.ts` /
+ *   `inspect.ts` sibling-discovery probes for, what the in-container
+ *   installer expects, and what the native backend produces. Going
+ *   through our own exporters keeps naming uniform across backends.
+ *
+ * So the flow is:
+ *   1. `dotnet dev-certs https [--trust]` — generates (if absent) and
+ *      trusts. No file export.
+ *   2. `findExistingDevCert()` against the platform store — same path
+ *      the rest of the codebase uses to discover dotnet-installed certs.
+ *   3. `exportPfx` + `exportPem` — write the files to outDir under our
+ *      conventional names with our conventional permissions.
+ *
+ * On Linux, `dotnet dev-certs --trust` only populates the OpenSSL trust
+ * dir and the .NET Root store; it doesn't touch the NSS DBs that
+ * Firefox / Chromium read. We supplement that with our own `trustInNss`
+ * step so the dotnet backend's trust outcome matches the native
+ * backend's on Linux.
  */
 export class DotnetBackend implements Backend {
   readonly kind = "dotnet" as const;
@@ -40,56 +53,50 @@ export class DotnetBackend implements Backend {
   async generate(options: GenerateOptions): Promise<GenerateResult> {
     fs.mkdirSync(options.outDir, { recursive: true });
 
-    const pfxPath = path.join(options.outDir, "aspnetcore-dev.pfx");
-    const pemPath = path.join(options.outDir, "aspnetcore-dev.pem");
-    // `dotnet dev-certs --format PEM` writes both `<file>` (cert) and
-    // `<file>.key` (private key in PEM PKCS#8).
-    const pemKeyPath = path.join(options.outDir, "aspnetcore-dev.pem.key");
+    const args = ["dev-certs", "https"];
+    if (!options.noTrust) args.push("--trust");
 
-    const pfxArgs = ["dev-certs", "https"];
-    if (!options.noTrust) pfxArgs.push("--trust");
-    pfxArgs.push("--format", "Pfx", "--no-password", "--export-path", pfxPath);
-
-    const pfxResult = await runProcess("dotnet", pfxArgs, 60_000);
-    if (pfxResult.exitCode !== 0) {
+    const result = await runProcess("dotnet", args, 60_000);
+    if (result.exitCode !== 0) {
       throw new Error(
-        `dotnet dev-certs (PFX pass) failed (exit ${pfxResult.exitCode}): ${pfxResult.stderr || pfxResult.stdout}`
+        `dotnet dev-certs failed (exit ${result.exitCode}): ${result.stderr || result.stdout}`
       );
     }
 
-    const pemResult = await runProcess(
-      "dotnet",
-      [
-        "dev-certs",
-        "https",
-        "--format",
-        "PEM",
-        "--no-password",
-        "--export-path",
-        pemPath,
-      ],
-      60_000
+    const store = await createPlatformStore();
+    const found = await store.findExistingDevCert();
+    if (!found) {
+      throw new Error(
+        "dotnet dev-certs completed but no dev cert was found in the platform store afterwards."
+      );
+    }
+
+    const pfxPath = await exportPfx(found.cert, found.key, options.outDir);
+    const { certPath: pemPath, keyPath: pemKeyPath } = exportPem(
+      found.cert,
+      found.key,
+      options.outDir
     );
-    if (pemResult.exitCode !== 0) {
-      throw new Error(
-        `dotnet dev-certs (PEM pass) failed (exit ${pemResult.exitCode}): ${pemResult.stderr || pemResult.stdout}`
-      );
-    }
 
-    const loaded = await loadPfx(pfxPath);
-    if (!loaded.cert) {
-      throw new Error(
-        `dotnet wrote ${pfxPath} but the resulting PFX could not be parsed for thumbprint recovery.`
-      );
+    if (!options.noTrust && process.platform === "linux") {
+      await runNssTrust(pemPath, options.linuxNssTrustReporter);
     }
 
     return {
       pfxPath,
       pemPath,
-      pemKeyPath: fs.existsSync(pemKeyPath) ? pemKeyPath : null,
-      thumbprint: loaded.cert.thumbprintSha1,
+      pemKeyPath,
+      thumbprint: found.thumbprint,
       trusted: !options.noTrust,
       backendUsed: "dotnet",
     };
   }
+}
+
+async function runNssTrust(
+  pemPath: string,
+  reporter: LinuxNssTrustReporter | undefined
+): Promise<void> {
+  const result = await trustInNss(pemPath);
+  reporter?.(result, pemPath);
 }

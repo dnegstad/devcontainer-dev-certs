@@ -5,6 +5,7 @@ import { generateCertificate } from "../cert/generator";
 import { loadPfx } from "../cert/loader";
 import { CertManager } from "../cert/manager";
 import { VALIDITY_DAYS } from "../cert/properties";
+import type { LinuxNssTrustReporter } from "../platform/types";
 import type { Backend, GenerateOptions, GenerateResult } from "./types";
 
 /**
@@ -45,7 +46,7 @@ export class NativeBackend implements Backend {
     if (options.noTrust) {
       return generateFilesOnly(options.outDir);
     }
-    return generateAndTrust(options.outDir);
+    return generateAndTrust(options.outDir, options.linuxNssTrustReporter);
   }
 }
 
@@ -71,8 +72,16 @@ async function generateFilesOnly(outDir: string): Promise<GenerateResult> {
   };
 }
 
-async function generateAndTrust(outDir: string): Promise<GenerateResult> {
-  const manager = new CertManager();
+async function generateAndTrust(
+  outDir: string,
+  linuxNssTrustReporter: LinuxNssTrustReporter | undefined
+): Promise<GenerateResult> {
+  // Without a reporter the Linux NSS trust step would still run but its
+  // outcome would be discarded. The CLI's `dcdc generate` always wires a
+  // stderr-logging reporter; CertProvider in the host extension wires its
+  // toast reporter. Both surfaces are responsible for telling the user
+  // when NSS trust didn't take.
+  const manager = new CertManager({ linuxNssTrustReporter });
   await manager.trust();
   await manager.exportCert("pfx", outDir);
   await manager.exportCert("pem", outDir);
