@@ -222,6 +222,46 @@ describe("CertProvider.provisionViaConfiguredBackend", () => {
     );
   });
 
+  it("forwards the linuxNssTrustReporter to the dotnet backend", async () => {
+    const { cert, key, thumbprint } = await makeValidCert();
+    const { manager, trustSpy } = buildManagerMock(cert, key, thumbprint);
+
+    let receivedReporter: unknown = "uncalled";
+    mockedSelectBackend.mockResolvedValue({
+      kind: "dotnet",
+      isAvailable: () => Promise.resolve(true),
+      generate: vi.fn(async (opts: Shared.GenerateOptions) => {
+        receivedReporter = opts.linuxNssTrustReporter;
+        await trustSpy();
+        return {
+          pfxPath: "/dev/null/pfx",
+          pemPath: "/dev/null/pem",
+          pemKeyPath: null,
+          thumbprint: "FAKE",
+          trusted: true,
+          backendUsed: "dotnet" as const,
+        };
+      }),
+    });
+
+    __setConfig("devcontainerDevCerts", {
+      generateDotNetCert: true,
+      hostCertGenerator: "dotnet",
+    });
+
+    const sentinelReporter: Shared.LinuxNssTrustReporter = () => {
+      /* test-supplied reporter, identity matters for the assertion */
+    };
+    const provider = new CertProvider(manager, sentinelReporter);
+    await provider.getCertMaterial(true);
+
+    // Regression guard for the gap where the dotnet branch silently
+    // dropped the reporter on Linux. The exact identity must round-trip
+    // — substituting a different no-op reporter would silently break
+    // the host extension's NSS-failure toast.
+    expect(receivedReporter).toBe(sentinelReporter);
+  });
+
   it("cleans up the per-provisioning tmp dir even when the backend throws", async () => {
     const { cert, key, thumbprint } = await makeValidCert();
     const { manager } = buildManagerMock(cert, key, thumbprint);

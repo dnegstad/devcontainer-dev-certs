@@ -20,6 +20,7 @@ import type {
   CertMaterialV2,
   CertMaterialV3,
   DefaultKestrelCertSelection,
+  LinuxNssTrustReporter,
 } from "@devcontainer-dev-certs/shared";
 import { DOTNET_DEV_CERT_NAME } from "@devcontainer-dev-certs/shared";
 
@@ -54,7 +55,21 @@ export class CertProvider {
   private cachedUser = new Map<string, CachedCert>();
   private warnedExpiredCerts = new Set<string>();
 
-  constructor(private readonly certManager: CertManager) {}
+  /**
+   * @param certManager Drives the native provisioning path.
+   * @param linuxNssTrustReporter Forwarded to the dotnet backend's
+   *   `generate()` so the dotnet path on Linux supplements
+   *   `dotnet dev-certs --trust` (which only writes the OpenSSL trust
+   *   dir + .NET root) with our NSS browser-trust step. Without this
+   *   wiring, the host extension's toast guidance for NSS failures
+   *   never fires under `hostCertGenerator: "dotnet"`. The native /
+   *   auto-resolved-to-native paths get the reporter via `certManager`'s
+   *   own wiring.
+   */
+  constructor(
+    private readonly certManager: CertManager,
+    private readonly linuxNssTrustReporter?: LinuxNssTrustReporter
+  ) {}
 
   /**
    * Legacy single-cert entry point. Returns the dotnet-dev cert material in
@@ -225,6 +240,12 @@ export class CertProvider {
     // backend's contract that we discard. The platform store ends up
     // populated identically to the native path, so the subsequent
     // `exportCert` calls work without further special-casing.
+    //
+    // On Linux we forward `linuxNssTrustReporter` so the dotnet backend
+    // supplements `dotnet dev-certs --trust` (which doesn't touch NSS
+    // browser DBs) with our own `trustInNss` step — wired through the
+    // same reporter the native path uses so the manual-guidance toast
+    // fires uniformly regardless of which backend the user picked.
     log(`Provisioning host dev cert via '${backend.kind}' backend.`);
     const tmpProvisioningDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "devcerts-provision-")
@@ -233,6 +254,7 @@ export class CertProvider {
       await backend.generate({
         outDir: tmpProvisioningDir,
         noTrust: false,
+        linuxNssTrustReporter: this.linuxNssTrustReporter,
       });
     } finally {
       fs.rmSync(tmpProvisioningDir, { recursive: true, force: true });

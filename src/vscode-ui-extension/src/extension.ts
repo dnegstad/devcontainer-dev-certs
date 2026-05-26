@@ -19,25 +19,36 @@ import {
   type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
-import type { CertBundle, CertBundleV3 } from "@devcontainer-dev-certs/shared";
+import type {
+  CertBundle,
+  CertBundleV3,
+  LinuxNssTrustReporter,
+} from "@devcontainer-dev-certs/shared";
 
 const CONTAINER_CERT_CONSENT_KEY = "containerCertProvisionConsented";
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs"));
 
+  // Shared NSS reporter: the native path picks it up via `CertManager`'s
+  // construction; the dotnet path picks it up via `CertProvider`'s
+  // `provisionViaConfiguredBackend`, which forwards it into the dotnet
+  // backend's `generate()` so the trust outcome surfaces identically
+  // regardless of `hostCertGenerator` setting.
+  const linuxNssTrustReporter: LinuxNssTrustReporter = (result, pemPath) => {
+    if (result.success) {
+      log(`Linux NSS trust: ${result.message}`);
+      return;
+    }
+    log(`Linux NSS trust did not fully succeed: ${result.message}`);
+    void showBrowserTrustFailureGuidance(pemPath, result.message);
+  };
+
   const certManager = new CertManager({
     localize: vscode.l10n.t,
-    linuxNssTrustReporter: (result, pemPath) => {
-      if (result.success) {
-        log(`Linux NSS trust: ${result.message}`);
-        return;
-      }
-      log(`Linux NSS trust did not fully succeed: ${result.message}`);
-      void showBrowserTrustFailureGuidance(pemPath, result.message);
-    },
+    linuxNssTrustReporter,
   });
-  const certProvider = new CertProvider(certManager);
+  const certProvider = new CertProvider(certManager, linuxNssTrustReporter);
 
   log("UI extension activated (managed certificate provider).");
 

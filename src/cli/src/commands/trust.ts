@@ -6,6 +6,7 @@ import {
   type DevCert,
 } from "@devcontainer-dev-certs/shared";
 import { installCliLogger } from "../logger";
+import { stderrNssTrustReporter } from "../nssReporter";
 
 export interface TrustCommandOptions {
   verbose?: boolean;
@@ -16,7 +17,8 @@ export interface TrustCommandOptions {
  * store. Useful when the user already has a cert (generated elsewhere) and
  * just needs the host trust step. Goes through the shared
  * `PlatformCertificateStore.trustCertificate` — same hook the host
- * extension uses.
+ * extension uses, including the Linux NSS browser-trust step (whose
+ * outcome is reported on stderr so failures don't pass silently).
  */
 export async function runTrust(
   certPath: string,
@@ -38,7 +40,9 @@ export async function runTrust(
     cert = loaded.cert;
   }
 
-  const store = await createPlatformStore();
+  const store = await createPlatformStore({
+    linuxNssTrustReporter: stderrNssTrustReporter,
+  });
 
   if (await store.isCertTrusted(cert)) {
     process.stderr.write(
