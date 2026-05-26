@@ -24,7 +24,7 @@ dcdc --help
 
 Node 18 or newer is required. The package ships a single bundled binary (no per-install dependency resolution), so the install footprint is small.
 
-`dcdc` is the binary name. The package name is `@devcontainer-dev-certs/cli` — the rename sidesteps a collision with the unrelated [`ddc`](https://www.npmjs.com/package/ddc) package on npm. If you want a one-off invocation without a global install:
+For a one-off invocation without a global install:
 
 ```bash
 npx -p @devcontainer-dev-certs/cli dcdc --help
