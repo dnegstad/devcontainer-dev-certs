@@ -37,11 +37,18 @@
 set -e
 
 REMOTE_USER="${_REMOTE_USER:-vscode}"
-REMOTE_USER_HOME="${_REMOTE_USER_HOME:-/home/${REMOTE_USER}}"
+REMOTE_USER_HOME="${_REMOTE_USER_HOME:-${HOME:-/home/${REMOTE_USER}}}"
 
-DOTNET_STORE_DIR="${REMOTE_USER_HOME}/.dotnet/corefx/cryptography/x509stores/my"
-DOTNET_ROOT_STORE_DIR="${REMOTE_USER_HOME}/.dotnet/corefx/cryptography/x509stores/root"
-TRUST_DIR="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust"
+# Honor the DEVCONTAINER_DEV_CERTS_*_DIR vars exported by install.sh
+# (via /etc/profile.d and /etc/environment) so non-VS-Code users —
+# whose shell session doesn't set _REMOTE_USER — get the same paths
+# install.sh chowned at feature-build time. Falling back to the
+# REMOTE_USER_HOME computation keeps the legacy path working when
+# the env vars aren't present (e.g. running this script directly
+# without a login shell or PAM session).
+DOTNET_STORE_DIR="${DEVCONTAINER_DEV_CERTS_DOTNET_STORE_DIR:-${REMOTE_USER_HOME}/.dotnet/corefx/cryptography/x509stores/my}"
+DOTNET_ROOT_STORE_DIR="${DEVCONTAINER_DEV_CERTS_DOTNET_ROOT_STORE_DIR:-${REMOTE_USER_HOME}/.dotnet/corefx/cryptography/x509stores/root}"
+TRUST_DIR="${DEVCONTAINER_DEV_CERTS_TRUST_DIR:-${REMOTE_USER_HOME}/.aspnet/dev-certs/trust}"
 
 ensure_openssl() {
     if ! command -v openssl &>/dev/null; then
