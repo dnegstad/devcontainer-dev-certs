@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   selectBackend,
   describeAutoBackend,
-} from "../src/backends/select";
+} from "@devcontainer-dev-certs/shared";
 
 // `selectBackend('dotnet')` calls into the DotnetBackend's `isAvailable`
 // which shells out via the shared runProcess. Stub that so the tests don't

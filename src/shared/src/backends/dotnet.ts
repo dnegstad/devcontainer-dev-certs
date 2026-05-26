@@ -1,22 +1,23 @@
 import * as fs from "fs";
 import * as path from "path";
-import {
-  loadPfx,
-  runProcess,
-} from "@devcontainer-dev-certs/shared";
+import { loadPfx } from "../cert/loader";
+import { runProcess } from "../platform/processUtil";
 import type { Backend, GenerateOptions, GenerateResult } from "./types";
 
 /**
- * Dotnet backend: shells out to `dotnet dev-certs https`. On macOS this is
- * the canonical way to get a signed-binary-attributed keychain trust prompt
- * — the host extension's `security add-trusted-cert` flow works but has a
- * less polished UX because the calling binary isn't a notarized Apple
- * cert-management tool. On Windows / Linux the dotnet backend is equivalent
- * to the native backend modulo cert format differences.
+ * Dotnet backend: shells out to `dotnet dev-certs https`. On macOS this
+ * is the canonical way to get a signed-binary-attributed keychain trust
+ * prompt — the native backend's `security add-trusted-cert` invocation
+ * works but has a less polished UX because the calling binary isn't a
+ * notarized Apple cert-management tool. On Windows / Linux the two
+ * backends end up writing to the same platform store, so the choice is
+ * mostly stylistic.
  *
- * Two-pass: one invocation exports PFX, a second exports PEM. We pass
- * `--trust` only on the first invocation (the second pass would re-trust
- * the same cert and add nothing).
+ * Two-pass: one invocation to write the PFX (with `--trust` unless
+ * `noTrust` is set), a second to write the PEM. We can't combine them —
+ * `dotnet dev-certs --format ...` only accepts one format per call, and
+ * `--trust` only does anything on the first invocation anyway (it's
+ * idempotent w.r.t. the OS trust store).
  */
 export class DotnetBackend implements Backend {
   readonly kind = "dotnet" as const;
@@ -31,12 +32,10 @@ export class DotnetBackend implements Backend {
 
     const pfxPath = path.join(options.outDir, "aspnetcore-dev.pfx");
     const pemPath = path.join(options.outDir, "aspnetcore-dev.pem");
-    // dotnet dev-certs --format PEM writes both `<file>` (cert) and
-    // `<file>.key` (key) when invoked without --no-password and without
-    // `-ep`. We rely on that companion key file to populate pemKeyPath.
+    // `dotnet dev-certs --format PEM` writes both `<file>` (cert) and
+    // `<file>.key` (private key in PEM PKCS#8).
     const pemKeyPath = path.join(options.outDir, "aspnetcore-dev.pem.key");
 
-    // First pass: export PFX, trust (unless --no-trust).
     const pfxArgs = ["dev-certs", "https"];
     if (!options.noTrust) pfxArgs.push("--trust");
     pfxArgs.push("--format", "Pfx", "--no-password", "--export-path", pfxPath);
@@ -48,7 +47,6 @@ export class DotnetBackend implements Backend {
       );
     }
 
-    // Second pass: export PEM. No --trust here — already done above.
     const pemResult = await runProcess(
       "dotnet",
       [
@@ -68,11 +66,10 @@ export class DotnetBackend implements Backend {
       );
     }
 
-    // Recover the thumbprint from the PFX we just wrote.
     const loaded = await loadPfx(pfxPath);
-    if (!loaded || !loaded.cert) {
+    if (!loaded.cert) {
       throw new Error(
-        `dotnet wrote ${pfxPath} but the resulting PFX could not be parsed.`
+        `dotnet wrote ${pfxPath} but the resulting PFX could not be parsed for thumbprint recovery.`
       );
     }
 

@@ -122,3 +122,19 @@ export { trustInNss } from "./platform/nssTrust";
 export type { NssTrustResult } from "./platform/nssTrust";
 export { runProcess } from "./platform/processUtil";
 export type { ProcessResult } from "./platform/processUtil";
+
+// Backend abstraction — selectable cert-generator backends shared by the
+// host CLI (`ddc`) and the VS Code host extension. Lets both consumers
+// pick between the bundled native generator, the `dotnet dev-certs https`
+// pass-through, and (future) an Aspire-aware variant without each
+// having to reimplement availability detection / selection logic.
+export { NativeBackend } from "./backends/native";
+export { DotnetBackend } from "./backends/dotnet";
+export { selectBackend, describeAutoBackend } from "./backends/select";
+export type {
+  Backend,
+  BackendKind,
+  BackendMode,
+  GenerateOptions,
+  GenerateResult,
+} from "./backends/types";

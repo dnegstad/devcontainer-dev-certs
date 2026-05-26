@@ -3,10 +3,10 @@ import * as os from "os";
 import * as path from "path";
 import {
   createPlatformStore,
+  describeAutoBackend,
+  DotnetBackend,
   runProcess,
 } from "@devcontainer-dev-certs/shared";
-import { DotnetBackend } from "../backends/dotnet";
-import { describeAutoBackend } from "../backends/select";
 import { installCliLogger } from "../logger";
 
 export interface DoctorCommandOptions {

@@ -7,8 +7,13 @@ import { exportLoadedCert } from "./cert/exporter";
 import { loadPemPair, loadPfx } from "./cert/loader";
 import type { LoadedCert } from "./cert/loader";
 import { buildPfx } from "./cert/pfx";
-import { assertValidCertName, log } from "@devcontainer-dev-certs/shared";
+import {
+  assertValidCertName,
+  log,
+  selectBackend,
+} from "@devcontainer-dev-certs/shared";
 import type {
+  BackendMode,
   CertBundle,
   CertBundleV3,
   CertMaterial,
@@ -183,6 +188,57 @@ export class CertProvider {
     return certs;
   }
 
+  /**
+   * Provision the host dev cert via the backend the user has selected
+   * (`devcontainerDevCerts.hostCertGenerator`). Default `auto` resolves
+   * to the dotnet backend on macOS (when the dotnet CLI is on PATH) and
+   * to native everywhere else — both end up writing the cert into the
+   * same OS platform store that `certManager` reads from, so the
+   * downstream `exportCert` path works regardless of which backend
+   * actually performed the provisioning.
+   */
+  private async provisionViaConfiguredBackend(): Promise<void> {
+    const setting = vscode.workspace
+      .getConfiguration("devcontainerDevCerts")
+      .get<BackendMode>("hostCertGenerator", "auto");
+
+    // Native is the historical code path. Use the in-process CertManager
+    // directly so its l10n + Linux NSS reporter wiring (set up in
+    // extension.ts) is preserved — the shared NativeBackend constructs a
+    // bare CertManager without those hooks.
+    if (setting === "native") {
+      await this.certManager.trust();
+      return;
+    }
+
+    const backend = await selectBackend(setting);
+    if (backend.kind === "native") {
+      // `auto` resolved to native (non-macOS, or macOS without dotnet
+      // installed). Same reasoning as above — defer to the configured
+      // CertManager rather than the bare one inside NativeBackend.
+      await this.certManager.trust();
+      return;
+    }
+
+    // dotnet backend: the cert + trust side effects are what we care
+    // about; the on-disk PFX/PEM in the tmp dir is a byproduct of the
+    // backend's contract that we discard. The platform store ends up
+    // populated identically to the native path, so the subsequent
+    // `exportCert` calls work without further special-casing.
+    log(`Provisioning host dev cert via '${backend.kind}' backend.`);
+    const tmpProvisioningDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "devcerts-provision-")
+    );
+    try {
+      await backend.generate({
+        outDir: tmpProvisioningDir,
+        noTrust: false,
+      });
+    } finally {
+      fs.rmSync(tmpProvisioningDir, { recursive: true, force: true });
+    }
+  }
+
   private async ensureDotNetDevCert(
     autoProvision: boolean
   ): Promise<CachedCert | null> {
@@ -215,7 +271,7 @@ export class CertProvider {
         return null;
       }
       log("Ensuring certificate is generated and trusted...");
-      await this.certManager.trust();
+      await this.provisionViaConfiguredBackend();
     }
 
     // mkdtempSync gives us a unique 0o700 dir in tmpdir. Combined with

@@ -5,7 +5,7 @@ import { runDoctor } from "./commands/doctor";
 import { runGenerate } from "./commands/generate";
 import { runInspect } from "./commands/inspect";
 import { runTrust } from "./commands/trust";
-import type { BackendMode } from "./backends/types";
+import type { BackendMode } from "@devcontainer-dev-certs/shared";
 
 const program = new Command();
 

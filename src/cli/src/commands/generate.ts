@@ -1,7 +1,9 @@
 import * as os from "os";
 import * as path from "path";
-import { selectBackend } from "../backends/select";
-import type { BackendMode } from "../backends/types";
+import {
+  selectBackend,
+  type BackendMode,
+} from "@devcontainer-dev-certs/shared";
 import { writeBundle, type BundleCertEntry } from "../bundle/writer";
 import { installCliLogger } from "../logger";
 
@@ -38,7 +40,6 @@ export async function runGenerate(
   const result = await backend.generate({
     outDir,
     noTrust: Boolean(options.noTrust),
-    containerMount,
   });
 
   process.stderr.write(
