@@ -12,21 +12,30 @@ import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { certToDer } from "../cert/exporter";
 import { type DevCert, type DevKey } from "../cert/types";
 
-/** Cached PowerShell executable name — prefers pwsh (PowerShell 7+) over powershell (5.1). */
-let resolvedPwsh: string | null = null;
+/**
+ * Cached PowerShell executable name — prefers pwsh (PowerShell 7+) over
+ * powershell (5.1). Only the POSITIVE result is cached: if the first
+ * probe finds pwsh, every subsequent call returns it without re-probing.
+ * If the probe DOESN'T find pwsh, we re-probe on each call rather than
+ * pinning to powershell forever — Windows installers commonly defer
+ * `PATH` propagation to existing processes, so a freshly-installed pwsh
+ * may only become discoverable after the first few cert ops.
+ */
+let resolvedPwsh: "pwsh" | null = null;
 
 export type WindowsStoreLocation = "CurrentUser" | "LocalMachine";
 
 async function getPowerShell(): Promise<string> {
-  if (resolvedPwsh) return resolvedPwsh;
+  if (resolvedPwsh === "pwsh") return resolvedPwsh;
 
   const pwshResult = await runProcess("pwsh", ["-NoProfile", "-Command", "echo ok"]);
   if (pwshResult.exitCode === 0) {
     resolvedPwsh = "pwsh";
-  } else {
-    resolvedPwsh = "powershell";
+    return "pwsh";
   }
-  return resolvedPwsh;
+  // Don't cache the fallback — re-probe next call so a freshly-installed
+  // pwsh becomes available without needing to restart the extension host.
+  return "powershell";
 }
 
 /**
