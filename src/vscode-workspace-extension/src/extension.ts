@@ -92,10 +92,8 @@ export function activate(context: vscode.ExtensionContext): void {
   const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
 
   if (config.get<boolean>("ensureSslCertDir", true)) {
-    const sslCertDirs = config.get<string>(
-      "sslCertDirs",
-      "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
-    );
+    // The manifest declares a default, so this is always a string in practice.
+    const sslCertDirs = config.get<string>("sslCertDirs")!;
     // Only prune non-existent dirs when we're falling back to the built-in
     // default list. An explicit user override is honored verbatim.
     const inspected = config.inspect<string>("sslCertDirs");
