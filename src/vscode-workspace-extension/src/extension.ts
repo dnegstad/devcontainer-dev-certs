@@ -96,7 +96,14 @@ export function activate(context: vscode.ExtensionContext): void {
       "sslCertDirs",
       "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
     );
-    ensureSslCertDir(sslCertDirs);
+    // Only prune non-existent dirs when we're falling back to the built-in
+    // default list. An explicit user override is honored verbatim.
+    const inspected = config.inspect<string>("sslCertDirs");
+    const isExplicitOverride =
+      inspected?.globalValue !== undefined ||
+      inspected?.workspaceValue !== undefined ||
+      inspected?.workspaceFolderValue !== undefined;
+    ensureSslCertDir(sslCertDirs, !isExplicitOverride);
     log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
   }
 

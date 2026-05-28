@@ -35,6 +35,33 @@ for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICAT
     esac
 done
 
+# Prune non-existent dirs from the built-in default CA list ONLY.
+#
+# The default enumerates CA paths across several distros (Debian/Ubuntu,
+# Fedora/RHEL, SUSE); only a subset exists on any given base image. OpenSSL
+# silently ignores a missing dir in SSL_CERT_DIR, but some consumers do not:
+# Rust's openssl-probe / rustls-native-certs `read_dir` each entry and error
+# on a path that isn't there. So when we fall back to the defaults, keep only
+# the dirs that actually exist on this image.
+#
+# An explicit sslCertDirs override is passed through verbatim — we trust the
+# operator to name paths that exist (or will, by the time it matters) and
+# don't want to silently drop something they deliberately configured. The
+# `:-` test below treats an empty override the same as "unset" (defaulted),
+# matching the `${SSLCERTDIRS:-...}` fallback on the line above.
+if [ -z "${SSLCERTDIRS:-}" ]; then
+    PRUNED_SSL_CERT_DIRS=""
+    IFS=':' read -ra _default_cert_dirs <<< "${SSL_CERT_DIRS}"
+    for _cert_dir in "${_default_cert_dirs[@]}"; do
+        if [ -d "${_cert_dir}" ]; then
+            PRUNED_SSL_CERT_DIRS="${PRUNED_SSL_CERT_DIRS:+${PRUNED_SSL_CERT_DIRS}:}${_cert_dir}"
+        else
+            echo "  skipping absent CA dir: ${_cert_dir}"
+        fi
+    done
+    SSL_CERT_DIRS="${PRUNED_SSL_CERT_DIRS}"
+fi
+
 # Install NSS tools if requested (for Chromium/Firefox trust)
 if [ "${TRUST_NSS}" = "true" ]; then
     if command -v apt-get &>/dev/null; then
@@ -212,8 +239,17 @@ append_profile() {
 # `<expanded HOME>/.aspnet/dev-certs/trust:<literal user value>`. Even if
 # the SSL_CERT_DIRS regex validation above is later loosened, the user
 # portion stays inert because of the single quotes.
-SSL_CERT_DIRS_SQ="$(shell_single_quote "${SSL_CERT_DIRS}")"
-echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:\"${SSL_CERT_DIRS_SQ}" >> "${PROFILE_SCRIPT}"
+# SSL_CERT_DIRS can be empty here if pruning dropped every default CA dir
+# (a minimal image with none of the standard paths). Emit the trust dir
+# alone in that case — appending a `:` with nothing after it would leave a
+# trailing empty path element, the same artifact that trips up Rust's
+# dir-walking TLS stacks that the pruning above is meant to avoid.
+if [ -n "${SSL_CERT_DIRS}" ]; then
+    SSL_CERT_DIRS_SQ="$(shell_single_quote "${SSL_CERT_DIRS}")"
+    echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:\"${SSL_CERT_DIRS_SQ}" >> "${PROFILE_SCRIPT}"
+else
+    echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust\"" >> "${PROFILE_SCRIPT}"
+fi
 
 append_profile "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_profile "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
@@ -256,7 +292,13 @@ if [ "${SYNC_CONTAINER_CERT}" != "true" ] && [ "${GENERATE_DOTNET_CERT}" = "true
     append_profile "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
 fi
 
-SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
+# Same empty-safety as the profile.d write above: only join with a `:` when
+# there's actually a system CA dir to follow it.
+if [ -n "${SSL_CERT_DIRS}" ]; then
+    SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
+else
+    SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust"
+fi
 append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_RESOLVED}"
 
 # Keep the same values in /etc/environment for non-VS-Code PAM-based

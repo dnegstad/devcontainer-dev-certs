@@ -101,6 +101,32 @@ check(
   "expected install.sh to compute SSL_CERT_DIR_RESOLVED from REMOTE_USER_HOME and append it via append_env"
 );
 
+// Pruning: the built-in default CA list spans several distros, and only a
+// subset exists on any given image. OpenSSL ignores a missing SSL_CERT_DIR
+// entry, but some consumers (Rust's openssl-probe / rustls-native-certs)
+// `read_dir` each entry and error on one. install.sh drops absent dirs from
+// the *defaults only* (an explicit SSLCERTDIRS override passes through).
+check(
+  "install.sh prunes absent default CA dirs (defaults only)",
+  installSh.includes('if [ -z "${SSLCERTDIRS:-}" ]; then') &&
+    installSh.includes('if [ -d "${_cert_dir}" ]; then'),
+  "expected install.sh to filter the default SSL_CERT_DIRS list by directory existence, gated on SSLCERTDIRS being unset/empty so explicit overrides are honored verbatim"
+);
+// Empty-safety: pruning can leave SSL_CERT_DIRS empty (a minimal image with
+// none of the standard CA paths). Both sinks must emit the trust dir alone in
+// that case — a trailing `:` would leave the same dangling empty path element
+// the pruning is meant to avoid.
+check(
+  "install.sh composes SSL_CERT_DIR empty-safe when no system dirs remain",
+  installSh.includes(
+    'echo "export SSL_CERT_DIR=\\"\\$HOME/.aspnet/dev-certs/trust\\"" >> "${PROFILE_SCRIPT}"'
+  ) &&
+    installSh.includes(
+      'SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust"'
+    ),
+  "expected install.sh to emit the trust dir with no trailing colon (profile.d and /etc/environment) when pruning leaves SSL_CERT_DIRS empty"
+);
+
 // install.sh SSLCERTDIRS fallback should match the feature option default
 const fallbackMatch = installSh.match(
   /SSL_CERT_DIRS="\$\{SSLCERTDIRS:-([^}]+)\}"/
