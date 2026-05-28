@@ -466,9 +466,22 @@ function ensureTerminalSslCertDir(context: vscode.ExtensionContext): void {
   const envCollection = context.environmentVariableCollection;
   envCollection.description =
     "Includes the dev certificate trust directory in SSL_CERT_DIR";
-  envCollection.prepend("SSL_CERT_DIR", trustDir + ":");
 
-  log(`SSL_CERT_DIR prepended with ${trustDir} for integrated terminals`);
+  // VS Code's environment variable collection concatenates literally — it
+  // can't do shell-style interpolation to drop the separator when there's
+  // nothing to join to. So branch on the inherited value instead: when
+  // SSL_CERT_DIR is already set, prepend `trustDir:` so the existing dirs
+  // follow; when it's empty/unset, replace outright. Prepending `trustDir:`
+  // onto an empty value would leave a trailing empty path element
+  // (`SSL_CERT_DIR=trustDir:`), which some OpenSSL-based tools reject.
+  const existing = process.env["SSL_CERT_DIR"];
+  if (existing && existing.length > 0) {
+    envCollection.prepend("SSL_CERT_DIR", trustDir + ":");
+  } else {
+    envCollection.replace("SSL_CERT_DIR", trustDir);
+  }
+
+  log(`SSL_CERT_DIR set to include ${trustDir} for integrated terminals`);
 }
 
 /**
