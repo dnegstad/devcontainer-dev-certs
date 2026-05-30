@@ -35,8 +35,18 @@ function shellSingleQuote(value: string): string {
  * For SSH remoting, WSL, and other remotes, the workspace extension
  * handles it here by writing a profile script if SSL_CERT_DIR isn't
  * already configured with the trust directory.
+ *
+ * When `pruneMissingDirs` is set (the default system-dir list is in use,
+ * not an explicit user override), drop any system CA dir that doesn't exist
+ * on this host. The defaults span several distros' paths; only a subset
+ * exists on any given OS. OpenSSL ignores a missing dir, but some consumers
+ * (Rust's openssl-probe / rustls-native-certs) error on one, so we keep only
+ * the dirs that are actually present. An explicit override is honored as-is.
  */
-export function ensureSslCertDir(systemCertDirs: string): void {
+export function ensureSslCertDir(
+  systemCertDirs: string,
+  pruneMissingDirs = false
+): void {
   const trustDir = getOpenSslTrustDir();
   const currentValue = process.env["SSL_CERT_DIR"] ?? "";
 
@@ -59,7 +69,24 @@ export function ensureSslCertDir(systemCertDirs: string): void {
     return;
   }
 
-  const desiredValue = `${trustDir}:${systemCertDirs}`;
+  let effectiveSystemDirs = systemCertDirs;
+  if (pruneMissingDirs) {
+    const present = systemCertDirs.split(":").filter((dir) => {
+      try {
+        return fs.statSync(dir).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    effectiveSystemDirs = present.join(":");
+  }
+
+  // Compose empty-safe: when pruning leaves no system dirs, emit the trust
+  // dir alone rather than `${trustDir}:` — a trailing empty path element is
+  // exactly the artifact the pruning above is meant to avoid.
+  const desiredValue = effectiveSystemDirs
+    ? `${trustDir}:${effectiveSystemDirs}`
+    : trustDir;
   const quoted = shellSingleQuote(desiredValue);
 
   // Set for the current process and any child processes we spawn

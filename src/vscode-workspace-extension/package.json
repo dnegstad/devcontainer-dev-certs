@@ -53,7 +53,7 @@
         "devcontainer-dev-certs.sslCertDirs": {
           "type": "string",
           "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
-          "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Used when the Dev Container feature is not present (e.g., SSH remoting, WSL)."
+          "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Used when the Dev Container feature is not present (e.g., SSH remoting, WSL). The default covers paths from several Linux distributions; directories that don't exist on the current host are automatically filtered out. An explicit value is used as-is."
         },
         "devcontainer-dev-certs.ensureSslCertDir": {
           "type": "boolean",

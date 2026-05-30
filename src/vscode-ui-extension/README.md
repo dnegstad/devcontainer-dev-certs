@@ -87,7 +87,7 @@ On Linux, host trust involves three layers:
 For tools running **outside** VS Code integrated terminals (e.g., a system terminal), set `SSL_CERT_DIR` manually:
 
 ```bash
-export SSL_CERT_DIR="$HOME/.aspnet/dev-certs/trust:$SSL_CERT_DIR"
+export SSL_CERT_DIR="$HOME/.aspnet/dev-certs/trust${SSL_CERT_DIR:+:$SSL_CERT_DIR}"
 ```
 
 #### Browser Trust (Firefox / Chromium)

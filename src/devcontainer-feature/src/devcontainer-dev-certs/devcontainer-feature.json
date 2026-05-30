@@ -22,7 +22,7 @@
     "sslCertDirs": {
       "type": "string",
       "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
-      "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Override this if your base image uses non-standard paths."
+      "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. The default covers paths from several Linux distributions; directories that don't exist are filtered out at install time. Override this if your base image uses non-standard paths; explicit values are used as-is."
     },
     "generateDotNetCert": {
       "type": "boolean",
