@@ -3,7 +3,14 @@ set -e
 
 # Options from devcontainer-feature.json (uppercased)
 TRUST_NSS="${TRUSTNSS:-false}"
-SSL_CERT_DIRS="${SSLCERTDIRS:-/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl}"
+# Keep this literal in sync with the `sslCertDirs` default in
+# devcontainer-feature.json (asserted by test/validate-feature.mjs). It's named
+# as its own constant so the pruning guard below can recognize "the user is on
+# the defaults" — the devcontainer CLI exports SSLCERTDIRS set to this same
+# default even when the user didn't specify the option, so emptiness alone can't
+# distinguish the two cases.
+DEFAULT_SSL_CERT_DIRS="/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
+SSL_CERT_DIRS="${SSLCERTDIRS:-${DEFAULT_SSL_CERT_DIRS}}"
 GENERATE_DOTNET_CERT="${GENERATEDOTNETCERT:-true}"
 SYNC_USER_CERTIFICATES="${SYNCUSERCERTIFICATES:-true}"
 SYNC_CONTAINER_CERT="${SYNCCONTAINERCERT:-false}"
@@ -11,6 +18,25 @@ EXTRA_CERT_DESTINATIONS="${EXTRACERTDESTINATIONS:-}"
 
 REMOTE_USER="${_REMOTE_USER:-vscode}"
 REMOTE_USER_HOME="${_REMOTE_USER_HOME:-/home/${REMOTE_USER}}"
+
+# System-config sink root. Empty in production — every system file
+# (/etc/profile.d/*, /etc/environment, the interactive-shell bashrc) is written
+# at its real absolute path. Set to a temp dir by test/install-sh.test.mjs so
+# the script can be exercised hermetically without touching the host's /etc.
+# Validated as an absolute path (or empty) for the same reason every other path
+# input is: this value is prefixed onto files we then write to.
+DEVCERTS_SYSROOT="${DEVCERTS_SYSROOT:-}"
+if [ -n "${DEVCERTS_SYSROOT}" ]; then
+    case "${DEVCERTS_SYSROOT}" in
+        /*) ;;
+        *)
+            echo "Error: DEVCERTS_SYSROOT must be an absolute path." >&2
+            exit 1
+            ;;
+    esac
+fi
+ETC_ENVIRONMENT="${DEVCERTS_SYSROOT}/etc/environment"
+PROFILE_DIR="${DEVCERTS_SYSROOT}/etc/profile.d"
 
 echo "Setting up dev certificate infrastructure..."
 
@@ -46,10 +72,17 @@ done
 #
 # An explicit sslCertDirs override is passed through verbatim — we trust the
 # operator to name paths that exist (or will, by the time it matters) and
-# don't want to silently drop something they deliberately configured. The
-# `:-` test below treats an empty override the same as "unset" (defaulted),
-# matching the `${SSLCERTDIRS:-...}` fallback on the line above.
-if [ -z "${SSLCERTDIRS:-}" ]; then
+# don't want to silently drop something they deliberately configured.
+#
+# Detecting "on the defaults" is the subtle part. The devcontainer CLI exports
+# a feature option's env var set to the option's declared default whenever the
+# user doesn't specify it, so SSLCERTDIRS is almost never empty at runtime — it
+# arrives as the full default string. Testing `-z "${SSLCERTDIRS:-}"` alone
+# therefore never matched in a real install and the pruning silently never ran.
+# Treat the value as "defaulted" when it's unset/empty OR byte-for-byte equal to
+# our declared default; only a genuinely different value counts as an explicit
+# override that we pass through untouched.
+if [ -z "${SSLCERTDIRS:-}" ] || [ "${SSLCERTDIRS}" = "${DEFAULT_SSL_CERT_DIRS}" ]; then
     PRUNED_SSL_CERT_DIRS=""
     IFS=':' read -ra _default_cert_dirs <<< "${SSL_CERT_DIRS}"
     for _cert_dir in "${_default_cert_dirs[@]}"; do
@@ -157,7 +190,7 @@ append_env() {
     escaped="${escaped//\"/\\\"}"
     escaped="${escaped//\$/\\\$}"
     escaped="${escaped//\`/\\\`}"
-    echo "${key}=\"${escaped}\"" >> /etc/environment
+    echo "${key}=\"${escaped}\"" >> "${ETC_ENVIRONMENT}"
 }
 
 # Quote a value for safe single-quoted embedding in a shell script. Single
@@ -208,7 +241,14 @@ shell_single_quote() {
 # unexpanded and into /etc/environment with a resolved `_REMOTE_USER_HOME`
 # (pam_env doesn't expand `$HOME`). The other feature-option vars are plain
 # string values and go to both sinks with the same content.
-PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
+# Ensure the sink directories exist before writing. /etc and /etc/profile.d are
+# present on every mainstream base image, but a few stripped-down images ship
+# without /etc/profile.d — create it so the login-shell export still lands
+# (and so the hermetic test can run under an empty DEVCERTS_SYSROOT).
+mkdir -p "${PROFILE_DIR}"
+mkdir -p "$(dirname "${ETC_ENVIRONMENT}")"
+
+PROFILE_SCRIPT="${PROFILE_DIR}/devcontainer-dev-certs.sh"
 : > "${PROFILE_SCRIPT}"
 chmod 0644 "${PROFILE_SCRIPT}"
 
@@ -313,6 +353,52 @@ append_env "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATION
 # conditional as the profile.d write above — see the comment there.
 if [ "${SUPPRESS_DOTNET_AUTOGEN}" = "true" ]; then
     append_env "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
+fi
+
+# Bridge the env into interactive NON-login shells. Neither sink above reaches
+# them: /etc/profile.d is sourced only by LOGIN shells, and /etc/environment is
+# read only by pam_env (sshd, console getty). A plain
+# `docker exec -it <container> bash` — the most common way to poke at a running
+# container, as root or the remote user — starts an interactive non-login shell,
+# which sources /etc/bash.bashrc (Debian/Ubuntu) or /etc/bashrc (Fedora/RHEL/
+# SUSE) and then the user's ~/.bashrc. Without a hook there, that session gets
+# no SSL_CERT_DIR (nor the DEVCONTAINER_DEV_CERTS_* vars) at all — the "exec into
+# bash and nothing is set" symptom.
+#
+# Source the profile.d script from the system-wide interactive bashrc rather
+# than duplicating the exports: it's the single source of truth, it stays in
+# sync automatically, and `$HOME` is set per-user in that context so the
+# `$HOME/.aspnet/dev-certs/trust` prefix resolves correctly for whichever user
+# opened the shell (root vs. the remote user). Re-sourcing in a login shell —
+# where /etc/profile sources /etc/bash.bashrc before profile.d/* — is harmless:
+# the script is plain idempotent `export` assignments, not appends.
+#
+# `sh`/dash non-login interactive shells use $ENV instead and aren't covered
+# here; bash is what `docker exec ... bash` and the documented base images use.
+#
+# Pick the system-wide rc that this image's interactive bash actually sources:
+# Debian/Ubuntu read /etc/bash.bashrc automatically; the RPM/SUSE family read
+# /etc/bashrc via the default ~/.bashrc skeleton. Append to whichever exists,
+# else create the Debian/Ubuntu path (the documented base images).
+INTERACTIVE_PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
+SYSTEM_BASHRC=""
+for _candidate in /etc/bash.bashrc /etc/bashrc; do
+    if [ -f "${DEVCERTS_SYSROOT}${_candidate}" ]; then
+        SYSTEM_BASHRC="${DEVCERTS_SYSROOT}${_candidate}"
+        break
+    fi
+done
+if [ -z "${SYSTEM_BASHRC}" ]; then
+    SYSTEM_BASHRC="${DEVCERTS_SYSROOT}/etc/bash.bashrc"
+    mkdir -p "$(dirname "${SYSTEM_BASHRC}")"
+fi
+BASHRC_MARKER="# devcontainer-dev-certs: cert env for interactive non-login shells"
+if ! { [ -f "${SYSTEM_BASHRC}" ] && grep -qF "${BASHRC_MARKER}" "${SYSTEM_BASHRC}"; }; then
+    {
+        echo ""
+        echo "${BASHRC_MARKER}"
+        echo "if [ -r ${INTERACTIVE_PROFILE_SCRIPT} ]; then . ${INTERACTIVE_PROFILE_SCRIPT}; fi"
+    } >> "${SYSTEM_BASHRC}"
 fi
 
 # Set ownership
