@@ -119,7 +119,6 @@ src/
     src/
       certInstaller.ts             Writes cert files to correct paths
       util/rehash.ts               Pure TypeScript c_rehash (OpenSSL subject hash computation)
-      util/sslCertDir.ts           SSL_CERT_DIR for VS Code terminals/tasks (EnvironmentVariableCollection)
       util/paths.ts                .NET store and OpenSSL trust directory paths
 
   devcontainer-feature/            Devcontainer feature
@@ -183,8 +182,6 @@ Set in your workspace settings or user settings inside the Dev Container / remot
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `devcontainer-dev-certs.autoInject` | `true` | Automatically inject and configure the dev cert when a remote session starts. Set to `false` to require manual invocation via the "Dev Certs: Inject Certificate into Remote" command. |
-| `devcontainer-dev-certs.sslCertDirs` | Standard distro paths | Colon-separated system CA certificate directories to include in `SSL_CERT_DIR` alongside the dev-certs trust directory, when the extension has to compose the value from scratch (nothing inherited). Only consulted if `SSL_CERT_DIR` doesn't already include the trust directory — inside containers built with the feature, `install.sh` has already set it, so this is effectively a no-op. The default covers paths from several Linux distributions; non-existent directories are filtered out. An explicit value is used as-is. |
-| `devcontainer-dev-certs.ensureSslCertDir` | `true` | Configure `SSL_CERT_DIR` for VS Code integrated terminals/tasks (via VS Code's environment variable collection — transparent and reversible, no config files are modified) when the trust directory isn't already on it. Does not affect non-VS-Code shells; persistent container-wide configuration is the Dev Container feature's job. |
 | `devcontainer-dev-certs.warnOnStaleDevCerts` | `true` | Show a warning when multiple dev certificates are detected in this Dev Container's .NET certificate stores after install — alongside the extension-managed certificate. Pairs with the "Dev Certs: Clean Up Other Dev Certificates in Dev Container" command. |
 
 ## User-managed certificates
