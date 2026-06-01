@@ -27,6 +27,20 @@ function shellSingleQuote(value: string): string {
 }
 
 /**
+ * Outcome of an {@link ensureSslCertDir} call, so the caller can log what
+ * actually happened instead of unconditionally claiming success:
+ *  - `configured`: we composed and set SSL_CERT_DIR (`value` is the new value).
+ *  - `already-present`: the trust dir was already on SSL_CERT_DIR; left as-is
+ *    (`value` is the existing value).
+ *  - `refused`: the input failed validation; nothing was changed (the reason
+ *    has already been logged).
+ */
+export type EnsureSslCertDirResult =
+  | { outcome: "configured"; value: string }
+  | { outcome: "already-present"; value: string }
+  | { outcome: "refused" };
+
+/**
  * Ensure SSL_CERT_DIR includes the dev-certs trust directory alongside
  * the system CA directories.
  *
@@ -42,17 +56,20 @@ function shellSingleQuote(value: string): string {
  * exists on any given OS. OpenSSL ignores a missing dir, but some consumers
  * (Rust's openssl-probe / rustls-native-certs) error on one, so we keep only
  * the dirs that are actually present. An explicit override is honored as-is.
+ *
+ * Returns an {@link EnsureSslCertDirResult} describing what was done — the
+ * caller should only report success when the outcome is `configured`.
  */
 export function ensureSslCertDir(
   systemCertDirs: string,
   pruneMissingDirs = false
-): void {
+): EnsureSslCertDirResult {
   const trustDir = getOpenSslTrustDir();
   const currentValue = process.env["SSL_CERT_DIR"] ?? "";
 
   // Already includes the trust dir — devcontainer feature or prior run handled it
   if (currentValue.split(":").includes(trustDir)) {
-    return;
+    return { outcome: "already-present", value: currentValue };
   }
 
   if (!isSafeColonPaths(systemCertDirs)) {
@@ -60,13 +77,13 @@ export function ensureSslCertDir(
       `Refusing to configure SSL_CERT_DIR: sslCertDirs value contains unexpected characters. ` +
         `Expected colon-separated absolute paths only.`
     );
-    return;
+    return { outcome: "refused" };
   }
   if (!isSafeColonPaths(trustDir)) {
     log(
       `Refusing to configure SSL_CERT_DIR: computed trust dir contains unexpected characters.`
     );
-    return;
+    return { outcome: "refused" };
   }
 
   let effectiveSystemDirs = systemCertDirs;
@@ -126,4 +143,6 @@ export function ensureSslCertDir(
   } catch {
     // Best-effort
   }
+
+  return { outcome: "configured", value: desiredValue };
 }

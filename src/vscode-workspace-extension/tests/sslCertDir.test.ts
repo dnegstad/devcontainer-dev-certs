@@ -75,8 +75,12 @@ describe("ensureSslCertDir", () => {
     const present = tmpDir("devcerts-present-");
     const absent = "/devcerts/definitely/missing-xyz";
 
-    ensureSslCertDir(`${present}:${absent}`, true);
+    const result = ensureSslCertDir(`${present}:${absent}`, true);
 
+    expect(result).toEqual({
+      outcome: "configured",
+      value: `${trust}:${present}`,
+    });
     expect(process.env["SSL_CERT_DIR"]).toBe(`${trust}:${present}`);
   });
 
@@ -85,36 +89,46 @@ describe("ensureSslCertDir", () => {
     const present = tmpDir("devcerts-present-");
     const absent = "/devcerts/definitely/missing-xyz";
 
-    ensureSslCertDir(`${present}:${absent}`, false);
+    const result = ensureSslCertDir(`${present}:${absent}`, false);
 
+    expect(result).toEqual({
+      outcome: "configured",
+      value: `${trust}:${present}:${absent}`,
+    });
     expect(process.env["SSL_CERT_DIR"]).toBe(`${trust}:${present}:${absent}`);
   });
 
   it("composes empty-safe (trust dir alone, no trailing colon) when pruning empties the list", () => {
     const trust = setupTrustDir();
 
-    ensureSslCertDir("/devcerts/missing-a:/devcerts/missing-b", true);
+    const result = ensureSslCertDir(
+      "/devcerts/missing-a:/devcerts/missing-b",
+      true
+    );
 
+    expect(result).toEqual({ outcome: "configured", value: trust });
     expect(process.env["SSL_CERT_DIR"]).toBe(trust);
     expect(process.env["SSL_CERT_DIR"]).not.toContain(":");
   });
 
-  it("returns early without changing SSL_CERT_DIR when the trust dir is already present", () => {
+  it("reports already-present without changing SSL_CERT_DIR when the trust dir is already there", () => {
     const trust = setupTrustDir();
     const existing = `${trust}:/some/preexisting/dir`;
     process.env["SSL_CERT_DIR"] = existing;
 
-    ensureSslCertDir("/etc/ssl/certs", true);
+    const result = ensureSslCertDir("/etc/ssl/certs", true);
 
+    expect(result).toEqual({ outcome: "already-present", value: existing });
     expect(process.env["SSL_CERT_DIR"]).toBe(existing);
   });
 
-  it("rejects unsafe system-dir input without mutating the environment", () => {
+  it("refuses unsafe system-dir input without mutating the environment", () => {
     setupTrustDir();
 
     // Command substitution / non-absolute / metacharacters must be refused.
-    ensureSslCertDir("/etc/ssl/certs:$(rm -rf /)", true);
+    const result = ensureSslCertDir("/etc/ssl/certs:$(rm -rf /)", true);
 
+    expect(result).toEqual({ outcome: "refused" });
     expect(process.env["SSL_CERT_DIR"]).toBeUndefined();
   });
 

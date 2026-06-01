@@ -101,8 +101,18 @@ export function activate(context: vscode.ExtensionContext): void {
       inspected?.globalValue !== undefined ||
       inspected?.workspaceValue !== undefined ||
       inspected?.workspaceFolderValue !== undefined;
-    ensureSslCertDir(sslCertDirs, !isExplicitOverride);
-    log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
+    // Log the actual outcome — ensureSslCertDir is a no-op when SSL_CERT_DIR
+    // already includes the trust dir (the devcontainer feature's install.sh
+    // typically got there first) and refuses unsafe input (logged internally).
+    // Claiming "ensured" unconditionally was misleading in both cases.
+    const result = ensureSslCertDir(sslCertDirs, !isExplicitOverride);
+    if (result.outcome === "configured") {
+      log(`SSL_CERT_DIR configured to include the dev-certs trust dir: ${result.value}`);
+    } else if (result.outcome === "already-present") {
+      log(
+        `SSL_CERT_DIR already includes the dev-certs trust dir; leaving as-is: ${result.value}`
+      );
+    }
   }
 
   // Reverse-sync: if the feature opted into pushing the container's own
