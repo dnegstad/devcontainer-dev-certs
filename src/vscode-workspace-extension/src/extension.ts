@@ -101,11 +101,18 @@ export function activate(context: vscode.ExtensionContext): void {
       inspected?.globalValue !== undefined ||
       inspected?.workspaceValue !== undefined ||
       inspected?.workspaceFolderValue !== undefined;
-    // Log the actual outcome — ensureSslCertDir is a no-op when SSL_CERT_DIR
+    // Apply only to VS Code-scoped env (integrated terminals/tasks via the
+    // EnvironmentVariableCollection, plus this run's child processes via
+    // process.env). No persistent config files are touched — see
+    // ensureSslCertDir. Log the actual outcome: it's a no-op when SSL_CERT_DIR
     // already includes the trust dir (the devcontainer feature's install.sh
-    // typically got there first) and refuses unsafe input (logged internally).
-    // Claiming "ensured" unconditionally was misleading in both cases.
-    const result = ensureSslCertDir(sslCertDirs, !isExplicitOverride);
+    // typically got there first) and refuses unsafe input (logged internally),
+    // so claiming "ensured" unconditionally was misleading.
+    const result = ensureSslCertDir(
+      context.environmentVariableCollection,
+      sslCertDirs,
+      !isExplicitOverride
+    );
     if (result.outcome === "configured") {
       log(`SSL_CERT_DIR configured to include the dev-certs trust dir: ${result.value}`);
     } else if (result.outcome === "already-present") {

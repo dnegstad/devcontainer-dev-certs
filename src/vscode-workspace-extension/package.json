@@ -53,12 +53,12 @@
         "devcontainer-dev-certs.sslCertDirs": {
           "type": "string",
           "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
-          "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Used when the Dev Container feature is not present (e.g., SSH remoting, WSL). The default covers paths from several Linux distributions; directories that don't exist on the current host are automatically filtered out. An explicit value is used as-is."
+          "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory, when the extension composes the value from scratch (nothing is already inherited). Only consulted if SSL_CERT_DIR doesn't already include the trust directory — inside containers built with the Dev Container feature it has already been set, so this is effectively a no-op. The default covers paths from several Linux distributions; directories that don't exist on the current host are automatically filtered out. An explicit value is used as-is."
         },
         "devcontainer-dev-certs.ensureSslCertDir": {
           "type": "boolean",
           "default": true,
-          "description": "Ensure SSL_CERT_DIR is configured in the remote environment when the Dev Container feature hasn't set it"
+          "description": "Configure SSL_CERT_DIR for VS Code integrated terminals and tasks (via VS Code's environment variable collection — transparent and reversible, no config files are modified) when the trust directory isn't already on it. Does not affect non-VS-Code shells; persistent container-wide configuration is the Dev Container feature's job."
         },
         "devcontainer-dev-certs.warnOnStaleDevCerts": {
           "type": "boolean",
