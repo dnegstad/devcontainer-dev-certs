@@ -107,7 +107,7 @@ If after install this extension finds dev cert PFXes in the container's .NET sto
 | `devcontainer-dev-certs.autoInject` | `true` | Automatically inject the cert when a remote session starts. Set to `false` to require manually invoking "Dev Certs: Inject Certificate into Remote". |
 | `devcontainer-dev-certs.warnOnStaleDevCerts` | `true` | Show the post-install warning when other dev certs are detected alongside the managed one. Set to `false` to silence the prompt; the cleanup command stays available from the Command Palette either way. |
 
-## Feature Options
+## Dev Container Feature Options
 
 When using the Dev Container feature, these options are available:
 
