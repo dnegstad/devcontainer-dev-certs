@@ -104,13 +104,20 @@ check(
 // Pruning: the built-in default CA list spans several distros, and only a
 // subset exists on any given image. OpenSSL ignores a missing SSL_CERT_DIR
 // entry, but some consumers (Rust's openssl-probe / rustls-native-certs)
-// `read_dir` each entry and error on one. install.sh drops absent dirs from
-// the *defaults only* (an explicit SSLCERTDIRS override passes through).
+// `read_dir` each entry and error on one. install.sh drops absent dirs when
+// pruneMissingCertDirs is true (the default) — a dedicated toggle rather than
+// inferring intent from an override, which the CLI makes indistinguishable from
+// the default.
 check(
-  "install.sh prunes absent default CA dirs (defaults only)",
-  installSh.includes('if [ -z "${SSLCERTDIRS:-}" ]; then') &&
+  "install.sh prunes absent CA dirs gated on PRUNE_MISSING_CERT_DIRS",
+  installSh.includes('if [ "${PRUNE_MISSING_CERT_DIRS}" = "true" ]; then') &&
     installSh.includes('if [ -d "${_cert_dir}" ]; then'),
-  "expected install.sh to filter the default SSL_CERT_DIRS list by directory existence, gated on SSLCERTDIRS being unset/empty so explicit overrides are honored verbatim"
+  "expected install.sh to filter SSL_CERT_DIRS by directory existence, gated on the pruneMissingCertDirs option (PRUNE_MISSING_CERT_DIRS) being true — install.sh can't tell an omitted sslCertDirs from one set to the default, so pruning is an explicit toggle, not inferred"
+);
+check(
+  "install.sh defaults pruneMissingCertDirs to true",
+  installSh.includes('PRUNE_MISSING_CERT_DIRS="${PRUNEMISSINGCERTDIRS:-true}"'),
+  "expected install.sh to read the pruneMissingCertDirs option into PRUNE_MISSING_CERT_DIRS with a true default"
 );
 // Empty-safety: pruning can leave SSL_CERT_DIRS empty (a minimal image with
 // none of the standard CA paths). Both sinks must emit the trust dir alone in
@@ -127,14 +134,38 @@ check(
   "expected install.sh to emit the trust dir with no trailing colon (profile.d and /etc/environment) when pruning leaves SSL_CERT_DIRS empty"
 );
 
-// install.sh SSLCERTDIRS fallback should match the feature option default
-const fallbackMatch = installSh.match(
-  /SSL_CERT_DIRS="\$\{SSLCERTDIRS:-([^}]+)\}"/
+// install.sh DEFAULT_SSL_CERT_DIRS constant should match the feature option
+// default. The fallback and the "are we on the defaults?" pruning comparison
+// both reference this single constant, so it has to stay byte-for-byte in sync
+// with the manifest.
+const defaultConstMatch = installSh.match(
+  /DEFAULT_SSL_CERT_DIRS="([^"]*)"/
 );
 check(
-  "install.sh SSLCERTDIRS fallback matches feature option default",
-  fallbackMatch && fallbackMatch[1] === defaultSslDirs,
-  `install.sh fallback has "${fallbackMatch?.[1]}" but feature default is "${defaultSslDirs}"`
+  "install.sh DEFAULT_SSL_CERT_DIRS matches feature option default",
+  defaultConstMatch && defaultConstMatch[1] === defaultSslDirs,
+  `install.sh DEFAULT_SSL_CERT_DIRS is "${defaultConstMatch?.[1]}" but feature default is "${defaultSslDirs}"`
+);
+check(
+  "install.sh derives SSL_CERT_DIRS fallback from DEFAULT_SSL_CERT_DIRS",
+  installSh.includes('SSL_CERT_DIRS="${SSLCERTDIRS:-${DEFAULT_SSL_CERT_DIRS}}"'),
+  "expected install.sh to default SSL_CERT_DIRS to ${DEFAULT_SSL_CERT_DIRS} so the fallback and the pruning comparison share one source of truth"
+);
+
+// Interactive non-login shells (`docker exec -it <container> bash`) source
+// neither /etc/profile.d (login only) nor /etc/environment (pam_env only), so
+// install.sh must also bridge the env into the system-wide interactive bashrc.
+// Without this, exec'ing a bash shell into the container leaves SSL_CERT_DIR
+// completely unset.
+check(
+  "install.sh bridges cert env into interactive non-login shells",
+  installSh.includes(
+    "# devcontainer-dev-certs: cert env for interactive non-login shells"
+  ) &&
+    installSh.includes(
+      "if [ -r ${INTERACTIVE_PROFILE_SCRIPT} ]; then . ${INTERACTIVE_PROFILE_SCRIPT}; fi"
+    ),
+  "expected install.sh to append a marker-guarded `. /etc/profile.d/devcontainer-dev-certs.sh` to the system-wide interactive bashrc (/etc/bash.bashrc or /etc/bashrc) so `docker exec bash` sessions pick up SSL_CERT_DIR"
 );
 
 // --- Option names map to uppercased env vars in install.sh ---

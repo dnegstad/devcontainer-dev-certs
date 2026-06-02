@@ -30,7 +30,6 @@ import {
   kestrelDefaultEnvHolder,
 } from "./defaultKestrelDebugProvider";
 import { parseExtraCertDestinations } from "./util/destinations";
-import { ensureSslCertDir } from "./util/sslCertDir";
 import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
 import { initLogger, log, revealLogger } from "@devcontainer-dev-certs/shared";
 import type {
@@ -90,20 +89,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
-
-  if (config.get<boolean>("ensureSslCertDir", true)) {
-    // The manifest declares a default, so this is always a string in practice.
-    const sslCertDirs = config.get<string>("sslCertDirs")!;
-    // Only prune non-existent dirs when we're falling back to the built-in
-    // default list. An explicit user override is honored verbatim.
-    const inspected = config.inspect<string>("sslCertDirs");
-    const isExplicitOverride =
-      inspected?.globalValue !== undefined ||
-      inspected?.workspaceValue !== undefined ||
-      inspected?.workspaceFolderValue !== undefined;
-    ensureSslCertDir(sslCertDirs, !isExplicitOverride);
-    log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
-  }
 
   // Reverse-sync: if the feature opted into pushing the container's own
   // dev cert to the host, run that before the standard pull so that the

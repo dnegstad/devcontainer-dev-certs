@@ -3,7 +3,7 @@
   "displayName": "Dev Container Dev Certificates (Remote)",
   "description": "Receives and installs ASP.NET and Aspire compatible HTTPS development certificates inside Dev Containers and remote environments.",
   "icon": "images/dn_workspace_extension_icon_256.png",
-  "version": "1.3.1-pre",
+  "version": "1.3.1",
   "publisher": "dnegstad",
   "license": "MIT",
   "repository": {
@@ -49,16 +49,6 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically inject and configure the dev cert when a remote session starts"
-        },
-        "devcontainer-dev-certs.sslCertDirs": {
-          "type": "string",
-          "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
-          "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. Used when the Dev Container feature is not present (e.g., SSH remoting, WSL). The default covers paths from several Linux distributions; directories that don't exist on the current host are automatically filtered out. An explicit value is used as-is."
-        },
-        "devcontainer-dev-certs.ensureSslCertDir": {
-          "type": "boolean",
-          "default": true,
-          "description": "Ensure SSL_CERT_DIR is configured in the remote environment when the Dev Container feature hasn't set it"
         },
         "devcontainer-dev-certs.warnOnStaleDevCerts": {
           "type": "boolean",

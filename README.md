@@ -119,7 +119,6 @@ src/
     src/
       certInstaller.ts             Writes cert files to correct paths
       util/rehash.ts               Pure TypeScript c_rehash (OpenSSL subject hash computation)
-      util/sslCertDir.ts           SSL_CERT_DIR management for non-devcontainer remotes
       util/paths.ts                .NET store and OpenSSL trust directory paths
 
   devcontainer-feature/            Devcontainer feature
@@ -158,6 +157,7 @@ Set under the feature entry in `devcontainer.json`:
 |--------|---------|-------------|
 | `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container. |
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override for non-standard base images. |
+| `pruneMissingCertDirs` | `true` | Filter out non-existent directories from `sslCertDirs` before writing `SSL_CERT_DIR` (some TLS stacks error on a missing entry). Set to `false` to use `sslCertDirs` verbatim — e.g. for a directory created after install but before it's needed. |
 | `generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert. Set to `false` to skip generation (useful when you only want to sync user-managed certs). |
 | `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` VS Code setting. |
 | `syncContainerCert` | `false` | **Reverse sync (opt-in).** When the container itself already has a valid ASP.NET dev certificate (e.g. baked into the image with `dotnet dev-certs https`), push it to the host so the host trusts it instead of generating its own. Enabling this also implicitly overrides `generateDotNetCert` for this container — you don't need to set both. See "[Syncing a certificate from the container to the host](#syncing-a-certificate-from-the-container-to-the-host)". |
@@ -183,8 +183,6 @@ Set in your workspace settings or user settings inside the Dev Container / remot
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `devcontainer-dev-certs.autoInject` | `true` | Automatically inject and configure the dev cert when a remote session starts. Set to `false` to require manual invocation via the "Dev Certs: Inject Certificate into Remote" command. |
-| `devcontainer-dev-certs.sslCertDirs` | Standard distro paths | Colon-separated system CA certificate directories to include in `SSL_CERT_DIR` alongside the dev-certs trust directory. Used when the Dev Container feature isn't present (e.g. SSH remoting, WSL); the feature's own `sslCertDirs` option takes precedence inside containers built with the feature. |
-| `devcontainer-dev-certs.ensureSslCertDir` | `true` | Ensure `SSL_CERT_DIR` is configured in the remote environment when the Dev Container feature hasn't set it. |
 | `devcontainer-dev-certs.warnOnStaleDevCerts` | `true` | Show a warning when multiple dev certificates are detected in this Dev Container's .NET certificate stores after install — alongside the extension-managed certificate. Pairs with the "Dev Certs: Clean Up Other Dev Certificates in Dev Container" command. |
 
 ## User-managed certificates

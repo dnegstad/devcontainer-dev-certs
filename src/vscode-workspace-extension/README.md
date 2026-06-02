@@ -28,7 +28,6 @@ A Dev Container feature + two companion VS Code extensions that handle everythin
 - Places each PFX in the .NET X509 store (`~/.dotnet/corefx/cryptography/x509stores/my/`) so ASP.NET and Aspire discover it automatically
 - Places each PEM in an OpenSSL trust directory with hash symlinks so `curl`, `wget`, and other tools trust it
 - Optionally writes each cert into additional destinations (nginx config dirs, Java keystores, etc.) when `extraCertDestinations` is configured
-- Configures `SSL_CERT_DIR` to include the trust directory alongside system CA paths
 - Optionally pushes the container's OWN dev cert to the host when `syncContainerCert` is enabled (reverse-sync)
 - Surfaces a one-time cleanup prompt when leftover dev certs from previous installs are detected
 
@@ -63,9 +62,10 @@ On activation in a remote context, this extension:
 1. **Requests certificate material** from the host companion extension via `vscode.commands.executeCommand()` (routed transparently across VS Code extension hosts). Calls `getAllCertMaterialV3` for the modern multi-cert bundle and falls back to older single-cert endpoints if the host extension is on an older version.
 2. **Installs each certificate in the bundle** — the auto-generated dotnet dev cert plus any user-managed certs the host is configured to sync. The PFX lands in `~/.dotnet/corefx/cryptography/x509stores/my/{thumbprint}.pfx` so ASP.NET's `GetDevelopmentCertificateFromStore()` discovers it; the PEM lands in `~/.aspnet/dev-certs/trust/` with OpenSSL hash symlinks (c_rehash implemented in pure TypeScript — no `openssl` binary required); a public-cert-only PFX lands in the .NET Root store so dotnet reports the cert as trusted.
 3. **Writes user-managed certs to extra destinations** when configured — each entry in `extraCertDestinations` becomes a directory inside the container the extension writes per-cert `{name}.pem` / `.key` / `.pfx` / `-bundle.pem` files to (useful for nginx, Java keystores, requests bundles, etc.).
-4. **Ensures `SSL_CERT_DIR`** includes the trust directory alongside standard system CA paths, so OpenSSL-based tools (`curl`, `wget`, etc.) trust the cert.
-5. **Pushes the container's own dev cert to the host** when `syncContainerCert` is enabled — the optional reverse-sync flow (see below).
-6. **Surfaces a one-time cleanup prompt** when it detects other ASP.NET dev cert artifacts in the container's .NET store alongside the managed one, so leftover certs from previous installs don't confuse Kestrel's selection logic.
+4. **Pushes the container's own dev cert to the host** when `syncContainerCert` is enabled — the optional reverse-sync flow (see below).
+5. **Surfaces a one-time cleanup prompt** when it detects other ASP.NET dev cert artifacts in the container's .NET store alongside the managed one, so leftover certs from previous installs don't confuse Kestrel's selection logic.
+
+OpenSSL-based tools (`curl`, `wget`, etc.) trust the cert because the Dev Container feature points `SSL_CERT_DIR` at the trust directory (see [OpenSSL Trust](#openssl-trust)).
 
 If the host companion extension is not installed, this extension prompts you to install it with a single click.
 
@@ -77,7 +77,7 @@ The one exception is `devcontainerDevCerts.defaultKestrelCertificate` (a host VS
 
 ### OpenSSL Trust
 
-The PEM certificate is placed with hash symlinks matching the format that OpenSSL's directory-based lookup expects. The `SSL_CERT_DIR` environment variable (set by the Dev Container feature or by this extension for non-Dev Container scenarios) tells OpenSSL to check this directory alongside the system CA bundle.
+The PEM certificate is placed with hash symlinks matching the format that OpenSSL's directory-based lookup expects. The `SSL_CERT_DIR` environment variable (set by the Dev Container feature's `install.sh`) tells OpenSSL to check this directory alongside the system CA bundle.
 
 This means any tool or service that uses OpenSSL for TLS verification — regardless of language or framework — will trust the certificate.
 
@@ -105,11 +105,9 @@ If after install this extension finds dev cert PFXes in the container's .NET sto
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `devcontainer-dev-certs.autoInject` | `true` | Automatically inject the cert when a remote session starts. Set to `false` to require manually invoking "Dev Certs: Inject Certificate into Remote". |
-| `devcontainer-dev-certs.sslCertDirs` | `/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl` | System CA directories to include in `SSL_CERT_DIR`. Used when the Dev Container feature isn't present (SSH/WSL); the feature's own `sslCertDirs` option takes precedence inside containers built with the feature. |
-| `devcontainer-dev-certs.ensureSslCertDir` | `true` | Configure `SSL_CERT_DIR` when the Dev Container feature hasn't set it (for SSH/WSL scenarios). |
 | `devcontainer-dev-certs.warnOnStaleDevCerts` | `true` | Show the post-install warning when other dev certs are detected alongside the managed one. Set to `false` to silence the prompt; the cleanup command stays available from the Command Palette either way. |
 
-## Feature Options
+## Dev Container Feature Options
 
 When using the Dev Container feature, these options are available:
 
@@ -127,6 +125,7 @@ When using the Dev Container feature, these options are available:
 |--------|---------|-------------|
 | `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container. |
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override if your base image uses non-standard paths. |
+| `pruneMissingCertDirs` | `true` | Filter out directories that don't exist on this image from `sslCertDirs` before writing `SSL_CERT_DIR` (some TLS stacks error on a missing entry). Set to `false` to use `sslCertDirs` verbatim — e.g. when a directory is created after install but before it's needed. |
 | `generateDotNetCert` | `true` | Pull the host-generated ASP.NET dev cert into this container. Set to `false` if you're only using user-managed certs in this container. |
 | `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` setting. |
 | `syncContainerCert` | `false` | Opt in to pushing the container's own dev cert to the host (reverse-sync). When true, also implicitly overrides `generateDotNetCert` — you don't need to set both. |
