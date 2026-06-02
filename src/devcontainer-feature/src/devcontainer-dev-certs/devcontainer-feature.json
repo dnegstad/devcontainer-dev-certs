@@ -22,7 +22,12 @@
     "sslCertDirs": {
       "type": "string",
       "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
-      "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. The default covers paths from several Linux distributions; directories that don't exist are filtered out at install time. Override this if your base image uses non-standard paths; explicit values are used as-is."
+      "description": "Colon-separated system CA certificate directories to include in SSL_CERT_DIR alongside the dev-certs trust directory. The default covers paths from several Linux distributions. Override this if your base image uses non-standard paths. By default, directories that don't exist on this image are filtered out (see pruneMissingCertDirs)."
+    },
+    "pruneMissingCertDirs": {
+      "type": "boolean",
+      "default": true,
+      "description": "Filter out directories that don't exist on this image from sslCertDirs before writing SSL_CERT_DIR. The default list spans several distros and only a subset exists on any given image; while OpenSSL ignores a missing directory, some consumers (Rust's openssl-probe / rustls-native-certs) error on one. Set to false to use sslCertDirs verbatim — for example when a directory will be created after install but before it's needed."
     },
     "generateDotNetCert": {
       "type": "boolean",

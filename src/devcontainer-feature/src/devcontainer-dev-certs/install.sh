@@ -4,13 +4,16 @@ set -e
 # Options from devcontainer-feature.json (uppercased)
 TRUST_NSS="${TRUSTNSS:-false}"
 # Keep this literal in sync with the `sslCertDirs` default in
-# devcontainer-feature.json (asserted by test/validate-feature.mjs). It's named
-# as its own constant so the pruning guard below can recognize "the user is on
-# the defaults" — the devcontainer CLI exports SSLCERTDIRS set to this same
-# default even when the user didn't specify the option, so emptiness alone can't
-# distinguish the two cases.
+# devcontainer-feature.json (asserted by test/validate-feature.mjs).
 DEFAULT_SSL_CERT_DIRS="/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
 SSL_CERT_DIRS="${SSLCERTDIRS:-${DEFAULT_SSL_CERT_DIRS}}"
+# Whether to drop non-existent directories from SSL_CERT_DIRS. A dedicated
+# toggle rather than something inferred from "is this the default or an
+# override?": the devcontainer CLI exports SSLCERTDIRS set to the declared
+# default even when the user didn't specify the option, so install.sh genuinely
+# cannot tell an omitted option from one explicitly set to the default value —
+# any inference is guesswork. An explicit boolean sidesteps that entirely.
+PRUNE_MISSING_CERT_DIRS="${PRUNEMISSINGCERTDIRS:-true}"
 GENERATE_DOTNET_CERT="${GENERATEDOTNETCERT:-true}"
 SYNC_USER_CERTIFICATES="${SYNCUSERCERTIFICATES:-true}"
 SYNC_CONTAINER_CERT="${SYNCCONTAINERCERT:-false}"
@@ -52,7 +55,7 @@ fi
 # Validate that no feature option contains a newline. We append these to
 # /etc/environment, and an embedded newline would inject an extra env line
 # (potentially with a name the operator didn't intend).
-for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS; do
+for varname in TRUST_NSS SSL_CERT_DIRS PRUNE_MISSING_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS; do
     case "${!varname}" in
         *$'\n'*)
             echo "Error: feature option ${varname} must not contain newlines." >&2
@@ -61,31 +64,26 @@ for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICAT
     esac
 done
 
-# Prune non-existent dirs from the built-in default CA list ONLY.
+# Prune non-existent dirs from SSL_CERT_DIRS when pruneMissingCertDirs is on
+# (the default).
 #
-# The default enumerates CA paths across several distros (Debian/Ubuntu,
-# Fedora/RHEL, SUSE); only a subset exists on any given base image. OpenSSL
-# silently ignores a missing dir in SSL_CERT_DIR, but some consumers do not:
-# Rust's openssl-probe / rustls-native-certs `read_dir` each entry and error
-# on a path that isn't there. So when we fall back to the defaults, keep only
-# the dirs that actually exist on this image.
+# The default sslCertDirs list enumerates CA paths across several distros
+# (Debian/Ubuntu, Fedora/RHEL, SUSE); only a subset exists on any given base
+# image. OpenSSL silently ignores a missing dir in SSL_CERT_DIR, but some
+# consumers do not: Rust's openssl-probe / rustls-native-certs `read_dir` each
+# entry and error on a path that isn't there. So by default we keep only the
+# dirs that actually exist on this image.
 #
-# An explicit sslCertDirs override is passed through verbatim — we trust the
-# operator to name paths that exist (or will, by the time it matters) and
-# don't want to silently drop something they deliberately configured.
-#
-# Detecting "on the defaults" is the subtle part. The devcontainer CLI exports
-# a feature option's env var set to the option's declared default whenever the
-# user doesn't specify it, so SSLCERTDIRS is almost never empty at runtime — it
-# arrives as the full default string. Testing `-z "${SSLCERTDIRS:-}"` alone
-# therefore never matched in a real install and the pruning silently never ran.
-# Treat the value as "defaulted" when it's unset/empty OR byte-for-byte equal to
-# our declared default; only a genuinely different value counts as an explicit
-# override that we pass through untouched.
-if [ -z "${SSLCERTDIRS:-}" ] || [ "${SSLCERTDIRS}" = "${DEFAULT_SSL_CERT_DIRS}" ]; then
+# This is a single explicit toggle rather than something inferred from whether
+# sslCertDirs was overridden: install.sh can't reliably tell "user omitted the
+# option" from "user set it to the default value" (the CLI passes the declared
+# default as the env var in both cases). pruneMissingCertDirs=false uses the
+# list verbatim — e.g. when a directory is created after install but before it's
+# needed and must not be dropped now.
+if [ "${PRUNE_MISSING_CERT_DIRS}" = "true" ]; then
     PRUNED_SSL_CERT_DIRS=""
-    IFS=':' read -ra _default_cert_dirs <<< "${SSL_CERT_DIRS}"
-    for _cert_dir in "${_default_cert_dirs[@]}"; do
+    IFS=':' read -ra _candidate_cert_dirs <<< "${SSL_CERT_DIRS}"
+    for _cert_dir in "${_candidate_cert_dirs[@]}"; do
         if [ -d "${_cert_dir}" ]; then
             PRUNED_SSL_CERT_DIRS="${PRUNED_SSL_CERT_DIRS:+${PRUNED_SSL_CERT_DIRS}:}${_cert_dir}"
         else

@@ -97,13 +97,14 @@ const DEFAULT =
 
 console.log("install.sh: SSL_CERT_DIR management\n");
 
-// --- Bug 1: pruning of absent default CA dirs actually happens ----------------
+// --- Pruning runs by default (pruneMissingCertDirs unset => true) -------------
 //
 // Simulate the real devcontainer-CLI invocation: the user left sslCertDirs at
-// its default, so the CLI exports SSLCERTDIRS set to the full default string.
-// The pruning must still drop whichever of those dirs don't exist on this host.
+// its default, so the CLI exports SSLCERTDIRS set to the full default string,
+// and pruneMissingCertDirs is unset (defaults true). The pruning must drop
+// whichever of those dirs don't exist on this host.
 {
-  console.log("Pruning on the defaults (SSLCERTDIRS = default string):");
+  console.log("Pruning on by default (pruneMissingCertDirs unset):");
   const r = runInstall({ env: { SSLCERTDIRS: DEFAULT } });
   try {
     const present = DEFAULT.split(":").filter((d) => existsSync(d));
@@ -151,20 +152,53 @@ console.log("install.sh: SSL_CERT_DIR management\n");
   }
 }
 
-// --- Explicit override is honored verbatim (NOT pruned) -----------------------
+// --- Pruning applies to an explicit list too (toggle, not override-inference) -
+//
+// Unlike the old behavior, an explicit sslCertDirs override is ALSO pruned when
+// pruneMissingCertDirs is on (the default) — pruning is a behavior toggle, not
+// something inferred from whether the value differs from the default.
 {
-  console.log("\nExplicit override is passed through verbatim:");
+  console.log("\nPruning applies to an explicit list when the toggle is on:");
   const override = "/etc/ssl/certs:/does/not/exist/anywhere-xyz";
-  const r = runInstall({ env: { SSLCERTDIRS: override } });
+  const r = runInstall({
+    env: { SSLCERTDIRS: override, PRUNEMISSINGCERTDIRS: "true" },
+  });
   try {
     const line =
       (r.profile || "")
         .split("\n")
         .find((l) => l.includes("SSL_CERT_DIR=")) || "";
     check(
-      "non-existent dir in an explicit override is retained",
+      "non-existent dir in an explicit list is pruned when toggle on",
+      !line.includes("/does/not/exist/anywhere-xyz"),
+      `expected the absent dir to be dropped; got line: ${line}`
+    );
+    check(
+      "existing dir in the explicit list is kept",
+      line.includes("/etc/ssl/certs"),
+      `expected /etc/ssl/certs retained; got line: ${line}`
+    );
+  } finally {
+    r.cleanup();
+  }
+}
+
+// --- pruneMissingCertDirs=false uses the list verbatim ------------------------
+{
+  console.log("\npruneMissingCertDirs=false keeps the list verbatim:");
+  const override = "/etc/ssl/certs:/does/not/exist/anywhere-xyz";
+  const r = runInstall({
+    env: { SSLCERTDIRS: override, PRUNEMISSINGCERTDIRS: "false" },
+  });
+  try {
+    const line =
+      (r.profile || "")
+        .split("\n")
+        .find((l) => l.includes("SSL_CERT_DIR=")) || "";
+    check(
+      "non-existent dir is retained when pruneMissingCertDirs=false",
       line.includes("/does/not/exist/anywhere-xyz"),
-      `explicit overrides must not be pruned; got line: ${line}`
+      `expected verbatim pass-through; got line: ${line}`
     );
   } finally {
     r.cleanup();
