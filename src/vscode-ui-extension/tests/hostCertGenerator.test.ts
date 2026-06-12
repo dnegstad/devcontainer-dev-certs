@@ -132,6 +132,13 @@ describe("CertProvider.provisionViaConfiguredBackend", () => {
     const { cert, key, thumbprint } = await makeValidCert();
     const { manager, trustSpy } = buildManagerMock(cert, key, thumbprint);
 
+    // `selectBackend("native")` returns a native backend; the provider
+    // sees `kind: "native"` and routes to the pre-configured
+    // CertManager rather than calling `backend.generate()`.
+    mockedSelectBackend.mockResolvedValue(fakeBackend("native", () => {
+      throw new Error("native backend.generate should not run; native path defers to certManager.trust()");
+    }));
+
     __setConfig("devcontainerDevCerts", {
       generateDotNetCert: true,
       hostCertGenerator: "native",
@@ -140,9 +147,8 @@ describe("CertProvider.provisionViaConfiguredBackend", () => {
     const provider = new CertProvider(manager);
     await provider.getCertMaterial(true);
 
+    expect(mockedSelectBackend).toHaveBeenCalledWith("native");
     expect(trustSpy).toHaveBeenCalledTimes(1);
-    // selectBackend is bypassed entirely on the native short-circuit.
-    expect(mockedSelectBackend).not.toHaveBeenCalled();
   });
 
   it("defers to selectBackend('auto') when hostCertGenerator is unset", async () => {

@@ -217,20 +217,16 @@ export class CertProvider {
       .getConfiguration("devcontainerDevCerts")
       .get<BackendMode>("hostCertGenerator", "auto");
 
-    // Native is the historical code path. Use the in-process CertManager
-    // directly so its l10n + Linux NSS reporter wiring (set up in
-    // extension.ts) is preserved — the shared NativeBackend constructs a
-    // bare CertManager without those hooks.
-    if (setting === "native") {
-      await this.certManager.trust();
-      return;
-    }
-
     const backend = await selectBackend(setting);
+
+    // Native — whether the user explicitly picked it or `auto` resolved
+    // to it (non-macOS, or macOS without dotnet) — defers to the
+    // pre-configured CertManager on `this`. NativeBackend.generate would
+    // produce equivalent OS-store state, but its bare manager misses the
+    // extension-only `localize` wiring (vscode.l10n.t). Until that's
+    // also threadable through GenerateOptions, this is the one knob
+    // worth keeping the bypass for.
     if (backend.kind === "native") {
-      // `auto` resolved to native (non-macOS, or macOS without dotnet
-      // installed). Same reasoning as above — defer to the configured
-      // CertManager rather than the bare one inside NativeBackend.
       await this.certManager.trust();
       return;
     }

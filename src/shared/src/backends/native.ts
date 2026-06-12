@@ -2,7 +2,6 @@ import * as fs from "fs";
 import * as path from "path";
 import { exportPem, exportPfx } from "../cert/exporter";
 import { generateCertificate } from "../cert/generator";
-import { loadPfx } from "../cert/loader";
 import { CertManager } from "../cert/manager";
 import { VALIDITY_DAYS } from "../cert/properties";
 import type { LinuxNssTrustReporter } from "../platform/types";
@@ -86,25 +85,23 @@ async function generateAndTrust(
   await manager.exportCert("pfx", outDir);
   await manager.exportCert("pem", outDir);
 
-  const pfxPath = path.join(outDir, "aspnetcore-dev.pfx");
-  const pemPath = path.join(outDir, "aspnetcore-dev.pem");
-  const pemKeyPath = path.join(outDir, "aspnetcore-dev.key");
-
-  // Recover the thumbprint by re-reading the exported PFX. Cheaper than
-  // reaching into the manager's private state and keeps the contract
-  // symmetric with the `dotnet` backend's recovery step.
-  const loaded = await loadPfx(pfxPath);
-  if (!loaded.cert) {
+  // `manager.trust()` guarantees the cert is present in the platform
+  // store, so a follow-up `check()` reads the thumbprint without
+  // touching disk again. (Previously this re-parsed the exported PFX —
+  // a holdover from when the dotnet backend did the same dance; the
+  // dotnet rework no longer reparses, so this can read its own state.)
+  const status = await manager.check();
+  if (!status.thumbprint) {
     throw new Error(
-      `Native backend wrote ${pfxPath} but it could not be reparsed for thumbprint recovery.`
+      "Native backend trust() succeeded but check() reports no thumbprint."
     );
   }
 
   return {
-    pfxPath,
-    pemPath,
-    pemKeyPath,
-    thumbprint: loaded.cert.thumbprintSha1,
+    pfxPath: path.join(outDir, "aspnetcore-dev.pfx"),
+    pemPath: path.join(outDir, "aspnetcore-dev.pem"),
+    pemKeyPath: path.join(outDir, "aspnetcore-dev.key"),
+    thumbprint: status.thumbprint,
     trusted: true,
     backendUsed: "native",
   };
