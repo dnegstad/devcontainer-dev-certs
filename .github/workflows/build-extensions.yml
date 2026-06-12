@@ -163,6 +163,21 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Unlock login keychain for dotnet dev-certs
+        # `dotnet dev-certs https` saves the generated cert into
+        # CurrentUser\My, which on macOS is the login keychain. GitHub
+        # Actions macos runners ship with the login keychain locked
+        # by default — without an unlock, the save call fails with
+        # "There was an error saving the HTTPS developer certificate
+        # to the current user personal certificate store." and the
+        # disk cache we're trying to test never gets written.
+        #
+        # The empty password is the documented GH Actions convention
+        # for the runner user's login keychain.
+        run: |
+          security unlock-keychain -p '' "$HOME/Library/Keychains/login.keychain-db"
+          security set-keychain-settings "$HOME/Library/Keychains/login.keychain-db"
+
       - name: Validate dotnet dev-certs disk cache is loadable
         # If this fails, `DotnetBackend.generate` on macOS cannot
         # discover the cert dotnet just created — the rework that

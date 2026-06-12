@@ -4,6 +4,7 @@ import {
   expect,
   beforeEach,
   vi,
+  type Mock,
 } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
@@ -43,8 +44,12 @@ async function makeValidCert(): ReturnType<typeof generateCertificate> {
 
 interface ManagerSpyHandles {
   manager: CertManager;
-  trustSpy: ReturnType<typeof vi.fn>;
-  checkSpy: ReturnType<typeof vi.fn>;
+  // Concrete callable signatures so call sites (`trustSpy()`, `trustSpy.mock.calls`)
+  // narrow correctly; `ReturnType<typeof vi.fn>` widens to Mock<Procedure |
+  // Constructable> which TS won't let you invoke without first telling it
+  // which side of the union you mean.
+  trustSpy: Mock<() => Promise<void>>;
+  checkSpy: Mock<() => Promise<unknown>>;
 }
 
 /**
