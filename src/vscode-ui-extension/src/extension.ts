@@ -105,7 +105,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // the consent prompt, host-setting gating, and certProvider dispatch all
   // live here so we don't drift between versions.
   const resolveAndProvision = async (
-    args: GetAllCertMaterialArgs | undefined
+    args: Partial<GetAllCertMaterialArgs> | undefined
   ): Promise<GetAllCertMaterialArgs> => {
     const autoProvisionCfg = vscode.workspace
       .getConfiguration("devcontainer-dev-certs")
@@ -138,7 +138,9 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.getAllCertMaterial",
-      async (args: GetAllCertMaterialArgs | undefined): Promise<CertBundle> => {
+      async (
+        args: Partial<GetAllCertMaterialArgs> | undefined
+      ): Promise<CertBundle> => {
         try {
           const effective = await resolveAndProvision(args);
           const bundle = await certProvider.getAllCertMaterial(effective);
@@ -163,7 +165,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(
       "devcontainer-dev-certs.getAllCertMaterialV3",
       async (
-        args: GetAllCertMaterialArgs | undefined
+        args: Partial<GetAllCertMaterialArgs> | undefined
       ): Promise<CertBundleV3> => {
         try {
           const effective = await resolveAndProvision(args);
@@ -400,7 +402,10 @@ async function promptForContainerCertConsent(
 }
 
 export interface ResolveDotnetProvisioningDeps {
-  args: GetAllCertMaterialArgs | undefined;
+  // Partial because the IPC entry points accept partial-or-missing args from
+  // pinned older workspace extensions; resolveDotnetProvisioning normalizes
+  // them into a fully-populated GetAllCertMaterialArgs before downstream use.
+  args: Partial<GetAllCertMaterialArgs> | undefined;
   hostWantsDotNet: boolean;
   autoProvision: boolean;
   checkCert: () => Promise<{ exists: boolean; isTrusted: boolean }>;
@@ -473,9 +478,22 @@ function ensureTerminalSslCertDir(context: vscode.ExtensionContext): void {
   const envCollection = context.environmentVariableCollection;
   envCollection.description =
     "Includes the dev certificate trust directory in SSL_CERT_DIR";
-  envCollection.prepend("SSL_CERT_DIR", trustDir + ":");
 
-  log(`SSL_CERT_DIR prepended with ${trustDir} for integrated terminals`);
+  // VS Code's environment variable collection concatenates literally — it
+  // can't do shell-style interpolation to drop the separator when there's
+  // nothing to join to. So branch on the inherited value instead: when
+  // SSL_CERT_DIR is already set, prepend `trustDir:` so the existing dirs
+  // follow; when it's empty/unset, replace outright. Prepending `trustDir:`
+  // onto an empty value would leave a trailing empty path element
+  // (`SSL_CERT_DIR=trustDir:`), which some OpenSSL-based tools reject.
+  const existing = process.env["SSL_CERT_DIR"];
+  if (existing && existing.length > 0) {
+    envCollection.prepend("SSL_CERT_DIR", trustDir + ":");
+  } else {
+    envCollection.replace("SSL_CERT_DIR", trustDir);
+  }
+
+  log(`SSL_CERT_DIR set to include ${trustDir} for integrated terminals`);
 }
 
 /**

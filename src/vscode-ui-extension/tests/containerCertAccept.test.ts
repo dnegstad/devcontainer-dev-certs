@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import {
   Extension,
   SubjectAlternativeNameExtension,
@@ -56,7 +56,9 @@ async function makeDevPem(
     ...SAN_DNS_NAMES.map((d) => ({ type: "dns" as const, value: d })),
     ...SAN_IP_ADDRESSES.map((ip) => ({ type: "ip" as const, value: ip })),
   ];
-  const extensions = [new SubjectAlternativeNameExtension(sans, true)];
+  const extensions: Extension[] = [
+    new SubjectAlternativeNameExtension(sans, true),
+  ];
   if (!opts.omitOid) {
     extensions.push(
       new Extension(
@@ -84,32 +86,42 @@ async function makeDevPem(
   };
 }
 
+type DepOverrides = Partial<
+  Omit<
+    AcceptContainerCertDeps,
+    "trustCertificate" | "promptUser" | "recordConsent"
+  >
+> & {
+  trustCertificate?: Mock<AcceptContainerCertDeps["trustCertificate"]>;
+  promptUser?: Mock<AcceptContainerCertDeps["promptUser"]>;
+  recordConsent?: Mock<AcceptContainerCertDeps["recordConsent"]>;
+};
+
 function makeDeps(
-  overrides: Partial<AcceptContainerCertDeps> = {}
+  overrides: DepOverrides = {}
 ): AcceptContainerCertDeps & {
-  trustCertificate: ReturnType<typeof vi.fn>;
-  promptUser: ReturnType<typeof vi.fn>;
-  recordConsent: ReturnType<typeof vi.fn>;
+  trustCertificate: Mock<AcceptContainerCertDeps["trustCertificate"]>;
+  promptUser: Mock<AcceptContainerCertDeps["promptUser"]>;
+  recordConsent: Mock<AcceptContainerCertDeps["recordConsent"]>;
 } {
-  const trustCertificate = vi.fn(async () => undefined);
-  const promptUser = vi.fn(async () => true);
-  const recordConsent = vi.fn(async () => undefined);
+  const trustCertificate =
+    overrides.trustCertificate ??
+    vi.fn<AcceptContainerCertDeps["trustCertificate"]>(async () => undefined);
+  const promptUser =
+    overrides.promptUser ??
+    vi.fn<AcceptContainerCertDeps["promptUser"]>(async () => true);
+  const recordConsent =
+    overrides.recordConsent ??
+    vi.fn<AcceptContainerCertDeps["recordConsent"]>(async () => undefined);
   return {
     generateDotNetCert: true,
     autoProvision: true,
     allowNonLocalSans: false,
     hasConsent: () => false,
-    recordConsent,
-    promptUser,
-    trustCertificate,
     ...overrides,
-    // Re-set the spies after spread so they take precedence over manual
-    // overrides that re-passed the spy refs.
-    ...(overrides.trustCertificate === undefined
-      ? { trustCertificate }
-      : {}),
-    ...(overrides.promptUser === undefined ? { promptUser } : {}),
-    ...(overrides.recordConsent === undefined ? { recordConsent } : {}),
+    trustCertificate,
+    promptUser,
+    recordConsent,
   };
 }
 

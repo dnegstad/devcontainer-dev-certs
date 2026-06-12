@@ -3,7 +3,17 @@ set -e
 
 # Options from devcontainer-feature.json (uppercased)
 TRUST_NSS="${TRUSTNSS:-false}"
-SSL_CERT_DIRS="${SSLCERTDIRS:-/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl}"
+# Keep this literal in sync with the `sslCertDirs` default in
+# devcontainer-feature.json (asserted by test/validate-feature.mjs).
+DEFAULT_SSL_CERT_DIRS="/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
+SSL_CERT_DIRS="${SSLCERTDIRS:-${DEFAULT_SSL_CERT_DIRS}}"
+# Whether to drop non-existent directories from SSL_CERT_DIRS. A dedicated
+# toggle rather than something inferred from "is this the default or an
+# override?": the devcontainer CLI exports SSLCERTDIRS set to the declared
+# default even when the user didn't specify the option, so install.sh genuinely
+# cannot tell an omitted option from one explicitly set to the default value —
+# any inference is guesswork. An explicit boolean sidesteps that entirely.
+PRUNE_MISSING_CERT_DIRS="${PRUNEMISSINGCERTDIRS:-true}"
 GENERATE_DOTNET_CERT="${GENERATEDOTNETCERT:-true}"
 SYNC_USER_CERTIFICATES="${SYNCUSERCERTIFICATES:-true}"
 SYNC_CONTAINER_CERT="${SYNCCONTAINERCERT:-false}"
@@ -17,6 +27,25 @@ FALLBACK_BIN_PATH="/usr/local/bin/devcontainer-dev-certs-install"
 
 REMOTE_USER="${_REMOTE_USER:-vscode}"
 REMOTE_USER_HOME="${_REMOTE_USER_HOME:-/home/${REMOTE_USER}}"
+
+# System-config sink root. Empty in production — every system file
+# (/etc/profile.d/*, /etc/environment, the interactive-shell bashrc) is written
+# at its real absolute path. Set to a temp dir by test/install-sh.test.mjs so
+# the script can be exercised hermetically without touching the host's /etc.
+# Validated as an absolute path (or empty) for the same reason every other path
+# input is: this value is prefixed onto files we then write to.
+DEVCERTS_SYSROOT="${DEVCERTS_SYSROOT:-}"
+if [ -n "${DEVCERTS_SYSROOT}" ]; then
+    case "${DEVCERTS_SYSROOT}" in
+        /*) ;;
+        *)
+            echo "Error: DEVCERTS_SYSROOT must be an absolute path." >&2
+            exit 1
+            ;;
+    esac
+fi
+ETC_ENVIRONMENT="${DEVCERTS_SYSROOT}/etc/environment"
+PROFILE_DIR="${DEVCERTS_SYSROOT}/etc/profile.d"
 
 echo "Setting up dev certificate infrastructure..."
 
@@ -32,7 +61,7 @@ fi
 # Validate that no feature option contains a newline. We append these to
 # /etc/environment, and an embedded newline would inject an extra env line
 # (potentially with a name the operator didn't intend).
-for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS INSTALL_FALLBACK_TOOLS; do
+for varname in TRUST_NSS SSL_CERT_DIRS PRUNE_MISSING_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS INSTALL_FALLBACK_TOOLS; do
     case "${!varname}" in
         *$'\n'*)
             echo "Error: feature option ${varname} must not contain newlines." >&2
@@ -40,6 +69,35 @@ for varname in TRUST_NSS SSL_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICAT
             ;;
     esac
 done
+
+# Prune non-existent dirs from SSL_CERT_DIRS when pruneMissingCertDirs is on
+# (the default).
+#
+# The default sslCertDirs list enumerates CA paths across several distros
+# (Debian/Ubuntu, Fedora/RHEL, SUSE); only a subset exists on any given base
+# image. OpenSSL silently ignores a missing dir in SSL_CERT_DIR, but some
+# consumers do not: Rust's openssl-probe / rustls-native-certs `read_dir` each
+# entry and error on a path that isn't there. So by default we keep only the
+# dirs that actually exist on this image.
+#
+# This is a single explicit toggle rather than something inferred from whether
+# sslCertDirs was overridden: install.sh can't reliably tell "user omitted the
+# option" from "user set it to the default value" (the CLI passes the declared
+# default as the env var in both cases). pruneMissingCertDirs=false uses the
+# list verbatim — e.g. when a directory is created after install but before it's
+# needed and must not be dropped now.
+if [ "${PRUNE_MISSING_CERT_DIRS}" = "true" ]; then
+    PRUNED_SSL_CERT_DIRS=""
+    IFS=':' read -ra _candidate_cert_dirs <<< "${SSL_CERT_DIRS}"
+    for _cert_dir in "${_candidate_cert_dirs[@]}"; do
+        if [ -d "${_cert_dir}" ]; then
+            PRUNED_SSL_CERT_DIRS="${PRUNED_SSL_CERT_DIRS:+${PRUNED_SSL_CERT_DIRS}:}${_cert_dir}"
+        else
+            echo "  skipping absent CA dir: ${_cert_dir}"
+        fi
+    done
+    SSL_CERT_DIRS="${PRUNED_SSL_CERT_DIRS}"
+fi
 
 # Install NSS tools if requested (for Chromium/Firefox trust)
 if [ "${TRUST_NSS}" = "true" ]; then
@@ -169,7 +227,7 @@ append_env() {
     escaped="${escaped//\"/\\\"}"
     escaped="${escaped//\$/\\\$}"
     escaped="${escaped//\`/\\\`}"
-    echo "${key}=\"${escaped}\"" >> /etc/environment
+    echo "${key}=\"${escaped}\"" >> "${ETC_ENVIRONMENT}"
 }
 
 # Quote a value for safe single-quoted embedding in a shell script. Single
@@ -220,7 +278,14 @@ shell_single_quote() {
 # unexpanded and into /etc/environment with a resolved `_REMOTE_USER_HOME`
 # (pam_env doesn't expand `$HOME`). The other feature-option vars are plain
 # string values and go to both sinks with the same content.
-PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
+# Ensure the sink directories exist before writing. /etc and /etc/profile.d are
+# present on every mainstream base image, but a few stripped-down images ship
+# without /etc/profile.d — create it so the login-shell export still lands
+# (and so the hermetic test can run under an empty DEVCERTS_SYSROOT).
+mkdir -p "${PROFILE_DIR}"
+mkdir -p "$(dirname "${ETC_ENVIRONMENT}")"
+
+PROFILE_SCRIPT="${PROFILE_DIR}/devcontainer-dev-certs.sh"
 : > "${PROFILE_SCRIPT}"
 chmod 0644 "${PROFILE_SCRIPT}"
 
@@ -251,8 +316,17 @@ append_profile() {
 # `<expanded HOME>/.aspnet/dev-certs/trust:<literal user value>`. Even if
 # the SSL_CERT_DIRS regex validation above is later loosened, the user
 # portion stays inert because of the single quotes.
-SSL_CERT_DIRS_SQ="$(shell_single_quote "${SSL_CERT_DIRS}")"
-echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:\"${SSL_CERT_DIRS_SQ}" >> "${PROFILE_SCRIPT}"
+# SSL_CERT_DIRS can be empty here if pruning dropped every default CA dir
+# (a minimal image with none of the standard paths). Emit the trust dir
+# alone in that case — appending a `:` with nothing after it would leave a
+# trailing empty path element, the same artifact that trips up Rust's
+# dir-walking TLS stacks that the pruning above is meant to avoid.
+if [ -n "${SSL_CERT_DIRS}" ]; then
+    SSL_CERT_DIRS_SQ="$(shell_single_quote "${SSL_CERT_DIRS}")"
+    echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust:\"${SSL_CERT_DIRS_SQ}" >> "${PROFILE_SCRIPT}"
+else
+    echo "export SSL_CERT_DIR=\"\$HOME/.aspnet/dev-certs/trust\"" >> "${PROFILE_SCRIPT}"
+fi
 
 append_profile "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_profile "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
@@ -306,7 +380,13 @@ if [ "${SYNC_CONTAINER_CERT}" != "true" ] && [ "${GENERATE_DOTNET_CERT}" = "true
     append_profile "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
 fi
 
-SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
+# Same empty-safety as the profile.d write above: only join with a `:` when
+# there's actually a system CA dir to follow it.
+if [ -n "${SSL_CERT_DIRS}" ]; then
+    SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust:${SSL_CERT_DIRS}"
+else
+    SSL_CERT_DIR_RESOLVED="${REMOTE_USER_HOME}/.aspnet/dev-certs/trust"
+fi
 append_env "SSL_CERT_DIR" "${SSL_CERT_DIR_RESOLVED}"
 
 # Keep the same values in /etc/environment for non-VS-Code PAM-based
@@ -325,6 +405,52 @@ append_env "DEVCONTAINER_DEV_CERTS_TRUST_DIR" "${TRUST_DIR}"
 # conditional as the profile.d write above — see the comment there.
 if [ "${SUPPRESS_DOTNET_AUTOGEN}" = "true" ]; then
     append_env "DOTNET_GENERATE_ASPNET_CERTIFICATE" "false"
+fi
+
+# Bridge the env into interactive NON-login shells. Neither sink above reaches
+# them: /etc/profile.d is sourced only by LOGIN shells, and /etc/environment is
+# read only by pam_env (sshd, console getty). A plain
+# `docker exec -it <container> bash` — the most common way to poke at a running
+# container, as root or the remote user — starts an interactive non-login shell,
+# which sources /etc/bash.bashrc (Debian/Ubuntu) or /etc/bashrc (Fedora/RHEL/
+# SUSE) and then the user's ~/.bashrc. Without a hook there, that session gets
+# no SSL_CERT_DIR (nor the DEVCONTAINER_DEV_CERTS_* vars) at all — the "exec into
+# bash and nothing is set" symptom.
+#
+# Source the profile.d script from the system-wide interactive bashrc rather
+# than duplicating the exports: it's the single source of truth, it stays in
+# sync automatically, and `$HOME` is set per-user in that context so the
+# `$HOME/.aspnet/dev-certs/trust` prefix resolves correctly for whichever user
+# opened the shell (root vs. the remote user). Re-sourcing in a login shell —
+# where /etc/profile sources /etc/bash.bashrc before profile.d/* — is harmless:
+# the script is plain idempotent `export` assignments, not appends.
+#
+# `sh`/dash non-login interactive shells use $ENV instead and aren't covered
+# here; bash is what `docker exec ... bash` and the documented base images use.
+#
+# Pick the system-wide rc that this image's interactive bash actually sources:
+# Debian/Ubuntu read /etc/bash.bashrc automatically; the RPM/SUSE family read
+# /etc/bashrc via the default ~/.bashrc skeleton. Append to whichever exists,
+# else create the Debian/Ubuntu path (the documented base images).
+INTERACTIVE_PROFILE_SCRIPT="/etc/profile.d/devcontainer-dev-certs.sh"
+SYSTEM_BASHRC=""
+for _candidate in /etc/bash.bashrc /etc/bashrc; do
+    if [ -f "${DEVCERTS_SYSROOT}${_candidate}" ]; then
+        SYSTEM_BASHRC="${DEVCERTS_SYSROOT}${_candidate}"
+        break
+    fi
+done
+if [ -z "${SYSTEM_BASHRC}" ]; then
+    SYSTEM_BASHRC="${DEVCERTS_SYSROOT}/etc/bash.bashrc"
+    mkdir -p "$(dirname "${SYSTEM_BASHRC}")"
+fi
+BASHRC_MARKER="# devcontainer-dev-certs: cert env for interactive non-login shells"
+if ! { [ -f "${SYSTEM_BASHRC}" ] && grep -qF "${BASHRC_MARKER}" "${SYSTEM_BASHRC}"; }; then
+    {
+        echo ""
+        echo "${BASHRC_MARKER}"
+        echo "if [ -r ${INTERACTIVE_PROFILE_SCRIPT} ]; then . ${INTERACTIVE_PROFILE_SCRIPT}; fi"
+    } >> "${SYSTEM_BASHRC}"
 fi
 
 # Set ownership

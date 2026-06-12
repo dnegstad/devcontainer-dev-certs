@@ -39,6 +39,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # esbuild (build) and vitest (test) both strip types without
+      # checking them, so a dedicated tsc pass per workspace is the only
+      # thing that gates type errors at PR time.
+      - name: Typecheck Shared
+        run: npm run typecheck -w src/shared
+
+      - name: Typecheck UI Extension
+        run: npm run typecheck -w src/vscode-ui-extension
+
+      - name: Typecheck Workspace Extension
+        run: npm run typecheck -w src/vscode-workspace-extension
+
       - name: Build UI Extension
         run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/vscode-ui-extension
 

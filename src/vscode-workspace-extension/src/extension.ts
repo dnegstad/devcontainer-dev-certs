@@ -30,7 +30,6 @@ import {
   kestrelDefaultEnvHolder,
 } from "./defaultKestrelDebugProvider";
 import { parseExtraCertDestinations } from "./util/destinations";
-import { ensureSslCertDir } from "./util/sslCertDir";
 import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
 import { log, revealLogger } from "@devcontainer-dev-certs/shared";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
@@ -91,15 +90,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
-
-  if (config.get<boolean>("ensureSslCertDir", true)) {
-    const sslCertDirs = config.get<string>(
-      "sslCertDirs",
-      "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
-    );
-    ensureSslCertDir(sslCertDirs);
-    log(`SSL_CERT_DIR ensured with system dirs: ${sslCertDirs}`);
-  }
 
   // Reverse-sync: if the feature opted into pushing the container's own
   // dev cert to the host, run that before the standard pull so that the

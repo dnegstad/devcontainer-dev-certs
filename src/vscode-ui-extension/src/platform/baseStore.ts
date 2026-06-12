@@ -13,7 +13,6 @@ export {
 export type {
   ClassifiedCandidate,
   CandidateInput,
-  CandidateMetadata,
   UsableDevCert,
   ClassifyOptions,
 } from "@devcontainer-dev-certs/shared/src/platform/baseStore";

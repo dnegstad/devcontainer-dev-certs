@@ -30,7 +30,6 @@ A Dev Container feature + two companion VS Code extensions that handle everythin
 - Places each PFX in the .NET X509 store (`~/.dotnet/corefx/cryptography/x509stores/my/`) so ASP.NET and Aspire discover it automatically
 - Places each PEM in an OpenSSL trust directory with hash symlinks so `curl`, `wget`, and other tools trust it
 - Optionally writes each cert into additional destinations (nginx config dirs, Java keystores, etc.) when `extraCertDestinations` is configured
-- Configures `SSL_CERT_DIR` to include the trust directory alongside system CA paths
 - Optionally pushes its OWN dev cert back to this extension when `syncContainerCert` is enabled
 
 ## Quick Start
@@ -87,7 +86,7 @@ On Linux, host trust involves three layers:
 For tools running **outside** VS Code integrated terminals (e.g., a system terminal), set `SSL_CERT_DIR` manually:
 
 ```bash
-export SSL_CERT_DIR="$HOME/.aspnet/dev-certs/trust:$SSL_CERT_DIR"
+export SSL_CERT_DIR="$HOME/.aspnet/dev-certs/trust${SSL_CERT_DIR:+:$SSL_CERT_DIR}"
 ```
 
 #### Browser Trust (Firefox / Chromium)
@@ -180,6 +179,30 @@ This matches the SAN set baked into the default ASP.NET dev cert. To allow a cer
 | `devcontainerDevCerts.installUserCertsToDotNetStore` | `false` | When `true`, also copies every entry from `userCertificates` into the container's .NET X509Store. **Security note:** the on-disk PFX there is passwordless (Linux's `StoreName.My` enumeration can't accept per-file passwords), so opting in strips your user cert's password on the in-container copy. Per-entry exemption via `excludeFromDotNetStore: true`. The auto-generated dotnet-dev cert is always installed to the store regardless. |
 | `devcontainerDevCerts.defaultKestrelCertificate` | `""` | Name of a `userCertificates` entry to use as the default Kestrel certificate inside Dev Containers. When set, the remote extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` and exports `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` to processes launched from VS Code (terminals, debug, tasks). Leave empty to opt out — Kestrel will still discover the auto-generated dev cert via X509Store. |
 | `devcontainerDevCerts.allowNonLocalContainerCertSans` | `false` | When accepting a Dev Container-managed dev certificate (via `syncContainerCert`), override the default SAN restriction that limits trusted certificates to localhost / loopback / private IPs / docker host names. Only enable when you fully understand the SAN entries the container will push. Has no effect when `generateDotNetCert` or `autoProvision` is `false`. |
+
+## Dev Container Feature Options
+
+These options are set on the feature in your project's `devcontainer.json` (not in VS Code settings) and configure the container side. The feature declares and installs both companion extensions, so you don't list them yourself.
+
+```json
+{
+    "features": {
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
+            "syncContainerCert": true
+        }
+    }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container. |
+| `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override if your base image uses non-standard paths. |
+| `pruneMissingCertDirs` | `true` | Filter out directories that don't exist on this image from `sslCertDirs` before writing `SSL_CERT_DIR` (some TLS stacks error on a missing entry). Set to `false` to use `sslCertDirs` verbatim — e.g. when a directory is created after install but before it's needed. |
+| `generateDotNetCert` | `true` | Pull the host-generated ASP.NET dev cert into this container. Set to `false` if you're only using user-managed certs in this container. |
+| `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` setting. |
+| `syncContainerCert` | `false` | Opt in to pushing the container's own dev cert to the host (reverse-sync). When true, also implicitly overrides `generateDotNetCert` — you don't need to set both. |
+| `extraCertDestinations` | `""` | Comma-separated list of additional directories to write cert artifacts to. Each entry is `<abs-dir>[=<format>]` where format is `pem`, `key`, `pem-bundle`, `pfx`, or `all` (default). Useful for non-.NET workloads (nginx, Java keystores, etc.). |
 
 ## Avoiding dotnet's first-run cert auto-generation race
 
