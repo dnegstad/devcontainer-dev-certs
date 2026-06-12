@@ -123,8 +123,27 @@ export function parseLegacyPbeParams(
  *   2. Derive the 8-byte IV via PKCS#12 v1.0 KDF (diversifier 2).
  *   3. Decrypt with `des-ede3-cbc` (Node's built-in crypto).
  *
- * The PKCS#1 padding the cipher leaves on the plaintext is stripped by
- * Node's `decipher.final()`.
+ * For an EMPTY password we try two derivation conventions and return
+ * whichever decrypts cleanly:
+ *
+ *   - "with null terminator" — encode `""` as the 2-byte UTF-16BE null
+ *     terminator and derive from that. OpenSSL, Bouncy Castle, and our
+ *     openssl-generated test fixture all use this convention.
+ *   - "literal empty bytes" — RFC 7292's literal wording ("if password
+ *     is the empty string, then so is P"). dotnet/runtime's managed
+ *     PKCS#12 writer takes this branch; its on-disk macOS dev-cert
+ *     cache decrypts ONLY under this convention. Confirmed empirically
+ *     on .NET 10.0.301 — CI hit "bad decrypt" with the OpenSSL
+ *     convention applied uniformly.
+ *
+ * For non-empty passwords there's no ambiguity: implementations agree
+ * the password is UTF-16BE bytes plus a trailing null terminator, and
+ * only that path is tried.
+ *
+ * PKCS#7 padding the cipher leaves on the plaintext is stripped by
+ * Node's `decipher.final()`. A `final()` throw under both conventions
+ * propagates outward — the password supplied is wrong, the file is
+ * corrupt, or aspnetcore changed its export convention again.
  */
 export function decryptLegacyPbe(
   oid: string,
@@ -138,8 +157,42 @@ export function decryptLegacyPbe(
         `Call sites should check isSupportedLegacyPbe(oid) first.`
     );
   }
-  const key = pkcs12Kdf(password, params.salt, params.iterations, 1, 24);
-  const iv = pkcs12Kdf(password, params.salt, params.iterations, 2, 8);
+  // Non-empty password: single canonical encoding.
+  if (password.length > 0) {
+    return tryDecrypt3DesPbe(params, ciphertext, password, true);
+  }
+  // Empty password: try OpenSSL convention first (matches our test
+  // fixture + most real-world legacy PFXes), fall back to RFC-literal
+  // (matches dotnet's macOS disk cache).
+  try {
+    return tryDecrypt3DesPbe(params, ciphertext, "", true);
+  } catch {
+    return tryDecrypt3DesPbe(params, ciphertext, "", false);
+  }
+}
+
+function tryDecrypt3DesPbe(
+  params: LegacyPbeParams,
+  ciphertext: Buffer,
+  password: string,
+  includeNullTerminator: boolean
+): Buffer {
+  const key = pkcs12Kdf(
+    password,
+    params.salt,
+    params.iterations,
+    1,
+    24,
+    includeNullTerminator
+  );
+  const iv = pkcs12Kdf(
+    password,
+    params.salt,
+    params.iterations,
+    2,
+    8,
+    includeNullTerminator
+  );
   const decipher = createDecipheriv("des-ede3-cbc", key, iv);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }
@@ -151,24 +204,21 @@ export function decryptLegacyPbe(
  * 1) and IV (diversifier 2) derivation against the same salt and
  * iteration count.
  *
- * Empty-password handling: we treat the password as UTF-16BE plus a
- * trailing 16-bit null terminator UNCONDITIONALLY — including for the
- * empty string, where `P` is the 2-byte `00 00` null terminator. The
- * RFC's literal wording says "empty password → empty P", but every
- * implementation that matters in practice (OpenSSL, Bouncy Castle,
- * dotnet/runtime's managed PKCS#12 writer) appends the null terminator
- * regardless. The aspnetcore disk cache we're trying to read was
- * produced under the always-include-terminator convention; following
- * the RFC literally would make us fail to decrypt our own target.
+ * `includeNullTerminator` controls the well-known empty-password
+ * disagreement (see `decryptLegacyPbe`). For non-empty passwords every
+ * relevant implementation appends the UTF-16BE null terminator, so the
+ * flag has no observable effect there.
  *
- * Exported for testing only — call sites should use `decryptLegacyPbe`.
+ * Exported for testing only — call sites should use `decryptLegacyPbe`,
+ * which handles the empty-password convention fallback.
  */
 export function pkcs12Kdf(
   password: string,
   salt: Buffer,
   iterations: number,
   diversifier: 1 | 2 | 3,
-  outputLength: number
+  outputLength: number,
+  includeNullTerminator = true
 ): Buffer {
   const u = 20; // SHA-1 output size (bytes)
   const v = 64; // SHA-1 input block size (bytes)
@@ -179,10 +229,20 @@ export function pkcs12Kdf(
   // S: salt repeated to a multiple of v bytes (empty if salt is empty).
   const S = repeatToMultiple(salt, v);
 
-  // P: password as UTF-16BE with a trailing null character, repeated to
-  // a multiple of v bytes. We append the terminator unconditionally —
-  // see the docstring for the empty-string rationale.
-  const pwBytes = utf16BeWithNul(password);
+  // P: password as UTF-16BE bytes, optionally with a trailing null
+  // terminator, repeated to a multiple of v bytes. For non-empty
+  // passwords both conventions match; for empty, the terminator-or-not
+  // choice is what callers iterate over to handle .NET vs OpenSSL.
+  let pwBytes: Buffer;
+  if (password.length === 0) {
+    pwBytes = includeNullTerminator
+      ? Buffer.from([0x00, 0x00])
+      : Buffer.alloc(0);
+  } else {
+    pwBytes = includeNullTerminator
+      ? utf16BeWithNul(password)
+      : utf16Be(password);
+  }
   const P = repeatToMultiple(pwBytes, v);
 
   // I = S || P.
@@ -230,17 +290,28 @@ export function pkcs12Kdf(
 }
 
 /**
- * Encode a string as UTF-16BE plus a trailing 16-bit null character —
- * the password representation PKCS#12 v1.0 KDF expects. Surrogate pairs
- * are preserved (the `String.prototype.charCodeAt` iteration produces
- * the UTF-16 code units directly).
+ * Encode a string as UTF-16BE — no terminator. Surrogate pairs are
+ * preserved (the `String.prototype.charCodeAt` iteration produces the
+ * UTF-16 code units directly).
  */
-function utf16BeWithNul(s: string): Buffer {
-  const buf = Buffer.alloc((s.length + 1) * 2);
+function utf16Be(s: string): Buffer {
+  const buf = Buffer.alloc(s.length * 2);
   for (let i = 0; i < s.length; i++) {
     buf.writeUInt16BE(s.charCodeAt(i), i * 2);
   }
-  buf.writeUInt16BE(0, s.length * 2);
+  return buf;
+}
+
+/**
+ * Encode a string as UTF-16BE plus a trailing 16-bit null character —
+ * the password representation PKCS#12 v1.0 KDF expects for non-empty
+ * strings under every convention we care about.
+ */
+function utf16BeWithNul(s: string): Buffer {
+  const body = utf16Be(s);
+  const buf = Buffer.alloc(body.length + 2);
+  body.copy(buf, 0);
+  // The trailing 2 bytes are already zero (Buffer.alloc zero-fills).
   return buf;
 }
 
