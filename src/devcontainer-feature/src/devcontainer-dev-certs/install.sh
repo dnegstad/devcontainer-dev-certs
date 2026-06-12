@@ -340,9 +340,11 @@ append_profile "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINA
 # $HOME-expanded form into profile.d so each user gets their own at login.
 append_profile "DEVCONTAINER_DEV_CERTS_INSTALL_BIN" "${FALLBACK_BIN_PATH}"
 # Profile.d entries that need per-user $HOME expansion at login time.
-echo "export DEVCONTAINER_DEV_CERTS_DOTNET_STORE_DIR=\"\$HOME/.dotnet/corefx/cryptography/x509stores/my\"" >> "${PROFILE_SCRIPT}"
-echo "export DEVCONTAINER_DEV_CERTS_DOTNET_ROOT_STORE_DIR=\"\$HOME/.dotnet/corefx/cryptography/x509stores/root\"" >> "${PROFILE_SCRIPT}"
-echo "export DEVCONTAINER_DEV_CERTS_TRUST_DIR=\"\$HOME/.aspnet/dev-certs/trust\"" >> "${PROFILE_SCRIPT}"
+{
+    echo "export DEVCONTAINER_DEV_CERTS_DOTNET_STORE_DIR=\"\$HOME/.dotnet/corefx/cryptography/x509stores/my\""
+    echo "export DEVCONTAINER_DEV_CERTS_DOTNET_ROOT_STORE_DIR=\"\$HOME/.dotnet/corefx/cryptography/x509stores/root\""
+    echo "export DEVCONTAINER_DEV_CERTS_TRUST_DIR=\"\$HOME/.aspnet/dev-certs/trust\""
+} >> "${PROFILE_SCRIPT}"
 
 # Suppress dotnet's first-run HTTPS dev cert provisioning ONLY when the
 # host is the source.

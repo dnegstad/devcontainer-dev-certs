@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -50,7 +50,6 @@ try {
 
 const ready = isMacOS && dotnetMajor >= 6;
 
-let tmpHome: string;
 let cachePfxPath: string;
 let loadResult:
   | { kind: "ok"; thumbprint: string; hasKey: boolean }
@@ -59,24 +58,25 @@ let loadResult:
 beforeAll(async () => {
   if (!ready) return;
 
-  tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-macos-"));
-
-  // `dotnet dev-certs https` (no --trust): generates a cert if absent,
-  // saves to the macOS keychain, AND writes the disk cache file at
-  // $HOME/.aspnet/dev-certs/https/. Setting HOME to a tmpdir redirects
-  // only the disk cache — the keychain still lives at the user's real
-  // login keychain. That's intentional: we're testing the disk cache,
-  // not the keychain.
+  // Use the real `$HOME`. Earlier iterations of this test redirected HOME
+  // to a tmpdir to isolate the disk cache, but the macOS keychain APIs
+  // dotnet calls into resolve the login keychain from `$HOME/Library/
+  // Keychains/login.keychain-db`. A redirected HOME points at a path
+  // where no keychain exists, and `dotnet dev-certs` fails with
+  // "There was an error saving the HTTPS developer certificate to the
+  // current user personal certificate store." before we ever get to
+  // observe what it would have written to the disk cache. The CI runner
+  // is ephemeral, so the isolation isn't load-bearing here.
   //
   // 60s timeout because first-run cert generation can be slow on cold
   // CI runners.
   execFileSync("dotnet", ["dev-certs", "https"], {
     timeout: 60_000,
-    env: { ...process.env, HOME: tmpHome },
     stdio: "pipe",
   });
 
-  const cacheDir = path.join(tmpHome, ".aspnet", "dev-certs", "https");
+  const home = os.homedir();
+  const cacheDir = path.join(home, ".aspnet", "dev-certs", "https");
   if (!fs.existsSync(cacheDir)) {
     // Surface this loudly — if the cache dir doesn't appear, the test
     // premise has changed (aspnetcore moved or skipped the disk cache)
@@ -113,9 +113,10 @@ beforeAll(async () => {
   }
 }, 120_000);
 
-afterAll(() => {
-  if (tmpHome) fs.rmSync(tmpHome, { recursive: true, force: true });
-});
+// No afterAll cleanup — we wrote to the runner's real `~/.aspnet/dev-certs/
+// https/` and login keychain. Both are owned by the ephemeral CI runner
+// VM; trying to scrub them would mostly just hide our footprint from a
+// follow-up investigation if the next run sees stale state.
 
 describe.skipIf(!ready)(
   "dotnet dev-certs macOS disk cache → parsePfx",
