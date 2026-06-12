@@ -255,10 +255,10 @@ if [ "${1:-}" = "--doctor" ]; then
         local path="$1"
         local pem
         pem=$(openssl pkcs12 -in "${path}" -nokeys -passin pass: 2>/dev/null) || return 1
-        printf '%s' "${pem}" | openssl x509 -noout -checkend 0 &>/dev/null
         # checkend exits 0 when cert is still valid for at least N seconds,
-        # 1 when expired. Invert.
-        [ $? -ne 0 ]
+        # 1 when expired. Invert so this function returns 0 (true) when
+        # the cert IS expired.
+        ! printf '%s' "${pem}" | openssl x509 -noout -checkend 0 &>/dev/null
     }
 
     section ".NET CurrentUser/My contents:"
@@ -317,7 +317,7 @@ if [ "${1:-}" = "--doctor" ]; then
                     if [ -n "${found_link}" ]; then
                         info "${pem_name} → $(basename "${found_link}") (hash ${hash})"
                     else
-                        fail "${pem_name}: no c_rehash symlink (${hash}.N) pointing back — OpenSSL won't find this cert; re-run the installer or `openssl rehash ${TRUST_DIR}`"
+                        fail "${pem_name}: no c_rehash symlink (${hash}.N) pointing back — OpenSSL won't find this cert; re-run the installer or 'openssl rehash ${TRUST_DIR}'"
                     fi
                 else
                     fail "${pem_name}: openssl could not compute a subject hash"
