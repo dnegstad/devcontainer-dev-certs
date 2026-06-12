@@ -8,8 +8,7 @@ import {
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { NativeBackend } from "@devcontainer-dev-certs/shared";
-import { loadPfx } from "@devcontainer-dev-certs/shared";
+import { NativeBackend, loadPfx } from "@devcontainer-dev-certs/shared";
 
 /**
  * NativeBackend has two distinct code paths picked by `noTrust`.
