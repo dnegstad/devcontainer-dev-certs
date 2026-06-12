@@ -42,7 +42,7 @@ export {
 } from "./cert/properties";
 export { buildPfx, parsePfx } from "./cert/pfx";
 export type { BuildPfxOptions, ParsedPfx } from "./cert/pfx";
-export { loadPfx, loadPemPair } from "./cert/loader";
+export { loadPfx, loadPemPair, findSiblingKey } from "./cert/loader";
 export type { LoadedCert } from "./cert/loader";
 export {
   isValidDevCert,

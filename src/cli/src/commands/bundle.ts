@@ -1,10 +1,15 @@
 import * as fs from "fs";
 import * as path from "path";
-import { loadPfx, loadPemPair } from "@devcontainer-dev-certs/shared";
+import {
+  findSiblingKey,
+  loadPemPair,
+  loadPfx,
+} from "@devcontainer-dev-certs/shared";
 import {
   writeBundle,
   type BundleCertEntry,
 } from "../bundle/writer";
+import { DEFAULT_CONTAINER_MOUNT } from "../defaults";
 
 export interface BundleCommandOptions {
   outDir?: string;
@@ -13,8 +18,6 @@ export interface BundleCommandOptions {
   kind?: "dotnet-dev" | "user";
   noTrustInContainer?: boolean;
 }
-
-const DEFAULT_CONTAINER_MOUNT = "/host-dev-certs";
 
 /**
  * `dcdc bundle <cert-path>` — emit a `bundle.json` referencing an
@@ -102,23 +105,6 @@ export async function runBundle(
   });
   process.stderr.write(`Bundle: ${bundlePath}\n`);
   process.stderr.write(`Thumbprint: ${thumbprint}\n`);
-}
-
-/**
- * Locate a sibling PEM private key next to a cert PEM, returning the
- * first match or null. Probes both naming conventions:
- *
- * - `<stem>.key` — what our exporter writes, what `openssl` writes by
- *   convention.
- * - `<filename>.key` — what `dotnet dev-certs --format PEM
- *   --export-path foo.pem` writes (`foo.pem.key`).
- */
-function findSiblingKey(certPath: string): string | null {
-  const stem = certPath.replace(/\.[^.]+$/, "");
-  for (const candidate of [`${stem}.key`, `${certPath}.key`]) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
 }
 
 /**

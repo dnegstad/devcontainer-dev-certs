@@ -55,3 +55,24 @@ export function loadPemPair(
 
   return buildLoadedCert(cert, key);
 }
+
+/**
+ * Locate a sibling PEM private key next to a cert PEM, returning the
+ * first match or null. Probes both naming conventions in the wild:
+ *
+ * - `<stem>.key` — what our exporter writes, what `openssl` writes by
+ *   convention.
+ * - `<filename>.key` — what `dotnet dev-certs --format PEM
+ *   --export-path foo.pem` writes (`foo.pem.key`).
+ *
+ * Stem-form wins when both exist; that's the path `loadPemPair`
+ * documents and the more common case for openssl- / our-exporter-
+ * produced pairs.
+ */
+export function findSiblingKey(certPath: string): string | null {
+  const stem = certPath.replace(/\.[^.]+$/, "");
+  for (const candidate of [`${stem}.key`, `${certPath}.key`]) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}

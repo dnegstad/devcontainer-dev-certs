@@ -4,6 +4,7 @@ import {
   ASPNET_HTTPS_OID,
   CURRENT_CERTIFICATE_VERSION,
   MINIMUM_CERTIFICATE_VERSION,
+  findSiblingKey,
   getCertificateVersion,
   isValidDevCert,
   loadPfx,
@@ -52,23 +53,6 @@ export async function runInspect(
   } else {
     process.stdout.write(formatTextReport(report));
   }
-}
-
-/**
- * Locate a sibling PEM private key next to a cert PEM, returning the
- * first match or null. Probes both naming conventions:
- *
- * - `<stem>.key` — what our exporter writes, what `openssl` writes by
- *   convention.
- * - `<filename>.key` — what `dotnet dev-certs --format PEM
- *   --export-path foo.pem` writes (`foo.pem.key`).
- */
-function findSiblingKey(certPath: string): string | null {
-  const stem = certPath.replace(/\.[^.]+$/, "");
-  for (const candidate of [`${stem}.key`, `${certPath}.key`]) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
 }
 
 async function buildReport(certPath: string): Promise<InspectReport> {

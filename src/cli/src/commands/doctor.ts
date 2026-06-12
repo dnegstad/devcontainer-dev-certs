@@ -1,5 +1,4 @@
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import {
   createPlatformStore,
@@ -8,14 +7,13 @@ import {
   resolveSafeExecPath,
   runProcess,
 } from "@devcontainer-dev-certs/shared";
+import { DEFAULT_OUT_DIR } from "../defaults";
 import { installCliLogger } from "../logger";
 
 export interface DoctorCommandOptions {
   outDir?: string;
   verbose?: boolean;
 }
-
-const DEFAULT_OUT_DIR = path.join(os.homedir(), ".dev-certs");
 
 interface Check {
   label: string;

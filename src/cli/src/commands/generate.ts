@@ -1,10 +1,10 @@
-import * as os from "os";
 import * as path from "path";
 import {
   selectBackend,
   type BackendMode,
 } from "@devcontainer-dev-certs/shared";
 import { writeBundle, type BundleCertEntry } from "../bundle/writer";
+import { DEFAULT_CONTAINER_MOUNT, DEFAULT_OUT_DIR } from "../defaults";
 import { installCliLogger } from "../logger";
 import { stderrNssTrustReporter } from "../nssReporter";
 
@@ -16,9 +16,6 @@ export interface GenerateCommandOptions {
   noBundle?: boolean;
   verbose?: boolean;
 }
-
-const DEFAULT_OUT_DIR = path.join(os.homedir(), ".dev-certs");
-const DEFAULT_CONTAINER_MOUNT = "/host-dev-certs";
 
 /**
  * `dcdc generate` — produce a fresh dev cert + bundle.json. Picks a backend
