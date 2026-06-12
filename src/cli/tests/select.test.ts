@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   selectBackend,
   describeAutoBackend,
 } from "@devcontainer-dev-certs/shared";
+import { stubPlatform } from "./_helpers";
 
 // `selectBackend('dotnet')` calls into the DotnetBackend's `isAvailable`
 // which shells out via the shared runProcess. Stub that so the tests don't
@@ -16,30 +17,18 @@ import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processU
 const mockedRunProcess = vi.mocked(runProcess);
 
 describe("selectBackend", () => {
-  let originalPlatform: PropertyDescriptor | undefined;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   });
-
-  afterEach(() => {
-    if (originalPlatform) {
-      Object.defineProperty(process, "platform", originalPlatform);
-    }
-  });
-
-  function stubPlatform(value: NodeJS.Platform): void {
-    Object.defineProperty(process, "platform", {
-      value,
-      configurable: true,
-    });
-  }
 
   it("returns the native backend for --backend native regardless of platform", async () => {
-    stubPlatform("linux");
-    const backend = await selectBackend("native");
-    expect(backend.kind).toBe("native");
+    const restore = stubPlatform("linux");
+    try {
+      const backend = await selectBackend("native");
+      expect(backend.kind).toBe("native");
+    } finally {
+      restore();
+    }
   });
 
   it("returns the dotnet backend for --backend dotnet when dotnet is on PATH", async () => {
@@ -54,65 +43,77 @@ describe("selectBackend", () => {
   });
 
   it("auto-picks dotnet on macOS when dotnet is available", async () => {
-    stubPlatform("darwin");
-    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });
-    const backend = await selectBackend("auto");
-    expect(backend.kind).toBe("dotnet");
+    const restore = stubPlatform("darwin");
+    try {
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });
+      const backend = await selectBackend("auto");
+      expect(backend.kind).toBe("dotnet");
+    } finally {
+      restore();
+    }
   });
 
   it("auto-falls-back to native on macOS when dotnet is unavailable", async () => {
-    stubPlatform("darwin");
-    mockedRunProcess.mockResolvedValue({ exitCode: 127, stdout: "", stderr: "not found" });
-    const backend = await selectBackend("auto");
-    expect(backend.kind).toBe("native");
+    const restore = stubPlatform("darwin");
+    try {
+      mockedRunProcess.mockResolvedValue({ exitCode: 127, stdout: "", stderr: "not found" });
+      const backend = await selectBackend("auto");
+      expect(backend.kind).toBe("native");
+    } finally {
+      restore();
+    }
   });
 
   it("auto-picks native on Linux regardless of dotnet availability", async () => {
-    stubPlatform("linux");
-    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });
-    const backend = await selectBackend("auto");
-    expect(backend.kind).toBe("native");
+    const restore = stubPlatform("linux");
+    try {
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });
+      const backend = await selectBackend("auto");
+      expect(backend.kind).toBe("native");
+    } finally {
+      restore();
+    }
   });
 
   it("auto-picks native on Windows", async () => {
-    stubPlatform("win32");
-    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });
-    const backend = await selectBackend("auto");
-    expect(backend.kind).toBe("native");
+    const restore = stubPlatform("win32");
+    try {
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });
+      const backend = await selectBackend("auto");
+      expect(backend.kind).toBe("native");
+    } finally {
+      restore();
+    }
   });
 });
 
 describe("describeAutoBackend", () => {
-  let originalPlatform: PropertyDescriptor | undefined;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
   });
 
-  afterEach(() => {
-    if (originalPlatform) {
-      Object.defineProperty(process, "platform", originalPlatform);
+  it("reports 'dotnet' on macOS when dotnet is available", async () => {
+    const restore = stubPlatform("darwin");
+    try {
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });
+      expect(await describeAutoBackend()).toBe("dotnet");
+    } finally {
+      restore();
     }
   });
 
-  function stubPlatform(value: NodeJS.Platform): void {
-    Object.defineProperty(process, "platform", {
-      value,
-      configurable: true,
-    });
-  }
-
-  it("reports 'dotnet' on macOS when dotnet is available", async () => {
-    stubPlatform("darwin");
-    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "8.0.100", stderr: "" });
-    expect(await describeAutoBackend()).toBe("dotnet");
-  });
-
   it("reports 'native' everywhere else", async () => {
-    stubPlatform("linux");
-    expect(await describeAutoBackend()).toBe("native");
-    stubPlatform("win32");
-    expect(await describeAutoBackend()).toBe("native");
+    const restoreLinux = stubPlatform("linux");
+    try {
+      expect(await describeAutoBackend()).toBe("native");
+    } finally {
+      restoreLinux();
+    }
+    const restoreWin = stubPlatform("win32");
+    try {
+      expect(await describeAutoBackend()).toBe("native");
+    } finally {
+      restoreWin();
+    }
   });
 });

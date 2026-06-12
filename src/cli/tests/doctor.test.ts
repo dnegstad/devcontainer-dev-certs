@@ -43,15 +43,9 @@ const mockedResolveSafeExecPath = vi.mocked(resolveSafeExecPath);
 const mockedCreatePlatformStore = vi.mocked(createPlatformStore);
 const mockedDescribeAutoBackend = vi.mocked(describeAutoBackend);
 
-const cleanupDirs: string[] = [];
+import { stubPlatform } from "./_helpers";
 
-function stubPlatform(value: NodeJS.Platform): () => void {
-  const original = Object.getOwnPropertyDescriptor(process, "platform");
-  Object.defineProperty(process, "platform", { value, configurable: true });
-  return () => {
-    if (original) Object.defineProperty(process, "platform", original);
-  };
-}
+const cleanupDirs: string[] = [];
 
 function collectStdout(): string {
   const writeMock = vi.mocked(process.stdout.write);

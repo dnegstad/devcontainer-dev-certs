@@ -44,15 +44,9 @@ const mockedRunProcess = vi.mocked(runProcess);
 const mockedCreatePlatformStore = vi.mocked(createPlatformStore);
 const mockedTrustInNss = vi.mocked(trustInNss);
 
-const cleanupDirs: string[] = [];
+import { stubPlatform } from "./_helpers";
 
-function stubPlatform(value: NodeJS.Platform): () => void {
-  const original = Object.getOwnPropertyDescriptor(process, "platform");
-  Object.defineProperty(process, "platform", { value, configurable: true });
-  return () => {
-    if (original) Object.defineProperty(process, "platform", original);
-  };
-}
+const cleanupDirs: string[] = [];
 
 async function makeCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();
