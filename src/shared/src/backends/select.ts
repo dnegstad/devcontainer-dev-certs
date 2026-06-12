@@ -35,11 +35,16 @@ async function autoSelect(): Promise<Backend> {
  * Report which backend `auto` would pick on this host without actually
  * constructing it. Useful for `dcdc doctor` and for status surfaces in the
  * VS Code host extension.
+ *
+ * Callers that have already probed dotnet (e.g. `dcdc doctor` checks
+ * dotnet availability for its own line of output) can pass the result
+ * via `dotnetAvailable` to avoid a second `dotnet --version` spawn.
  */
-export async function describeAutoBackend(): Promise<BackendKind> {
-  if (process.platform === "darwin") {
-    const dotnet = new DotnetBackend();
-    if (await dotnet.isAvailable()) return "dotnet";
-  }
-  return "native";
+export async function describeAutoBackend(
+  dotnetAvailable?: boolean
+): Promise<BackendKind> {
+  if (process.platform !== "darwin") return "native";
+  const available =
+    dotnetAvailable ?? (await new DotnetBackend().isAvailable());
+  return available ? "dotnet" : "native";
 }

@@ -34,87 +34,32 @@ export async function runDoctor(
   installCliLogger(Boolean(options.verbose));
 
   const outDir = path.resolve(options.outDir ?? DEFAULT_OUT_DIR);
-  const checks: Check[] = [];
 
-  // Backend availability.
+  // Probe dotnet ONCE. The backend-availability and auto-resolution
+  // lines both depend on this, and `describeAutoBackend()` used to
+  // spawn its own `dotnet --version` — two spawns per doctor run on
+  // macOS where one suffices.
   const dotnetAvailable = await new DotnetBackend().isAvailable();
-  checks.push({
-    label: "dotnet CLI on PATH",
-    status: dotnetAvailable ? "ok" : "warn",
-    detail: dotnetAvailable
-      ? "found"
-      : "not found (the 'dotnet' backend is unavailable; native backend will be used)",
-  });
 
-  const auto = await describeAutoBackend();
-  checks.push({
-    label: "--backend auto would pick",
-    status: "ok",
-    detail: auto,
-  });
+  // All remaining check groups are independent — no group reads state
+  // another group writes — so they run concurrently. Each returns
+  // `Check[]` so the final output preserves a stable order regardless
+  // of which Promise settles first.
+  const [backendChecks, outDirChecks, storeChecks, toolChecks] =
+    await Promise.all([
+      checkBackends(dotnetAvailable),
+      Promise.resolve(checkOutDir(outDir)),
+      checkPlatformStore(),
+      checkPlatformTools(),
+    ]);
 
-  // Out-dir presence.
-  if (fs.existsSync(outDir)) {
-    checks.push({
-      label: `out-dir ${outDir}`,
-      status: "ok",
-      detail: "exists",
-    });
-  } else {
-    checks.push({
-      label: `out-dir ${outDir}`,
-      status: "warn",
-      detail: "does not exist (run `dcdc generate` to create it)",
-    });
-  }
+  const checks: Check[] = [
+    ...backendChecks,
+    ...outDirChecks,
+    ...storeChecks,
+    ...toolChecks,
+  ];
 
-  // Bundle.json presence.
-  const bundlePath = path.join(outDir, "bundle.json");
-  if (fs.existsSync(bundlePath)) {
-    checks.push({
-      label: `bundle.json at ${bundlePath}`,
-      status: "ok",
-      detail: "found",
-    });
-  } else {
-    checks.push({
-      label: `bundle.json at ${bundlePath}`,
-      status: "warn",
-      detail: "not found",
-    });
-  }
-
-  // Platform store state.
-  try {
-    const store = await createPlatformStore();
-    const status = await store.checkStatus();
-    if (status.exists) {
-      checks.push({
-        label: "Host platform store has a valid dev cert",
-        status: status.isTrusted ? "ok" : "warn",
-        detail: status.isTrusted
-          ? `trusted (thumbprint ${status.thumbprint}, expires ${status.notAfter})`
-          : `present but NOT trusted (thumbprint ${status.thumbprint}, expires ${status.notAfter})`,
-      });
-    } else {
-      checks.push({
-        label: "Host platform store has a valid dev cert",
-        status: "warn",
-        detail: "no dev cert found in host platform store",
-      });
-    }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    checks.push({
-      label: "Host platform store check",
-      status: "fail",
-      detail: message,
-    });
-  }
-
-  for (const c of await checkPlatformTools()) checks.push(c);
-
-  // Print summary.
   let failures = 0;
   let warnings = 0;
   for (const c of checks) {
@@ -128,6 +73,82 @@ export async function runDoctor(
 
   if (failures > 0) {
     process.exitCode = 1;
+  }
+}
+
+async function checkBackends(dotnetAvailable: boolean): Promise<Check[]> {
+  const auto = await describeAutoBackend(dotnetAvailable);
+  return [
+    {
+      label: "dotnet CLI on PATH",
+      status: dotnetAvailable ? "ok" : "warn",
+      detail: dotnetAvailable
+        ? "found"
+        : "not found (the 'dotnet' backend is unavailable; native backend will be used)",
+    },
+    {
+      label: "--backend auto would pick",
+      status: "ok",
+      detail: auto,
+    },
+  ];
+}
+
+function checkOutDir(outDir: string): Check[] {
+  const bundlePath = path.join(outDir, "bundle.json");
+  return [
+    fs.existsSync(outDir)
+      ? { label: `out-dir ${outDir}`, status: "ok", detail: "exists" }
+      : {
+          label: `out-dir ${outDir}`,
+          status: "warn",
+          detail: "does not exist (run `dcdc generate` to create it)",
+        },
+    fs.existsSync(bundlePath)
+      ? {
+          label: `bundle.json at ${bundlePath}`,
+          status: "ok",
+          detail: "found",
+        }
+      : {
+          label: `bundle.json at ${bundlePath}`,
+          status: "warn",
+          detail: "not found",
+        },
+  ];
+}
+
+async function checkPlatformStore(): Promise<Check[]> {
+  try {
+    const store = await createPlatformStore();
+    const status = await store.checkStatus();
+    if (!status.exists) {
+      return [
+        {
+          label: "Host platform store has a valid dev cert",
+          status: "warn",
+          detail: "no dev cert found in host platform store",
+        },
+      ];
+    }
+    return [
+      {
+        label: "Host platform store has a valid dev cert",
+        status: status.isTrusted ? "ok" : "warn",
+        detail: status.isTrusted
+          ? `trusted (thumbprint ${status.thumbprint}, expires ${status.notAfter})`
+          : `present but NOT trusted (thumbprint ${status.thumbprint}, expires ${status.notAfter})`,
+      },
+    ];
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return [
+      {
+        label: "Host platform store check",
+        status: "fail",
+        detail: message,
+      },
+    ];
   }
 }
 
