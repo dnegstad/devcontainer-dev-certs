@@ -22,7 +22,7 @@ npm install -g @devcontainer-dev-certs/cli
 dcdc --help
 ```
 
-Node 20 or newer is required (Node 18 reached end-of-life in April 2025). The package ships a single bundled binary (no per-install dependency resolution), so the install footprint is small.
+Node 22 or newer is required (Node 20 reached end-of-life in April 2026; Node 22 is the lowest LTS still receiving security updates and is the version VS Code currently bundles). The package ships a single bundled binary (no per-install dependency resolution), so the install footprint is small.
 
 For a one-off invocation without a global install:
 
