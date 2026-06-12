@@ -21,7 +21,7 @@ The host-side cert + `bundle.json` can be produced two ways. **The `dcdc` CLI is
 npm install -g @devcontainer-dev-certs/cli
 ```
 
-Node 18 or newer is required. See [`src/cli/README.md`](../../src/cli/README.md) for the full command reference.
+Node 20 or newer is required. See [`src/cli/README.md`](../../src/cli/README.md) for the full command reference.
 
 Pick a host directory to hold your certs and bundle file (the example below uses `~/.dev-certs`) and generate everything in one shot:
 

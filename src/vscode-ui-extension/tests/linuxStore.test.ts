@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import type * as Shared from "@devcontainer-dev-certs/shared";
+import type * as SharedPaths from "@devcontainer-dev-certs/shared/src/paths";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
@@ -41,7 +41,7 @@ let testRootStoreDir: string;
 let testTrustDir: string;
 
 vi.mock("@devcontainer-dev-certs/shared/src/paths", async (importOriginal) => {
-  const original = await importOriginal<typeof Shared>();
+  const original = await importOriginal<typeof SharedPaths>();
   return {
     ...original,
     getDotNetStorePath: () => testStoreDir,

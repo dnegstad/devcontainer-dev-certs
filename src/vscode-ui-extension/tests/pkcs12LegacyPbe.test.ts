@@ -115,14 +115,11 @@ describe("pkcs12Kdf — empty-password convention", () => {
     const salt = Buffer.from([0xab, 0xcd, 0xef, 0x01]);
     const withNul = pkcs12Kdf("password", salt, 100, 1, 24, true);
     const noNul = pkcs12Kdf("password", salt, 100, 1, 24, false);
-    // Non-empty passwords always include the terminator under both
-    // conventions per the spec; only the empty case is contested.
-    // (This locks in the current behavior so a future "always omit"
-    // experiment would fail the test loudly.)
-    expect(withNul.equals(noNul)).toBe(false);
-    // Note: they differ because withNul appends \x00\x00 and noNul
-    // doesn't. Both are valid encodings in different traditions; we
-    // pick null-terminator as the canonical default.
+    // Non-empty passwords always include the terminator under every
+    // real-world PKCS#12 implementation; the flag is honored only for
+    // empty passwords. If a future refactor accidentally threads the
+    // flag through the non-empty branch, this test catches it.
+    expect(withNul.equals(noNul)).toBe(true);
   });
 });
 

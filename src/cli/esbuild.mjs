@@ -13,7 +13,7 @@ await esbuild.build({
   external: ["vscode"],
   format: "cjs",
   platform: "node",
-  target: "node18",
+  target: "node20",
   sourcemap: !production,
   minify: production,
   banner: {

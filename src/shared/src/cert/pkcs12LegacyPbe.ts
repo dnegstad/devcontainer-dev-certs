@@ -207,7 +207,8 @@ function tryDecrypt3DesPbe(
  * `includeNullTerminator` controls the well-known empty-password
  * disagreement (see `decryptLegacyPbe`). For non-empty passwords every
  * relevant implementation appends the UTF-16BE null terminator, so the
- * flag has no observable effect there.
+ * flag is IGNORED for them — the function always uses the
+ * null-terminated encoding to match real-world interop.
  *
  * Exported for testing only — call sites should use `decryptLegacyPbe`,
  * which handles the empty-password convention fallback.
@@ -229,19 +230,18 @@ export function pkcs12Kdf(
   // S: salt repeated to a multiple of v bytes (empty if salt is empty).
   const S = repeatToMultiple(salt, v);
 
-  // P: password as UTF-16BE bytes, optionally with a trailing null
-  // terminator, repeated to a multiple of v bytes. For non-empty
-  // passwords both conventions match; for empty, the terminator-or-not
-  // choice is what callers iterate over to handle .NET vs OpenSSL.
+  // P: password as UTF-16BE bytes, repeated to a multiple of v bytes.
+  // Non-empty passwords always include the trailing null terminator
+  // (every implementation we care about agrees there); for the empty
+  // password, the `includeNullTerminator` flag picks between the two
+  // contested conventions that callers iterate over.
   let pwBytes: Buffer;
   if (password.length === 0) {
     pwBytes = includeNullTerminator
       ? Buffer.from([0x00, 0x00])
       : Buffer.alloc(0);
   } else {
-    pwBytes = includeNullTerminator
-      ? utf16BeWithNul(password)
-      : utf16Be(password);
+    pwBytes = utf16BeWithNul(password);
   }
   const P = repeatToMultiple(pwBytes, v);
 
@@ -290,28 +290,18 @@ export function pkcs12Kdf(
 }
 
 /**
- * Encode a string as UTF-16BE — no terminator. Surrogate pairs are
+ * Encode a string as UTF-16BE plus a trailing 16-bit null character —
+ * the password representation PKCS#12 v1.0 KDF expects for non-empty
+ * strings under every convention we care about. Surrogate pairs are
  * preserved (the `String.prototype.charCodeAt` iteration produces the
  * UTF-16 code units directly).
  */
-function utf16Be(s: string): Buffer {
-  const buf = Buffer.alloc(s.length * 2);
+function utf16BeWithNul(s: string): Buffer {
+  const buf = Buffer.alloc((s.length + 1) * 2);
   for (let i = 0; i < s.length; i++) {
     buf.writeUInt16BE(s.charCodeAt(i), i * 2);
   }
-  return buf;
-}
-
-/**
- * Encode a string as UTF-16BE plus a trailing 16-bit null character —
- * the password representation PKCS#12 v1.0 KDF expects for non-empty
- * strings under every convention we care about.
- */
-function utf16BeWithNul(s: string): Buffer {
-  const body = utf16Be(s);
-  const buf = Buffer.alloc(body.length + 2);
-  body.copy(buf, 0);
-  // The trailing 2 bytes are already zero (Buffer.alloc zero-fills).
+  // Trailing 2 bytes are already zero (Buffer.alloc zero-fills).
   return buf;
 }
 
