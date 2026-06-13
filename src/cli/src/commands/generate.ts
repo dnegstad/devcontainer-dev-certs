@@ -1,5 +1,6 @@
 import * as path from "path";
 import {
+  createPlatformStore,
   selectBackend,
   type BackendMode,
 } from "@devcontainer-dev-certs/shared";
@@ -18,10 +19,13 @@ export interface GenerateCommandOptions {
 }
 
 /**
- * `dcdc generate` — produce a fresh dev cert + bundle.json. Picks a backend
- * (native by default, dotnet pass-through on macOS when available, with
- * `--backend` to override) and runs the host trust step unless `--no-trust`
- * is passed.
+ * `dcdc generate` — ensure a dev cert exists on the host and emit its
+ * artifacts + a `bundle.json` for the in-container installer. If the
+ * host platform store already has a valid trusted dev cert, the backend
+ * reuses it (no fresh generation, no re-trust prompt) and we say so on
+ * stderr so the user knows what happened. With `--no-trust`, the native
+ * backend bypasses the platform store entirely and always produces a
+ * fresh in-memory cert.
  */
 export async function runGenerate(
   options: GenerateCommandOptions
@@ -36,6 +40,16 @@ export async function runGenerate(
   process.stderr.write(`Backend: ${backend.kind}\n`);
   process.stderr.write(`Out dir: ${outDir}\n`);
 
+  // Snapshot the platform store BEFORE the backend runs so we can
+  // tell the user whether the backend reused an existing cert or
+  // generated a fresh one. Best-effort: if the store check throws
+  // (corrupt state, permission issue), we skip the diagnostic rather
+  // than fail the generate. Skipped entirely for `--no-trust` since
+  // the native backend doesn't touch the store on that path.
+  const preExistingThumbprint = noTrust
+    ? null
+    : await safelyReadStoreThumbprint();
+
   const result = await backend.generate({
     outDir,
     noTrust,
@@ -45,8 +59,13 @@ export async function runGenerate(
     linuxNssTrustReporter: stderrNssTrustReporter,
   });
 
+  const reused =
+    preExistingThumbprint !== null &&
+    preExistingThumbprint === result.thumbprint;
+
   process.stderr.write(
-    `Thumbprint: ${result.thumbprint}\n` +
+    `Cert source: ${certSourceLabel(reused, noTrust)}\n` +
+      `Thumbprint: ${result.thumbprint}\n` +
       `PFX: ${result.pfxPath}\n` +
       `PEM: ${result.pemPath}\n` +
       (result.pemKeyPath ? `Key: ${result.pemKeyPath}\n` : "") +
@@ -75,4 +94,26 @@ export async function runGenerate(
     });
     process.stderr.write(`Bundle: ${bundlePath}\n`);
   }
+}
+
+async function safelyReadStoreThumbprint(): Promise<string | null> {
+  try {
+    const store = await createPlatformStore();
+    const status = await store.checkStatus();
+    return status.exists ? status.thumbprint : null;
+  } catch {
+    // Store reads aren't load-bearing for the generate flow — we're
+    // only using them to decorate the output. Don't block.
+    return null;
+  }
+}
+
+function certSourceLabel(reused: boolean, noTrust: boolean): string {
+  if (reused) {
+    return "reused (existing trusted cert already in the host platform store)";
+  }
+  if (noTrust) {
+    return "newly generated (in memory; --no-trust skips platform-store write)";
+  }
+  return "newly generated (added to the host platform store)";
 }
