@@ -101,7 +101,7 @@ beforeAll(async () => {
   }
   cachePfxPath = path.join(cacheDir, pfxes[0]);
 
-  observedPbeOid = inspectFirstEncryptedDataOid(cachePfxPath);
+  observedPbeOid = await inspectFirstEncryptedDataOid(cachePfxPath);
 
   try {
     const loaded = await loadPfx(cachePfxPath);
@@ -186,20 +186,28 @@ describe.skipIf(!ready)(
  * Walks pkijs's parsed structure directly rather than going through
  * `parsePfx` so it works regardless of whether the legacy handler can
  * decode the file — the OID is observable from the headers alone, no
- * password needed.
+ * password needed. `parseInternalValues` populates `pfx.parsedValue`;
+ * `checkIntegrity: false` skips the HMAC step (which `parsePfx` itself
+ * skips for the same reason — pkijs's MAC verification disagrees with
+ * .NET's empty-password convention).
  *
  * Returns null if the structure doesn't contain an `EncryptedData`
  * (`Data`-typed contents are unencrypted, no OID to report).
  */
-function inspectFirstEncryptedDataOid(pfxPath: string): string | null {
+async function inspectFirstEncryptedDataOid(
+  pfxPath: string
+): Promise<string | null> {
   const bytes = fs.readFileSync(pfxPath);
   const ab = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(ab).set(bytes);
   const pfx = pkijs.PFX.fromBER(ab);
-  const outerContent = pfx.parsedValue?.authenticatedSafe?.parsedValue
-    ?.safeContents as ReadonlyArray<pkijs.ContentInfo> | undefined;
-  if (!outerContent) return null;
-  for (const contentInfo of outerContent) {
+  await pfx.parseInternalValues({
+    password: new ArrayBuffer(0),
+    checkIntegrity: false,
+  });
+  const authSafe = pfx.parsedValue?.authenticatedSafe;
+  if (!authSafe) return null;
+  for (const contentInfo of authSafe.safeContents) {
     // 1.2.840.113549.1.7.6 = pkcs-7-encryptedData
     if (contentInfo.contentType !== "1.2.840.113549.1.7.6") continue;
     const encryptedData = new pkijs.EncryptedData({
