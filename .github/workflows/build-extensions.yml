@@ -8,7 +8,7 @@ on:
         type: boolean
         default: false
       upload-artifacts:
-        description: Package and upload release artifacts (VSIXes and CLI tarball) for downstream publish jobs.
+        description: Package and upload release artifacts (VSIXes) for downstream publish jobs.
         type: boolean
         default: false
 
@@ -69,43 +69,12 @@ jobs:
       - name: Package Workspace Extension VSIX
         run: npm run package -w src/vscode-workspace-extension
 
-      - name: Build CLI
-        # Same workspace, same shared layer — `dcdc` is the host-side
-        # surface of the same code the extensions ship. Production build
-        # in release contexts so the published bundle matches what the
-        # extensions ship.
-        run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/cli
-
-      - name: Test CLI
-        run: npm test -w src/cli
-
-      - name: Verify CLI package metadata
-        # Guardrail: confirms `npm publish` would produce a valid
-        # tarball (correct `files`, `bin` resolution, no missing
-        # LICENSE/README) without actually publishing. Catches metadata
-        # regressions before they hit a real release.
-        run: npm pack --dry-run -w src/cli
-
-      - name: Package CLI tarball
-        if: inputs.upload-artifacts
-        # Produces the actual tarball the publish job will hand to
-        # `npm publish`. Pinned to `src/cli/dist/` so the upload-artifact
-        # step has a stable, single-file path.
-        run: npm pack -w src/cli --pack-destination src/cli/dist
-
       - name: Upload VSIX artifacts
         if: inputs.upload-artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vsix
           path: src/vscode-*-extension/*.vsix
-
-      - name: Upload CLI tarball
-        if: inputs.upload-artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: cli-tarball
-          path: src/cli/dist/*.tgz
 
   windows-certificate-validation:
     name: Windows Certificate Validation
@@ -179,11 +148,13 @@ jobs:
           security set-keychain-settings "$HOME/Library/Keychains/login.keychain-db"
 
       - name: Validate dotnet dev-certs disk cache is loadable
-        # If this fails, `DotnetBackend.generate` on macOS cannot
-        # discover the cert dotnet just created — the rework that
-        # replaced `dotnet --export-path` with platform-store
-        # discovery depends on `parsePfx` accepting whatever
+        # If this fails, the dotnet backend on macOS cannot discover
+        # the cert dotnet just created — platform-store discovery
+        # depends on `parsePfx` accepting whatever
         # `certificate.Export(X509ContentType.Pfx)` writes on macOS.
+        # The same test pins the on-disk PBE algorithm OID so we get
+        # a loud signal the day aspnetcore switches to PBES2 and the
+        # legacy 3DES handler in `pkcs12LegacyPbe.ts` can be removed.
         run: npm test -w src/vscode-ui-extension -- tests/dotnetMacosCache.integration.test.ts
 
   feature:

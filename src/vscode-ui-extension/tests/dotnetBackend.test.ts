@@ -65,7 +65,7 @@ afterEach(() => {
 
 describe("DotnetBackend.generate", () => {
   it("invokes `dotnet dev-certs https --trust` (no --no-password, no --format)", async () => {
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-dotnet-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
     cleanupDirs.push(outDir);
     const generated = await makeCert();
 
@@ -96,7 +96,7 @@ describe("DotnetBackend.generate", () => {
   });
 
   it("omits --trust when noTrust is set", async () => {
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-dotnet-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
     cleanupDirs.push(outDir);
     const generated = await makeCert();
 
@@ -115,7 +115,7 @@ describe("DotnetBackend.generate", () => {
   });
 
   it("writes PFX, PEM, and key into outDir using our naming (foo.key, not foo.pem.key)", async () => {
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-dotnet-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
     cleanupDirs.push(outDir);
     const generated = await makeCert();
 
@@ -145,7 +145,7 @@ describe("DotnetBackend.generate", () => {
   it("supplements the trust step with NSS on Linux", async () => {
     const restore = stubPlatform("linux");
     try {
-      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-dotnet-"));
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
       cleanupDirs.push(outDir);
       const generated = await makeCert();
 
@@ -184,7 +184,7 @@ describe("DotnetBackend.generate", () => {
   it("does NOT run the NSS step on macOS (keychain handles browser trust)", async () => {
     const restore = stubPlatform("darwin");
     try {
-      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-dotnet-"));
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
       cleanupDirs.push(outDir);
       const generated = await makeCert();
 
@@ -204,7 +204,7 @@ describe("DotnetBackend.generate", () => {
   it("does NOT run the NSS step on Linux when noTrust is set", async () => {
     const restore = stubPlatform("linux");
     try {
-      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-dotnet-"));
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
       cleanupDirs.push(outDir);
       const generated = await makeCert();
 
@@ -222,7 +222,7 @@ describe("DotnetBackend.generate", () => {
   });
 
   it("throws when dotnet exits non-zero", async () => {
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-dotnet-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
     cleanupDirs.push(outDir);
 
     mockedRunProcess.mockResolvedValue({
@@ -237,7 +237,7 @@ describe("DotnetBackend.generate", () => {
   });
 
   it("throws with a clear message when the store has no cert post-trust", async () => {
-    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "dcdc-dotnet-"));
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
     cleanupDirs.push(outDir);
 
     mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });

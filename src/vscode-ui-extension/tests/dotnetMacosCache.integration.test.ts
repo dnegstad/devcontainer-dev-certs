@@ -3,34 +3,40 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { execFileSync } from "child_process";
+import * as pkijs from "pkijs";
 import { loadPfx } from "../src/cert/loader";
 
 /**
- * macOS-only integration test that answers a specific code-review
- * question: when `DotnetBackend.generate` runs `dotnet dev-certs https
- * --trust` and then calls `findExistingDevCert`, can our `parsePfx`
- * actually read the on-disk cache file aspnetcore writes?
+ * macOS-only integration test guarding the read-side compatibility
+ * between `parsePfx` and the PFX `aspnetcore`'s `MacOSCertificateManager.
+ * SaveCertificateCore` writes to disk at
+ * `~/.aspnet/dev-certs/https/aspnetcore-localhost-{thumbprint}.pfx`.
  *
- * The cache file path is `~/.aspnet/dev-certs/https/aspnetcore-localhost-
- * {thumbprint}.pfx`. The writer in `MacOSCertificateManager.SaveCertificate
- * Core` calls `certificate.Export(X509ContentType.Pfx)` with no password
- * — but the byte-level PBE algorithm that produces on macOS is what
- * determines whether our parser (which strictly accepts PBES2 and
- * rejects every legacy PKCS#12 PBE-with-SHA OID) can read it back.
+ * The cache file is produced by `dotnet dev-certs https` (no flags) —
+ * the writer calls `certificate.Export(X509ContentType.Pfx)` with no
+ * password. On every currently-supported .NET SDK that path emits
+ * legacy `pbeWithSHA1And3-KeyTripleDES-CBC` (OID 1.2.840.113549.1.12.1.3)
+ * + SHA-1, 2000 iterations. We need our parser to read this; the
+ * narrow legacy-PBE handler in `pkcs12LegacyPbe.ts` exists exactly for
+ * this case.
  *
- * Test isolates the cache file via `HOME=<tmpdir>` so it never touches
- * the developer's real dev cert state, and it deliberately omits
- * `--trust` so there's no keychain trust-settings prompt in CI.
+ * Two things this test pins:
  *
- * Outcomes:
- *   - parsePfx loads the file → finding REFUTED, DotnetBackend works on
- *     macOS as written.
- *   - parsePfx throws → finding CONFIRMED. The error message names the
- *     offending OID; we use that to pick the right fix.
+ *   1. The cache file loads via `parsePfx` — Kestrel discovery, the
+ *      VS Code host extension's read path, the workspace-extension's
+ *      cert push, and anything else that goes through `parsePfx` keeps
+ *      working as long as this passes.
+ *   2. The on-disk PBE algorithm OID is the one our legacy handler is
+ *      designed for. When aspnetcore eventually switches the macOS
+ *      writer to `ExportPkcs12(PbeParameters(Aes256Cbc, …))` and ships
+ *      PBES2 instead — the day this OID flips — the second assertion
+ *      fails loudly and tells the next maintainer "the legacy 3DES
+ *      handler in `pkcs12LegacyPbe.ts` can now be removed; see its
+ *      removal checklist." That's the only way we'll know the
+ *      workaround has aged out without monitoring upstream by hand.
  *
- * The test asserts a successful load. If aspnetcore changes the
- * algorithm in a future SDK, we want this to fail loudly rather than
- * pass with a stale assumption.
+ * Both observations require running against a real dotnet on a real
+ * macOS host; the test self-skips elsewhere.
  */
 
 const isMacOS = process.platform === "darwin";
@@ -50,26 +56,26 @@ try {
 
 const ready = isMacOS && dotnetMajor >= 6;
 
+// OIDs we recognize at the EncryptedData layer of the PKCS#12. Any
+// other value means the writer started emitting a format we haven't
+// catalogued; the test fails so the discrepancy is investigated.
+const OID_PBE_3DES_SHA1 = "1.2.840.113549.1.12.1.3";
+const OID_PBES2 = "1.2.840.113549.1.5.13";
+
 let cachePfxPath: string;
 let loadResult:
   | { kind: "ok"; thumbprint: string; hasKey: boolean }
   | { kind: "err"; message: string };
+let observedPbeOid: string | null = null;
 
 beforeAll(async () => {
   if (!ready) return;
 
-  // Use the real `$HOME`. Earlier iterations of this test redirected HOME
-  // to a tmpdir to isolate the disk cache, but the macOS keychain APIs
-  // dotnet calls into resolve the login keychain from `$HOME/Library/
-  // Keychains/login.keychain-db`. A redirected HOME points at a path
-  // where no keychain exists, and `dotnet dev-certs` fails with
-  // "There was an error saving the HTTPS developer certificate to the
-  // current user personal certificate store." before we ever get to
-  // observe what it would have written to the disk cache. The CI runner
-  // is ephemeral, so the isolation isn't load-bearing here.
-  //
   // 60s timeout because first-run cert generation can be slow on cold
-  // CI runners.
+  // CI runners. We use the real `$HOME` deliberately: macOS keychain
+  // APIs resolve the login keychain via `$HOME/Library/Keychains/`
+  // and `dotnet dev-certs` fails before it ever writes the disk
+  // cache if HOME points at a tmpdir with no keychain.
   execFileSync("dotnet", ["dev-certs", "https"], {
     timeout: 60_000,
     stdio: "pipe",
@@ -78,9 +84,6 @@ beforeAll(async () => {
   const home = os.homedir();
   const cacheDir = path.join(home, ".aspnet", "dev-certs", "https");
   if (!fs.existsSync(cacheDir)) {
-    // Surface this loudly — if the cache dir doesn't appear, the test
-    // premise has changed (aspnetcore moved or skipped the disk cache)
-    // and any further assertions are meaningless.
     throw new Error(
       `Expected aspnetcore disk cache at ${cacheDir}; directory does not exist. ` +
         `dotnet dev-certs may have changed its on-disk layout.`
@@ -97,6 +100,8 @@ beforeAll(async () => {
     );
   }
   cachePfxPath = path.join(cacheDir, pfxes[0]);
+
+  observedPbeOid = inspectFirstEncryptedDataOid(cachePfxPath);
 
   try {
     const loaded = await loadPfx(cachePfxPath);
@@ -119,15 +124,16 @@ beforeAll(async () => {
 // follow-up investigation if the next run sees stale state.
 
 describe.skipIf(!ready)(
-  "dotnet dev-certs macOS disk cache → parsePfx",
+  "aspnetcore macOS PFX format compatibility",
   () => {
-    it("loads the disk-cache PFX without throwing", () => {
-      // Diagnostic: write the resolved path AND outcome to stderr so
-      // CI logs carry an actionable signal even when the assertion
-      // passes. (stderr instead of console.log to dodge the codebase's
-      // no-console rule.)
+    it("parsePfx loads aspnetcore's macOS disk-cache PFX", () => {
+      // Diagnostic line carries the resolved path AND the observed PBE
+      // OID so CI logs always show the discrepancy at-a-glance even
+      // when the assertion passes. Stderr (not console.log) keeps the
+      // codebase's no-console lint rule happy.
       process.stderr.write(
-        `[macos-cache] dotnet major: ${dotnetMajor}, cache: ${cachePfxPath}, ` +
+        `[macos-pfx] dotnet major: ${dotnetMajor}, cache: ${cachePfxPath}, ` +
+          `observedPbeOid: ${observedPbeOid ?? "(unknown)"}, ` +
           `result: ${JSON.stringify(loadResult)}\n`
       );
       expect(loadResult.kind).toBe("ok");
@@ -142,5 +148,65 @@ describe.skipIf(!ready)(
       if (loadResult.kind !== "ok") return;
       expect(loadResult.hasKey).toBe(true);
     });
+
+    it("aspnetcore is still emitting the legacy 3DES PBE algorithm we expect", () => {
+      // This assertion exists to fire on a SUCCESS event from
+      // aspnetcore's perspective — when they swap the macOS writer
+      // over to `ExportPkcs12(PbeParameters(Aes256Cbc, ...))` and the
+      // disk cache starts coming out as PBES2. When that day arrives,
+      // this test goes red; the failure message is the next
+      // maintainer's signal to clean up the legacy code:
+      //
+      //   - `src/shared/src/cert/pkcs12LegacyPbe.ts` can be deleted
+      //     (follow its removal checklist).
+      //   - The OID can return to `REJECTED_LEGACY_PBE_NAMES` in
+      //     `pfx.ts`.
+      //   - This very assertion gets flipped to expect PBES2 (or just
+      //     deleted, depending on whether the codebase still needs
+      //     to know).
+      if (observedPbeOid === OID_PBES2) {
+        throw new Error(
+          "aspnetcore's macOS PFX writer appears to have switched to PBES2 " +
+            "(OID 1.2.840.113549.1.5.13). The legacy 3DES handler in " +
+            "src/shared/src/cert/pkcs12LegacyPbe.ts is no longer needed and " +
+            "can be removed — see its docstring for the removal checklist."
+        );
+      }
+      expect(observedPbeOid).toBe(OID_PBE_3DES_SHA1);
+    });
   }
 );
+
+/**
+ * Pull the encryption algorithm OID off the first `EncryptedData`
+ * `ContentInfo` inside the PFX's `authenticatedSafe`. That's the
+ * algorithm protecting the cert bag, which is what `pkcs12LegacyPbe.ts`
+ * has to know how to decrypt.
+ *
+ * Walks pkijs's parsed structure directly rather than going through
+ * `parsePfx` so it works regardless of whether the legacy handler can
+ * decode the file — the OID is observable from the headers alone, no
+ * password needed.
+ *
+ * Returns null if the structure doesn't contain an `EncryptedData`
+ * (`Data`-typed contents are unencrypted, no OID to report).
+ */
+function inspectFirstEncryptedDataOid(pfxPath: string): string | null {
+  const bytes = fs.readFileSync(pfxPath);
+  const ab = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(ab).set(bytes);
+  const pfx = pkijs.PFX.fromBER(ab);
+  const outerContent = pfx.parsedValue?.authenticatedSafe?.parsedValue
+    ?.safeContents as ReadonlyArray<pkijs.ContentInfo> | undefined;
+  if (!outerContent) return null;
+  for (const contentInfo of outerContent) {
+    // 1.2.840.113549.1.7.6 = pkcs-7-encryptedData
+    if (contentInfo.contentType !== "1.2.840.113549.1.7.6") continue;
+    const encryptedData = new pkijs.EncryptedData({
+      schema: contentInfo.content,
+    });
+    return encryptedData.encryptedContentInfo.contentEncryptionAlgorithm
+      .algorithmId;
+  }
+  return null;
+}

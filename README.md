@@ -325,20 +325,12 @@ Pushes from a Dev Container without the matching feature option are ignored — 
 
 ## Manual / non-VS Code use
 
-The companion-extension pattern is VS Code-specific, but the underlying container-side machinery isn't. JetBrains, Vim, raw CLI, and CI users can drive the same trust state through a small shell tool the feature installs into the container.
+> [!NOTE]
+> This is a **minimally supported** path. The first-class experience this project ships is the VS Code host + remote extension pair; everything below exists so a user without VS Code isn't left with no escape hatch, but it's hand-wired and there's no host-side automation for cert generation or OS trust. Treat it as a "you're on your own for the host half" workaround, not a primary supported scenario.
+
+The companion-extension pattern is VS Code-specific, but the underlying container-side machinery isn't. JetBrains, Vim, raw CLI, and CI users can drive the in-container half of the trust state through a small shell tool the feature installs into the container. Host-side cert generation and OS trust remain the user's problem (typically `dotnet dev-certs https --trust`).
 
 For an end-to-end walkthrough — generating the cert on the host, mounting it in, wiring `postStartCommand` — see [`examples/manual-setup/`](examples/manual-setup/). The summary here is the reference.
-
-### `dcdc` — the host-side CLI
-
-[`dcdc`](src/cli/README.md) is the host-side CLI that produces the cert files and `bundle.json` the in-container installer below consumes. One command does generation, host trust, and bundle emission:
-
-```bash
-mkdir -p ~/.dev-certs
-dcdc generate --out-dir ~/.dev-certs
-```
-
-It also exposes `dcdc inspect` (cert details), `dcdc bundle` (wrap an existing cert into a bundle.json), `dcdc trust` (host-trust an existing cert), and `dcdc doctor` (read-only diagnostics). See [`src/cli/README.md`](src/cli/README.md) for the full reference. Doing the steps by hand is documented in [`examples/manual-setup/`](examples/manual-setup/) for situations where the CLI isn't available.
 
 ### The fallback installer
 
@@ -444,7 +436,7 @@ devcontainer-dev-certs-install --bundle-json /host-dev-certs/bundle.json \
 
 ### What's still VS Code-only
 
-- **Host-side cert generation and trust.** Use `dotnet dev-certs https --trust` (or your platform's equivalent) and export the PFX / PEM into your mounted host directory. The host extension's editor-agnostic generator is on the roadmap.
+- **Host-side cert generation and trust.** Use `dotnet dev-certs https --trust` (or your platform's equivalent) and export the PFX / PEM into your mounted host directory.
 - **`defaultKestrelCertificate`.** Lives in a VS Code setting and is delivered via `EnvironmentVariableCollection`. Set `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` yourself in `devcontainer.json` `containerEnv` if you need this outside VS Code.
 - **Reverse sync (`syncContainerCert`).** Needs a privileged host-side process with a consent UI; the script can't perform host trust.
 

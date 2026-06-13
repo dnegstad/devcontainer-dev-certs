@@ -23,11 +23,9 @@ import type { Backend, GenerateOptions, GenerateResult } from "./types";
  *   the operation, not a side effect.
  *
  * - `noTrust: true`: generate purely in memory and write only to
- *   `outDir`. The platform store is NOT touched. The typical caller
- *   here is `dcdc generate --no-trust` for "give me cert files to
- *   bind-mount into a container" — that user has explicitly opted out
- *   of host-side cert installation, so we honor it by keeping our
- *   side effects bounded to `outDir`.
+ *   `outDir`. The platform store is NOT touched. Reserved for callers
+ *   that have explicitly opted out of host-side cert installation — we
+ *   honor that by keeping our side effects bounded to `outDir`.
  */
 export class NativeBackend implements Backend {
   readonly kind = "native" as const;
@@ -76,10 +74,8 @@ async function generateAndTrust(
   linuxNssTrustReporter: LinuxNssTrustReporter | undefined
 ): Promise<GenerateResult> {
   // Without a reporter the Linux NSS trust step would still run but its
-  // outcome would be discarded. The CLI's `dcdc generate` always wires a
-  // stderr-logging reporter; CertProvider in the host extension wires its
-  // toast reporter. Both surfaces are responsible for telling the user
-  // when NSS trust didn't take.
+  // outcome would be discarded. CertProvider in the host extension wires
+  // a toast reporter so the user sees NSS trust failures.
   const manager = new CertManager({ linuxNssTrustReporter });
   await manager.trust();
   await manager.exportCert("pfx", outDir);

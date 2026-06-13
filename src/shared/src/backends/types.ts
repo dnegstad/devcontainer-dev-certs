@@ -1,8 +1,8 @@
 /**
- * Backend abstraction shared by `dcdc` (host CLI) and the VS Code host
- * extension. Lets both consumers pick between equivalent generators —
- * the bundled-in native cert primitives or the `dotnet dev-certs https`
- * CLI pass-through — without each having to reimplement the selection /
+ * Backend abstraction for the VS Code host extension's `hostCertGenerator`
+ * setting. Lets the extension pick between equivalent generators — the
+ * bundled-in native cert primitives or the `dotnet dev-certs https` CLI
+ * pass-through — without the call site reimplementing the selection /
  * availability-detection logic.
  *
  * The interface is deliberately narrow: each backend exposes
@@ -29,8 +29,7 @@ export interface GenerateOptions {
    * dotnet backend invokes `trustInNss` directly with it (because
    * `dotnet dev-certs --trust` itself doesn't touch the NSS DBs that
    * Firefox / Chromium read). Without a reporter, NSS failures are
-   * silent — surfacing them in a CLI stderr line or a VS Code toast
-   * is the consumer's job.
+   * silent — surfacing them in a VS Code toast is the consumer's job.
    */
   linuxNssTrustReporter?: LinuxNssTrustReporter;
 }

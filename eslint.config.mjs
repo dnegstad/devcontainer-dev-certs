@@ -41,7 +41,6 @@ export default tseslint.config(
       parserOptions: {
         project: [
           "./src/shared/tsconfig.json",
-          "./src/cli/tsconfig.lint.json",
           "./src/vscode-ui-extension/tsconfig.lint.json",
           "./src/vscode-workspace-extension/tsconfig.lint.json",
         ],

@@ -42,7 +42,7 @@ export {
 } from "./cert/properties";
 export { buildPfx, parsePfx } from "./cert/pfx";
 export type { BuildPfxOptions, ParsedPfx } from "./cert/pfx";
-export { loadPfx, loadPemPair, findSiblingKey } from "./cert/loader";
+export { loadPfx, loadPemPair } from "./cert/loader";
 export type { LoadedCert } from "./cert/loader";
 export {
   isValidDevCert,
@@ -126,11 +126,11 @@ export type {
   ResolveSafeExecPathOptions,
 } from "./platform/processUtil";
 
-// Backend abstraction — selectable cert-generator backends shared by the
-// host CLI (`dcdc`) and the VS Code host extension. Lets both consumers
-// pick between the bundled native generator, the `dotnet dev-certs https`
-// pass-through, and (future) an Aspire-aware variant without each
-// having to reimplement availability detection / selection logic.
+// Backend abstraction — selectable cert-generator backends for the
+// VS Code host extension's `hostCertGenerator` setting. Lets the
+// extension pick between the bundled native generator and the
+// `dotnet dev-certs https` pass-through without the call site
+// reimplementing availability detection / selection logic.
 export { NativeBackend } from "./backends/native";
 export { DotnetBackend } from "./backends/dotnet";
 export { selectBackend, describeAutoBackend } from "./backends/select";

@@ -16,12 +16,12 @@
  * (macos-latest) and on a maintainer's local Mac.
  *
  * Without this module, `DotnetBackend.generate` on macOS — the platform
- * `--backend auto` PREFERS — fails because `findExistingDevCert` can't
- * read aspnetcore's disk cache. Same blocker hits `dcdc inspect`,
- * `dcdc bundle`, and `dcdc trust` against any user-supplied
- * dotnet-on-macOS-produced PFX. Scoping is per-OID: only the algorithm
- * we observed in practice is accepted; the other five RC2/RC4/2-key-3DES
- * OIDs in the PKCS#12 family remain rejected with the original error.
+ * `hostCertGenerator=auto` PREFERS — fails because `findExistingDevCert`
+ * can't read aspnetcore's disk cache. Same blocker hits any user-supplied
+ * dotnet-on-macOS-produced PFX that flows through `parsePfx`. Scoping is
+ * per-OID: only the algorithm we observed in practice is accepted; the
+ * other five RC2/RC4/2-key-3DES OIDs in the PKCS#12 family remain
+ * rejected with the original error.
  *
  * # Removal criteria
  *
