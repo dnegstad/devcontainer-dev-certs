@@ -28,7 +28,6 @@ No `dotnet dev-certs` commands, no manual PFX exports, no environment variable c
 - [Syncing a certificate from the container to the host](#syncing-a-certificate-from-the-container-to-the-host) — reverse sync (opt-in)
 - [Troubleshooting](#troubleshooting) — logs and the common failure modes
 - [Known issues](#known-issues)
-- [Non-VS Code editors](#non-vs-code-editors) — the manual fallback script
 - [Limitations](#limitations) · [Supported Platforms](#supported-platforms)
 - [Development](#development) · [Verifying Release Provenance](#verifying-release-provenance)
 
@@ -440,54 +439,10 @@ This is [containers/buildah#6747](https://github.com/containers/buildah/issues/6
 
 This feature applies the workaround at the end of its own install script, so combinations like `devcontainer-dev-certs` + `azure-functions-core-tools` on podman work out of the box. If you hit the same class of failure with a *different* feature, copy the standalone [`examples/buildah-tmp-fix/`](examples/buildah-tmp-fix/) local feature into your `.devcontainer/` and place it in `devcontainer.json` between the offending feature and the consumer.
 
-## Non-VS Code editors
-
-The companion extension pattern relies on VS Code's cross-host command routing, so JetBrains, Vim, and other editors can't use the automatic flow. For those, the repository ships a standalone helper script that performs the container-side install the remote extension would normally do:
-
-[`src/devcontainer-feature/src/devcontainer-dev-certs/scripts/setup-cert.sh`](src/devcontainer-feature/src/devcontainer-dev-certs/scripts/setup-cert.sh)
-
-**The feature does not copy this script into the container** — it's a manual fallback. Copy it into your image or bind-mount it, then invoke it yourself:
-
-```bash
-# Single cert
-setup-cert.sh <pfx-path> <pem-path> <thumbprint>
-
-# Multiple certs and/or extra destinations
-setup-cert.sh --bundle-json <path-to-bundle.json>
-```
-
-The bundle JSON form takes one or more certs plus optional extra destinations:
-
-```json
-{
-    "certs": [
-        {
-            "name": "aspnetcore-dev",
-            "thumbprint": "ABC123...",
-            "pfxPath": "/abs/cert.pfx",
-            "pemPath": "/abs/cert.pem",
-            "pemKeyPath": "/abs/cert.key",
-            "rootPfxPath": "/abs/root.pfx",
-            "trustInContainer": true
-        }
-    ],
-    "extraDestinations": [
-        { "path": "/etc/nginx/certs", "format": "pem" },
-        { "path": "/var/app", "format": "pem-bundle" }
-    ]
-}
-```
-
-`pemKeyPath` and `rootPfxPath` are optional — the root PFX is generated with `openssl` when omitted. The script honors `_REMOTE_USER` / `_REMOTE_USER_HOME` (defaulting to `vscode` / `/home/vscode`) to decide whose home directory receives the certs.
-
-**Requirements:** `openssl` must be installed for hash computation and PFX conversion; the `--bundle-json` form additionally requires `jq`.
-
-You still need to produce the certificate material yourself on the host (for example with `dotnet dev-certs https --export-path`) and get it into the container — the script handles placement and trust, not transfer.
-
 ## Limitations
 
 - **Auto-generated dev cert matches .NET's format only.** The `generateDotNetCert` flow produces a cert identical to `dotnet dev-certs https` (specific OID marker, subject, SAN entries). To sync differently-shaped certs (corporate CAs, custom wildcard certs, etc.), add them via the `devcontainerDevCerts.userCertificates` VS Code setting — they're copied as-is.
-- **VS Code only.** The companion extension pattern relies on VS Code's cross-host command routing. Other editors (JetBrains, Vim, etc.) are not supported automatically; see "[Non-VS Code editors](#non-vs-code-editors)" for the manual fallback.
+- **VS Code only.** The companion extension pattern relies on VS Code's cross-host command routing, so VS Code is currently the only supported editor. Other editors (JetBrains, Vim, etc.) can't use this flow today.
 - **Host trust requires user interaction.** On Windows, trusting the auto-generated dev cert triggers a system dialog. On macOS, the keychain may prompt for a password. This only happens once and only for the .NET dev cert — user-managed certs are never added to the host OS trust store.
 - **Linux browser trust is a separate step.** Firefox and Chromium on Linux don't read the OS/OpenSSL trust stores; see "[Linux hosts: browser trust](#linux-hosts-browser-trust)".
 
@@ -545,7 +500,6 @@ src/
     src/devcontainer-dev-certs/
       devcontainer-feature.json    Feature metadata, options, extension references
       install.sh                   Container build-time setup (creates directories)
-      scripts/setup-cert.sh        Manual fallback installer for non-VS Code editors
 
 test/
   sample-project/                  Test project template (hydrated into .out/ for testing)
