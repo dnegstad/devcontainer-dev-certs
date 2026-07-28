@@ -60,10 +60,13 @@ If the host companion extension is missing when this extension activates, you'll
 ### Verify it worked
 
 ```bash
-ls ~/.dotnet/corefx/cryptography/x509stores/my/   # expect {thumbprint}.pfx
-ls ~/.aspnet/dev-certs/trust/                     # expect the PEM plus a {hash}.0 symlink
-dotnet dev-certs https --check                    # if the .NET SDK is present
+ls ~/.dotnet/corefx/cryptography/x509stores/my/    # expect {thumbprint}.pfx
+ls ~/.dotnet/corefx/cryptography/x509stores/root/  # expect the same {thumbprint}.pfx
+ls ~/.aspnet/dev-certs/trust/                      # expect the PEM plus a {hash}.0 symlink
+dotnet dev-certs https --check --trust             # if the .NET SDK is present
 ```
+
+`--check` on its own only confirms a valid cert exists in `my/`; adding `--trust` makes it report the trusted state as well (both are read-only in this combination).
 
 Then call your app over HTTPS from inside the container without `-k`: `curl https://localhost:<port>`.
 

@@ -63,19 +63,26 @@ On first use:
 
 ### Verify it worked
 
-Inside the container, three checks confirm the certificate landed where it needs to be:
+Inside the container, these checks confirm the certificate landed where it needs to be:
 
 ```bash
 # 1. The .NET X509 store — Kestrel reads the cert from here
 ls ~/.dotnet/corefx/cryptography/x509stores/my/
 #    expect: {thumbprint}.pfx
 
-# 2. The OpenSSL trust directory — curl/wget read from here
+# 2. The .NET root store — makes .NET clients treat the cert as trusted
+ls ~/.dotnet/corefx/cryptography/x509stores/root/
+#    expect: the same {thumbprint}.pfx
+
+# 3. The OpenSSL trust directory — curl/wget read from here
 ls ~/.aspnet/dev-certs/trust/
 #    expect: aspnetcore-localhost-{thumbprint}.pem plus a {hash}.0 symlink
 
-# 3. If the .NET SDK is installed in the container
-dotnet dev-certs https --check
+# 4. If the .NET SDK is installed in the container. --check alone only
+#    confirms a valid cert exists in the my/ store; adding --trust also
+#    reports the trusted state that check 2 provides. Both are read-only
+#    in this combination.
+dotnet dev-certs https --check --trust
 #    expect: "A valid HTTPS certificate is already present."
 ```
 
@@ -133,8 +140,9 @@ The solution has three components that work together:
 
 2. **Host Extension** (`extensionKind: ["ui"]`) runs on your local machine. It generates certificates identical to `dotnet dev-certs https` (same OID marker, same SAN entries, same key parameters) using Node's built-in `crypto` plus `@peculiar/x509` and `pkijs` for X.509 / PKCS#12 — supporting RSA, ECDSA, and Ed25519 keys. On first use, it generates a cert and trusts it in the host OS certificate store. It then serves the certificate material to the remote side via VS Code's cross-host command routing.
 
-3. **Remote Extension** (`extensionKind: ["workspace"]`) runs inside the container. On activation, it requests certificate material from the host extension, decodes it, and places it in two locations:
+3. **Remote Extension** (`extensionKind: ["workspace"]`) runs inside the container. On activation, it requests certificate material from the host extension, decodes it, and places the dev cert in three locations:
    - The .NET X509 store (`~/.dotnet/corefx/cryptography/x509stores/my/`) where Kestrel discovers it automatically via its `GetDevelopmentCertificateFromStore()` fallback
+   - The .NET root store (`~/.dotnet/corefx/cryptography/x509stores/root/`), as a public-cert-only PFX, so .NET clients in the container report the cert as trusted
    - An OpenSSL trust directory (`~/.aspnet/dev-certs/trust/`) with hash symlinks (c_rehash, implemented in pure TypeScript) so `curl`, `wget`, and other OpenSSL-based tools trust it
 
 The two extensions communicate using VS Code's cross-host `executeCommand()` routing. The remote extension detects whether the host extension is installed and prompts to install it if missing. This architecture is transport-agnostic — it works for Dev Containers today and can support SSH remoting, WSL, or any future VS Code remote backend.
@@ -180,7 +188,7 @@ Set in your host VS Code's user or workspace settings. Provided by the **Dev Con
 | `devcontainer-dev-certs.autoProvision` | `true` | Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to `false` to disable provisioning entirely (host-generation AND acceptance of container-pushed certs). |
 | `devcontainerDevCerts.generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert and trust it in the host OS store. When `false`, user-managed certificates (if any) are still synced, but no managed dev cert lives on the host — this also implicitly disables acceptance of container-pushed certs (a container push would land one in the same trust store the user opted out of). |
 | `devcontainerDevCerts.userCertificates` | `[]` | Host-managed certificates to sync from the host into Dev Containers. See "[User-managed certificates](#user-managed-certificates)" for the per-entry field table. User-managed certs are never added to the host OS trust store. |
-| `devcontainerDevCerts.installUserCertsToDotNetStore` | `false` | When `true`, also copies every entry from `userCertificates` into the container's .NET X509Store. **Security note:** the on-disk PFX there is passwordless (Linux's `StoreName.My` enumeration can't accept per-file passwords), so opting in strips your user cert's password on the in-container copy. Per-entry exemption via `excludeFromDotNetStore: true`. The auto-generated dotnet-dev cert is always installed to the store regardless. |
+| `devcontainerDevCerts.installUserCertsToDotNetStore` | `false` | When `true`, also copies each key-bearing entry from `userCertificates` into the container's .NET X509Store. CA-only entries (no private key) are skipped — there's no PFX to write. **Security note:** the on-disk PFX there is passwordless (Linux's `StoreName.My` enumeration can't accept per-file passwords), so opting in strips your user cert's password on the in-container copy. Per-entry exemption via `excludeFromDotNetStore: true`. The auto-generated dotnet-dev cert is always installed to the store regardless. |
 | `devcontainerDevCerts.defaultKestrelCertificate` | `""` | Name of a `userCertificates` entry to use as the default Kestrel certificate inside Dev Containers. When set, the remote extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` and exports `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` to processes launched from VS Code (terminals, debug, tasks). Leave empty to opt out — Kestrel will still discover the auto-generated dev cert via X509Store. See "[Default Kestrel certificate (opt-in)](#default-kestrel-certificate-opt-in)" for scope and caveats. |
 | `devcontainerDevCerts.allowNonLocalContainerCertSans` | `false` | When accepting a Dev Container-managed dev certificate (via `syncContainerCert`), override the default SAN restriction that limits trusted certificates to localhost / loopback / private IPs / docker host names. Only enable when you fully understand the SAN entries the container will push. Has no effect when `generateDotNetCert` or `autoProvision` is `false`. |
 

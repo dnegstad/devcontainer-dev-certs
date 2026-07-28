@@ -97,7 +97,7 @@ The remote companion extension contributes the in-container commands (**Dev Cert
 | `devcontainer-dev-certs.autoProvision` | `true` | Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to `false` to disable provisioning entirely (host-generation AND acceptance of container-pushed certs). |
 | `devcontainerDevCerts.generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert and trust it in the host OS store. When `false`, user-managed certificates (if any) are still synced, but no managed dev cert lives on the host — also implicitly disables acceptance of container-pushed dev certs. |
 | `devcontainerDevCerts.userCertificates` | `[]` | Host-managed certificates to sync from the host into Dev Containers (see "User-managed certificates" below). |
-| `devcontainerDevCerts.installUserCertsToDotNetStore` | `false` | When `true`, also copies every entry from `userCertificates` into the container's .NET X509Store. **Security note:** the on-disk PFX there is passwordless (Linux's `StoreName.My` enumeration can't accept per-file passwords), so opting in strips your user cert's password on the in-container copy. Per-entry exemption via `excludeFromDotNetStore: true`. The auto-generated dotnet-dev cert is always installed to the store regardless. |
+| `devcontainerDevCerts.installUserCertsToDotNetStore` | `false` | When `true`, also copies each key-bearing entry from `userCertificates` into the container's .NET X509Store. CA-only entries (no private key) are skipped — there's no PFX to write. **Security note:** the on-disk PFX there is passwordless (Linux's `StoreName.My` enumeration can't accept per-file passwords), so opting in strips your user cert's password on the in-container copy. Per-entry exemption via `excludeFromDotNetStore: true`. The auto-generated dotnet-dev cert is always installed to the store regardless. |
 | `devcontainerDevCerts.defaultKestrelCertificate` | `""` | Name of a `userCertificates` entry to use as the default Kestrel certificate inside Dev Containers. When set, the remote extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` and exports `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` to processes launched from VS Code (terminals, debug, tasks). Leave empty to opt out — Kestrel will still discover the auto-generated dev cert via X509Store. |
 | `devcontainerDevCerts.allowNonLocalContainerCertSans` | `false` | When accepting a Dev Container-managed dev certificate (via `syncContainerCert`), override the default SAN restriction that limits trusted certificates to localhost / loopback / private IPs / docker host names. Only enable when you fully understand the SAN entries the container will push. Has no effect when `generateDotNetCert` or `autoProvision` is `false`. |
 
@@ -223,10 +223,13 @@ Certificate material (PFX + PEM) is serialized as base64 and transferred via `vs
 
 ### Container Trust
 
-Inside the container, the remote extension places the cert in two locations:
+Inside the container, the remote extension places the dev cert in three locations:
 
 - **`~/.dotnet/corefx/cryptography/x509stores/my/{thumbprint}.pfx`** — ASP.NET's X509Store fallback discovers it automatically
+- **`~/.dotnet/corefx/cryptography/x509stores/root/{thumbprint}.pfx`** — public-cert-only PFX, so .NET clients in the container report the cert as trusted
 - **`~/.aspnet/dev-certs/trust/`** — PEM + OpenSSL hash symlinks, included in `SSL_CERT_DIR` so `curl`, `wget`, and other OpenSSL-based tools trust it
+
+User-managed certs get the second and third writes only when their `trustInContainer` is on, and the first only when `installUserCertsToDotNetStore` applies and the entry carries a private key.
 
 ## Troubleshooting
 
