@@ -160,7 +160,7 @@ This extension additionally honors, matching the behavior of the official .NET `
 
 This extension logs to the **Dev Container Dev Certs (Remote)** output channel (**View → Output**, then pick it from the dropdown) — what was received from the host, where each file was written, and which thumbprints were considered. The host companion logs separately to **Dev Container Dev Certs** in your local VS Code window; a failure to *obtain* certificates is usually explained there.
 
-If nothing happened at all, check that the host extension is installed, that `autoInject` is on (or run **Dev Certs: Inject Certificate into Remote**), and that `echo $SSL_CERT_DIR` in a container terminal starts with `~/.aspnet/dev-certs/trust`. See the [troubleshooting guide](https://github.com/dnegstad/devcontainer-dev-certs#troubleshooting) for the full list.
+If nothing happened at all, check that the host extension is installed, that `autoInject` is on (or run **Dev Certs: Inject Certificate into Remote**), and that `echo $SSL_CERT_DIR` in a container terminal leads with the expanded trust directory (e.g. `/home/vscode/.aspnet/dev-certs/trust`). See the [troubleshooting guide](https://github.com/dnegstad/devcontainer-dev-certs#troubleshooting) for the full list.
 
 ## Requirements
 

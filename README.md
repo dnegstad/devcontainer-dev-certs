@@ -205,11 +205,13 @@ All three are available from the Command Palette (`F1`). The host command runs o
 
 ### Environment variables
 
-The feature writes these into the container at build time (via `/etc/profile.d` and the container environment), so they apply to VS Code terminals, tasks, debug sessions, and `docker exec` alike:
+The feature writes these into the container at build time, through three sinks that between them cover VS Code terminals, tasks, and debug sessions (`/etc/profile.d`, sourced by login shells), PAM-based sessions such as `sshd` and the console (`/etc/environment`), and `docker exec -it <container> bash` (the system-wide `bashrc` sources the profile.d script, since interactive non-login shells read neither of the other two).
+
+They are **not** set for non-interactive execs: `docker exec <container> env`, or a binary exec'd directly without a shell, sees none of them. `sh`/dash interactive shells aren't covered either.
 
 | Variable | Value | Set when |
 |----------|-------|----------|
-| `SSL_CERT_DIR` | `$HOME/.aspnet/dev-certs/trust:` + the resolved `sslCertDirs` | Always |
+| `SSL_CERT_DIR` | `$HOME/.aspnet/dev-certs/trust`, then the resolved `sslCertDirs` joined with `:`. The trust directory is emitted alone when pruning leaves no system CA directory, so there's no trailing colon. | Always |
 | `DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET` | The `generateDotNetCert` option | Always |
 | `DEVCONTAINER_DEV_CERTS_SYNC_USER` | The `syncUserCertificates` option | Always |
 | `DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER` | The `syncContainerCert` option | Always |
@@ -398,7 +400,7 @@ Work through these in order:
 1. **Is the host extension installed?** The remote extension shows an **Install Host Extension** prompt when it can't reach the host side. If you dismissed it, install `dnegstad.devcontainer-dev-certs-host` on your local VS Code and reload.
 2. **Is auto-injection on?** If `devcontainer-dev-certs.autoInject` is `false`, run **Dev Certs: Inject Certificate into Remote** from the Command Palette.
 3. **Is provisioning on?** If `devcontainer-dev-certs.autoProvision` or `devcontainerDevCerts.generateDotNetCert` is `false` on the host, no managed dev cert is generated or served.
-4. **Did the feature actually install?** Check `echo $SSL_CERT_DIR` in a container terminal — it should start with `~/.aspnet/dev-certs/trust`. If it's empty, the feature didn't run; rebuild the container.
+4. **Did the feature actually install?** Run `echo $SSL_CERT_DIR` in a container terminal. The first entry should be the trust directory under your home directory, expanded — e.g. `/home/vscode/.aspnet/dev-certs/trust`. If the variable is empty, the feature didn't run; rebuild the container.
 
 Running **Dev Certs: Inject Certificate into Remote** is the standard way to retry any of this without rebuilding.
 
@@ -477,33 +479,53 @@ The Extension Development Host opens with the UI extension loaded on the host si
 
 ```
 src/
+  shared/                          Code shared by both extensions
+    src/
+      cert/                        Cert primitives: classify, load, PFX build/parse,
+                                   OID + SAN + key constants, validation rules
+      paths.ts                     .NET store and OpenSSL trust directory paths
+      certName.ts                  userCertificates[].name pattern and guard
+      logger.ts                    Output channel logging
+
   vscode-ui-extension/             VS Code host extension (extensionKind: ui)
     src/
-      cert/                        Certificate generation, export, and management
+      cert/                        Host-side certificate work
         generator.ts               X.509 certificate generation (matches ASP.NET CertificateManager)
-        properties.ts              OID constants, SAN entries, key parameters
         exporter.ts                PFX and PEM export
         manager.ts                 Orchestrates generate/trust/export/check
+                                   (loader/pfx/properties/types here are re-export
+                                    shims over the canonical copies in shared/)
       platform/                    OS-specific cert store implementations
         windowsStore.ts            Windows cert store via PowerShell
         macStore.ts                macOS keychain via security CLI
         linuxStore.ts              Linux X509Store + OpenSSL trust directory
+        nssTrust.ts                Firefox/Chromium NSS trust via certutil
       certProvider.ts              Serves cert material to the workspace extension
+      containerCertAccept.ts       Validates and trusts container-pushed certs
 
   vscode-workspace-extension/      VS Code remote extension (extensionKind: workspace)
     src/
       certInstaller.ts             Writes cert files to correct paths
+      cleanupCerts.ts              Stale dev cert detection and cleanup
+      containerCertPush.ts         Reverse sync: scans for and pushes the container's cert
+      defaultKestrelDebugProvider.ts  Injects the Kestrel default-cert env vars into
+                                      resolved coreclr debug configurations
       util/rehash.ts               Pure TypeScript c_rehash (OpenSSL subject hash computation)
-      util/paths.ts                .NET store and OpenSSL trust directory paths
+      util/destinations.ts         extraCertDestinations parsing
+      util/upmap.ts                V2 -> V3 cert material wire-contract upmap
 
   devcontainer-feature/            Dev Container feature
     src/devcontainer-dev-certs/
       devcontainer-feature.json    Feature metadata, options, extension references
-      install.sh                   Container build-time setup (creates directories)
+      install.sh                   Container build-time setup (directories, SSL_CERT_DIR, env)
 
 test/
   sample-project/                  Test project template (hydrated into .out/ for testing)
-  hydrate.mjs                      Assembles a runnable test project from the template + feature
+    hydrate-sample-project.mjs     Assembles a runnable test project from the template + feature
+  dotnet-pfx-roundtrip/            .NET PFX-load harness driven by the UI extension's tests
+  install-sh.test.mjs              Behavioral test that actually runs install.sh
+  validate-feature.mjs             Consistency checks across feature JSON, install.sh, package.json
+  generate-test-cert.mjs           Test certificate fixture generator
 
 .github/workflows/                 CI/CD (build, extension packaging, feature publishing)
 ```
