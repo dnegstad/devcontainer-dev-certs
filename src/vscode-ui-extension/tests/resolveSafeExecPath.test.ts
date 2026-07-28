@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { resolveSafeExecPath } from "@devcontainer-dev-certs/shared";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { resolveSafeExecPath, runProcess } from "@devcontainer-dev-certs/shared";
 
 /**
  * The resolver is Windows-specific defense against `CreateProcess`'s
@@ -148,4 +148,82 @@ describe("resolveSafeExecPath", () => {
 
     expect(result).toBe("C:\\first\\dotnet.exe");
   });
+});
+
+/**
+ * `runProcess` is the single chokepoint every production shell-out goes
+ * through (the only non-test `child_process` import in the tree lives in
+ * `processUtil.ts`). The tests below pin the guard branch that makes the
+ * resolver load-bearing: on Windows, a command that fails to resolve
+ * must yield a well-defined exit code 127 — NEVER fall through to a
+ * cwd-first spawn. The distinct stderr message doubles as proof of which
+ * branch ran: the guard returns `command not found on PATH: ...` before
+ * `execFile` is ever invoked, whereas an actual spawn failure surfaces
+ * the OS error (ENOENT) with exit code 1.
+ *
+ * `runProcess` takes no injection options by design (the chokepoint
+ * shouldn't be steerable by callers), so these tests stub
+ * `process.platform` / `process.env.PATH` instead. Both stubs are also
+ * valid on a real Windows host: the platform stub is a no-op there and
+ * the PATH stub points at a directory that exists on no machine.
+ */
+describe("runProcess safe-exec guard", () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(
+    process,
+    "platform"
+  )!;
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", originalPlatform);
+    vi.unstubAllEnvs();
+  });
+
+  it("returns exit code 127 on Windows when the command is not on PATH", async () => {
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
+    vi.stubEnv("PATH", "C:\\devcerts-test-nonexistent-dir-8f3a");
+
+    const result = await runProcess("devcerts-no-such-tool-8f3a", ["--version"]);
+
+    expect(result.exitCode).toBe(127);
+    expect(result.stderr).toBe(
+      "command not found on PATH: devcerts-no-such-tool-8f3a"
+    );
+    expect(result.stdout).toBe("");
+  });
+
+  it("returns exit code 127 on Windows when PATH holds only relative entries", async () => {
+    // A PATH consisting entirely of relative directories is the
+    // cwd-equivalent hijack setup. The resolver must filter every entry,
+    // find nothing, and hit the guard — not probe relative dirs.
+    Object.defineProperty(process, "platform", {
+      value: "win32",
+      configurable: true,
+    });
+    vi.stubEnv("PATH", ".;bin;..\\tools");
+
+    const result = await runProcess("certutil.exe", ["-dump"]);
+
+    expect(result.exitCode).toBe(127);
+    expect(result.stderr).toContain("command not found on PATH");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "falls through to the OS spawn on non-Windows (ENOENT, not 127)",
+    async () => {
+      // On Linux/macOS the resolver passes bare names through untouched
+      // (execvp never consults cwd, so there's nothing to defend). A
+      // missing command therefore fails at spawn time with the OS error
+      // (generic exit code 1, empty stderr from execFile's spawn-error
+      // shape) — NOT the Windows guard's 127 + "command not found"
+      // message. Asserting the difference pins that the guard is
+      // Windows-only and non-Windows behavior is unchanged.
+      const result = await runProcess("devcerts-no-such-tool-8f3a", []);
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).not.toContain("command not found on PATH");
+    }
+  );
 });
