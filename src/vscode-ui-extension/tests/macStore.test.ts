@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { initLogger } from "@devcontainer-dev-certs/shared";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { logMessages } from "./__mocks__/vscode";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
@@ -16,12 +16,14 @@ vi.mock("os", async (importOriginal) => {
 });
 
 // Mock runProcess so tests don't shell out to the real `security` CLI.
-vi.mock("../src/platform/processUtil", () => ({
+// Target the shared internal module since MacCertificateStore lives there
+// and imports its runProcess via the local `./processUtil`.
+vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn(),
 }));
 
 import { MacCertificateStore } from "../src/platform/macStore";
-import { runProcess } from "../src/platform/processUtil";
+import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
 
@@ -38,10 +40,15 @@ function devCertsDir(): string {
 }
 
 /**
- * Build a security-CLI mock that:
- *  - `find-certificate -Z <thumb>` succeeds for thumbprints in `keychainThumbs`
- *  - `find-certificate -a -p -Z` returns a synthetic PEM block listing every
- *    `extraKeychainPems` entry
+ * Build a security-CLI mock that models the real find-certificate
+ * semantics — `-Z` is an output modifier (prints hash lines), NOT a
+ * filter, so presence checks enumerate with `-a -Z` and match on the
+ * `SHA-1 hash:` lines:
+ *  - `find-certificate -a -Z <keychain>` (no `-p`) emits one
+ *    `SHA-1 hash: <thumb>` line per entry in `keychainThumbs`, mirroring
+ *    modern macOS by also emitting a `SHA-256 hash:` line per cert
+ *  - `find-certificate -a -p -Z` returns a synthetic PEM block listing
+ *    every `extraKeychainPems` entry
  *  - any other call resolves to a benign success
  *  - tracks every command for assertions
  */
@@ -57,18 +64,18 @@ function setupSecurityMock(opts: {
     }
     const sub = args[0];
     if (sub === "find-certificate") {
-      // single-thumb lookup
-      if (args.includes("-Z") && !args.includes("-a")) {
-        const zIdx = args.indexOf("-Z");
-        const thumb = args[zIdx + 1];
-        const present = opts.keychainThumbs?.has(thumb) ?? false;
-        return {
-          exitCode: present ? 0 : 1,
-          stdout: present ? `SHA-1 hash: ${thumb}\n` : "",
-          stderr: present ? "" : "SecKeychainSearchCopyNext: The specified item could not be found",
-        };
+      // hash enumeration (presence checks)
+      if (args.includes("-a") && args.includes("-Z") && !args.includes("-p")) {
+        const thumbs = [...(opts.keychainThumbs ?? [])];
+        const stdout = thumbs
+          .map(
+            (t) =>
+              `SHA-256 hash: ${"AB".repeat(32)}\nSHA-1 hash: ${t}\nkeychain: "/Users/test/Library/Keychains/login.keychain-db"\n`
+          )
+          .join("");
+        return { exitCode: 0, stdout, stderr: "" };
       }
-      // enumerate all
+      // enumerate all as PEM
       if (args.includes("-a") && args.includes("-p")) {
         const pems = opts.extraKeychainPems ?? [];
         return {
@@ -227,5 +234,133 @@ describe("MacCertificateStore.findExistingDevCert", () => {
     expect(found).toBeNull();
     const warn = logMessages.find((m) => m.includes("failed to parse PFX"));
     expect(warn).toBeDefined();
+  });
+});
+
+describe("MacCertificateStore.removeCertificates", () => {
+  let store: MacCertificateStore;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    logMessages.length = 0;
+    testHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-mac-rm-"));
+    fs.mkdirSync(devCertsDir(), { recursive: true });
+    store = new MacCertificateStore();
+  });
+
+  afterEach(() => {
+    fs.rmSync(testHomeDir, { recursive: true, force: true });
+  });
+
+  it("calls `security remove-trusted-cert <cert-file>` for each dev cert (no `-d`, no keychain positional)", async () => {
+    const { cert, key, thumbprint } = await makeTestCert();
+    const pfxBytes = await buildPfx({ cert, key });
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
+      pfxBytes
+    );
+
+    const sec = setupSecurityMock();
+    await store.removeCertificates();
+
+    const untrust = sec.calls.filter(
+      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
+    );
+    expect(untrust).toHaveLength(1);
+    // No `-d` (we trusted to user domain, not admin) — using -d here
+    // would look in the wrong trust-settings file and silently miss
+    // our entry.
+    expect(untrust[0].args).not.toContain("-d");
+    // The positional must be a cert file path under os.tmpdir() — NOT
+    // the keychain path. Past bug: we were passing the keychain path
+    // here, which made the command a no-op (or worse, errored).
+    const tmpDir = os.tmpdir();
+    const positional = untrust[0].args[untrust[0].args.length - 1];
+    expect(positional.startsWith(tmpDir)).toBe(true);
+    expect(positional).toMatch(/devcert-untrust-.*\.cer$/);
+  });
+
+  it("calls untrust BEFORE delete-certificate (so trust-settings entries aren't orphaned)", async () => {
+    const { cert, key, thumbprint } = await makeTestCert();
+    const pfxBytes = await buildPfx({ cert, key });
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
+      pfxBytes
+    );
+
+    const sec = setupSecurityMock();
+    await store.removeCertificates();
+
+    const untrustIdx = sec.calls.findIndex(
+      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
+    );
+    const deleteIdx = sec.calls.findIndex(
+      (c) => c.cmd === "security" && c.args[0] === "delete-certificate"
+    );
+    expect(untrustIdx).toBeGreaterThanOrEqual(0);
+    expect(deleteIdx).toBeGreaterThan(untrustIdx);
+  });
+
+  it("unlinks the PFX from disk after the keychain teardown", async () => {
+    const { cert, key, thumbprint } = await makeTestCert();
+    const pfxBytes = await buildPfx({ cert, key });
+    const pfxPath = path.join(
+      devCertsDir(),
+      `aspnetcore-localhost-${thumbprint}.pfx`
+    );
+    fs.writeFileSync(pfxPath, pfxBytes);
+
+    setupSecurityMock();
+    await store.removeCertificates();
+
+    expect(fs.existsSync(pfxPath)).toBe(false);
+  });
+
+  it("regression: never calls `security remove-trusted-cert -d <keychain-path>`", async () => {
+    const { cert, key, thumbprint } = await makeTestCert();
+    const pfxBytes = await buildPfx({ cert, key });
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
+      pfxBytes
+    );
+
+    const sec = setupSecurityMock();
+    await store.removeCertificates();
+
+    const bad = sec.calls.find(
+      (c) =>
+        c.cmd === "security" &&
+        c.args[0] === "remove-trusted-cert" &&
+        c.args.includes("-d")
+    );
+    expect(bad).toBeUndefined();
+  });
+
+  it("processes multiple dev cert PFXes independently", async () => {
+    const a = await makeTestCert();
+    const b = await makeTestCert();
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${a.thumbprint}.pfx`),
+      await buildPfx({ cert: a.cert, key: a.key })
+    );
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${b.thumbprint}.pfx`),
+      await buildPfx({ cert: b.cert, key: b.key })
+    );
+
+    const sec = setupSecurityMock();
+    await store.removeCertificates();
+
+    const untrustCount = sec.calls.filter(
+      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
+    ).length;
+    expect(untrustCount).toBe(2);
+  });
+
+  it("no-ops cleanly when the devCertsDir doesn't exist", async () => {
+    fs.rmSync(devCertsDir(), { recursive: true, force: true });
+    const sec = setupSecurityMock();
+    await store.removeCertificates();
+    expect(sec.calls).toHaveLength(0);
   });
 });

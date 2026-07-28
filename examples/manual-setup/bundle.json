@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/dnegstad/devcontainer-dev-certs/main/schema/bundle.schema.json",
+  "certs": [
+    {
+      "name": "aspnetcore-dev",
+      "kind": "dotnet-dev",
+      "thumbprint": "REPLACE_WITH_SHA1_FINGERPRINT_NO_COLONS",
+      "pfxPath": "/host-dev-certs/aspnetcore-dev.pfx",
+      "pemPath": "/host-dev-certs/aspnetcore-dev.pem",
+      "pemKeyPath": "/host-dev-certs/aspnetcore-dev.key",
+      "trustInContainer": true
+    }
+  ],
+  "extraDestinations": [
+    { "path": "/etc/nginx/certs", "format": "pem" }
+  ]
+}

@@ -55,6 +55,11 @@ function mockManager(thumbprint: string): CertManager {
   return {
     check: vi.fn(async () => status),
     trust: vi.fn(async () => {}),
+    // Matches the store's thumbprint, so the provider's staleness check
+    // (loadedThumbprint vs check()) sees a consistent manager and does
+    // not invalidate.
+    loadedThumbprint: thumbprint,
+    invalidateLoadedCert: vi.fn(),
     exportCert: vi.fn(
       async (format: "pfx" | "pem" | "root-pfx", outputDir: string) => {
         fs.mkdirSync(outputDir, { recursive: true });

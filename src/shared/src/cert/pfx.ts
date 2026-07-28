@@ -24,6 +24,11 @@ import {
   randomBytes,
   webcrypto,
 } from "node:crypto";
+import {
+  decryptLegacyPbe,
+  isSupportedLegacyPbe,
+  parseLegacyPbeParams,
+} from "./pkcs12LegacyPbe";
 import { DevCert } from "./types";
 import { DevKey } from "./types";
 
@@ -69,14 +74,20 @@ const AES_KEY_LENGTH = 32; // AES-256
 const AES_IV_LENGTH = 16;
 
 /**
- * Well-known PKCS#12 PBE-with-SHA OIDs that we deliberately don't accept on
- * the read path. Used purely to render an actionable error message — the
- * actual rejection is "anything that isn't PBES2".
+ * Well-known PKCS#12 PBE-with-SHA OIDs that we deliberately don't accept
+ * on the read path. Used purely to render an actionable error message —
+ * the actual rejection is "anything that isn't PBES2, except the one
+ * legacy OID `pkcs12LegacyPbe.ts` is currently scoped to handle". See
+ * that module's docstring for context and removal criteria.
  */
 const REJECTED_LEGACY_PBE_NAMES: Record<string, string> = {
   "1.2.840.113549.1.12.1.1": "pbeWithSHAAnd128BitRC4",
   "1.2.840.113549.1.12.1.2": "pbeWithSHAAnd40BitRC4",
-  "1.2.840.113549.1.12.1.3": "pbeWithSHAAnd3-KeyTripleDES-CBC",
+  // 1.2.840.113549.1.12.1.3 = pbeWithSHAAnd3-KeyTripleDES-CBC is the
+  // one legacy algorithm we DO accept (via pkcs12LegacyPbe.ts) because
+  // aspnetcore writes it on macOS. Keeping it out of this rejection
+  // list rather than papering over with a special-case in the error
+  // path; the read flow branches before this table is consulted.
   "1.2.840.113549.1.12.1.4": "pbeWithSHAAnd2-KeyTripleDES-CBC",
   "1.2.840.113549.1.12.1.5": "pbeWithSHAAnd128BitRC2-CBC",
   "1.2.840.113549.1.12.1.6": "pbeWithSHAAnd40BitRC2-CBC",
@@ -821,14 +832,30 @@ async function decryptSafeContents(
     const encryptedData = new pkijs.EncryptedData({
       schema: contentInfo.content,
     });
-    const algoOid =
-      encryptedData.encryptedContentInfo.contentEncryptionAlgorithm
-        .algorithmId;
-    if (algoOid !== OID_PBES2) {
-      throw unsupportedAlgorithmError("cert bag", algoOid);
+    const algoId = encryptedData.encryptedContentInfo.contentEncryptionAlgorithm;
+    const algoOid = algoId.algorithmId;
+    if (algoOid === OID_PBES2) {
+      const decrypted = await encryptedData.decrypt({ password: passwordBuf });
+      return pkijs.SafeContents.fromBER(decrypted);
     }
-    const decrypted = await encryptedData.decrypt({ password: passwordBuf });
-    return pkijs.SafeContents.fromBER(decrypted);
+    if (isSupportedLegacyPbe(algoOid)) {
+      // Legacy 3DES path — see pkcs12LegacyPbe.ts for context and the
+      // removal checklist. Restricted to the one OID aspnetcore writes
+      // on macOS; every other legacy PBE algorithm still falls through
+      // to the rejection below.
+      const params = parseLegacyPbeParams(algoId.algorithmParams);
+      const ciphertext = bufferFromAsn1OctetString(
+        encryptedData.encryptedContentInfo.encryptedContent
+      );
+      const decrypted = decryptLegacyPbe(
+        algoOid,
+        params,
+        ciphertext,
+        Buffer.from(passwordBuf).toString("utf-8")
+      );
+      return pkijs.SafeContents.fromBER(bufferToArrayBuffer(decrypted));
+    }
+    throw unsupportedAlgorithmError("cert bag", algoOid);
   }
 
   throw new Error(
@@ -841,18 +868,33 @@ async function decryptShroudedKeyBag(
   passwordBuf: ArrayBuffer
 ): Promise<DevKey> {
   const algoOid = bag.encryptionAlgorithm.algorithmId;
-  if (algoOid !== OID_PBES2) {
-    throw unsupportedAlgorithmError("private key", algoOid);
+  if (algoOid === OID_PBES2) {
+    await (
+      bag as unknown as {
+        parseInternalValues: (p: { password: ArrayBuffer }) => Promise<void>;
+      }
+    ).parseInternalValues({ password: passwordBuf });
+    const pki = bag.parsedValue;
+    if (!pki) throw new Error("PKCS#8 shrouded key bag has no key.");
+    const der = pki.toSchema().toBER(false);
+    return DevKey.fromPkcs8Der(Buffer.from(der));
   }
-  await (
-    bag as unknown as {
-      parseInternalValues: (p: { password: ArrayBuffer }) => Promise<void>;
-    }
-  ).parseInternalValues({ password: passwordBuf });
-  const pki = bag.parsedValue;
-  if (!pki) throw new Error("PKCS#8 shrouded key bag has no key.");
-  const der = pki.toSchema().toBER(false);
-  return DevKey.fromPkcs8Der(Buffer.from(der));
+  if (isSupportedLegacyPbe(algoOid)) {
+    // Legacy 3DES path — see pkcs12LegacyPbe.ts for context and the
+    // removal checklist.
+    const params = parseLegacyPbeParams(bag.encryptionAlgorithm.algorithmParams);
+    const ciphertext = bufferFromAsn1OctetString(bag.encryptedData);
+    const decrypted = decryptLegacyPbe(
+      algoOid,
+      params,
+      ciphertext,
+      Buffer.from(passwordBuf).toString("utf-8")
+    );
+    const pki = pkijs.PrivateKeyInfo.fromBER(bufferToArrayBuffer(decrypted));
+    const der = pki.toSchema().toBER(false);
+    return DevKey.fromPkcs8Der(Buffer.from(der));
+  }
+  throw unsupportedAlgorithmError("private key", algoOid);
 }
 
 function passwordToArrayBuffer(password: string): ArrayBuffer {
@@ -869,4 +911,24 @@ function bufferToArrayBuffer(buf: Buffer | Uint8Array): ArrayBuffer {
   const ab = new ArrayBuffer(buf.byteLength);
   new Uint8Array(ab).set(buf);
   return ab;
+}
+
+/**
+ * Pull the raw bytes out of an asn1js OctetString — handles both
+ * primitive (`valueBlock.valueHex`) and constructed (`getValue()`)
+ * encodings. Used by the legacy-PBE decrypt path to feed ciphertext
+ * into Node crypto without going through pkijs's internal decryptor.
+ */
+function bufferFromAsn1OctetString(node: unknown): Buffer {
+  const os = node as asn1js.OctetString;
+  // Constructed octet string: concatenated child segments.
+  const inner = os?.valueBlock?.value;
+  if (Array.isArray(inner) && inner.length > 0) {
+    const pieces = inner.map((child) =>
+      Buffer.from((child as asn1js.OctetString).valueBlock.valueHex)
+    );
+    return Buffer.concat(pieces);
+  }
+  // Primitive octet string: raw bytes in valueHex.
+  return Buffer.from(os.valueBlock.valueHex);
 }

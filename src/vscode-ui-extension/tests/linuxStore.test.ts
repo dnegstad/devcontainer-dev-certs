@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import type * as Shared from "@devcontainer-dev-certs/shared";
-import { initLogger } from "@devcontainer-dev-certs/shared";
+import type * as SharedPaths from "@devcontainer-dev-certs/shared/src/paths";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 import { buildPfx, parsePfx } from "../src/cert/pfx";
@@ -11,8 +11,13 @@ import { logMessages } from "./__mocks__/vscode";
 
 initLogger("test");
 
-// Mock runProcess so tests don't need an actual openssl binary.
-vi.mock("../src/platform/processUtil", () => ({
+// Mock runProcess so tests don't need an actual openssl binary. After the
+// platform-layer move into the shared package, the LinuxCertificateStore
+// imports `runProcess` from the shared internal path (`./processUtil`), so
+// the mock target has to be that same shared file — mocking the extension's
+// thin re-export shim won't intercept the import the implementation actually
+// uses.
+vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn().mockResolvedValue({
     exitCode: 0,
     stdout: "abcd1234\n",
@@ -24,17 +29,19 @@ vi.mock("../src/platform/processUtil", () => ({
 // Tests that exercise the NSS step explicitly construct a store with a
 // reporter; the default tests construct it without one, in which case the
 // step is skipped entirely and this mock is never invoked.
-vi.mock("../src/platform/nssTrust", () => ({
+vi.mock("@devcontainer-dev-certs/shared/src/platform/nssTrust", () => ({
   trustInNss: vi.fn(),
 }));
 
-// Override the shared paths to point at temp directories.
+// Override the shared paths to point at temp directories. The
+// LinuxCertificateStore imports these from the shared internal `paths`
+// module, so the mock has to target that same file.
 let testStoreDir: string;
 let testRootStoreDir: string;
 let testTrustDir: string;
 
-vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
-  const original = await importOriginal<typeof Shared>();
+vi.mock("@devcontainer-dev-certs/shared/src/paths", async (importOriginal) => {
+  const original = await importOriginal<typeof SharedPaths>();
   return {
     ...original,
     getDotNetStorePath: () => testStoreDir,
@@ -44,8 +51,8 @@ vi.mock("@devcontainer-dev-certs/shared", async (importOriginal) => {
 });
 
 import { LinuxCertificateStore } from "../src/platform/linuxStore";
-import { runProcess } from "../src/platform/processUtil";
-import { trustInNss } from "../src/platform/nssTrust";
+import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
+import { trustInNss } from "@devcontainer-dev-certs/shared/src/platform/nssTrust";
 
 const mockedRunProcess = vi.mocked(runProcess);
 const mockedTrustInNss = vi.mocked(trustInNss);
@@ -273,6 +280,36 @@ describe("LinuxCertificateStore", () => {
     it("returns false when PEM does not exist", async () => {
       const { cert, key, thumbprint } = await makeTestCert();
       await store.saveCertificate(cert, key, thumbprint);
+
+      const status = await store.checkStatus();
+      expect(status.isTrusted).toBe(false);
+    });
+
+    it("returns false when the .NET Root store PFX is missing though the PEM survives", async () => {
+      // Regression: `isTrusted` used to check only the OpenSSL PEM, so
+      // clearing ~/.dotnet/corefx/.../root/ (manual cleanup, partial
+      // removal) while the PEM survived left .NET-side trust broken
+      // forever — CertManager.trust's recheck and the container-push
+      // short-circuit both saw "trusted" and never re-ran the
+      // idempotent trust path to repair the Root store.
+      const { cert, key, thumbprint } = await makeTestCert();
+      await store.saveCertificate(cert, key, thumbprint);
+      await store.trustCertificate(cert);
+
+      fs.rmSync(path.join(testRootStoreDir, `${thumbprint}.pfx`));
+
+      const status = await store.checkStatus();
+      expect(status.isTrusted).toBe(false);
+    });
+
+    it("returns false when the PEM is missing though the Root store PFX survives", async () => {
+      const { cert, key, thumbprint } = await makeTestCert();
+      await store.saveCertificate(cert, key, thumbprint);
+      await store.trustCertificate(cert);
+
+      for (const entry of fs.readdirSync(testTrustDir)) {
+        fs.rmSync(path.join(testTrustDir, entry), { force: true });
+      }
 
       const status = await store.checkStatus();
       expect(status.isTrusted).toBe(false);

@@ -55,3 +55,4 @@ export function loadPemPair(
 
   return buildLoadedCert(cert, key);
 }
+

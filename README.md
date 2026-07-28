@@ -151,7 +151,7 @@ The two extensions communicate using VS Code's cross-host `executeCommand()` rou
 
 All configurable surfaces in one place. Four categories: the Dev Container feature options (set in `devcontainer.json`), the host VS Code settings (set on your local machine), the workspace VS Code settings (set inside the Dev Container — and inherited by SSH/WSL remotes), and the commands both extensions contribute. The prose sections that follow this reference cover the workflows these knobs participate in.
 
-**Two settings prefixes are in use.** `devcontainerDevCerts.*` (camelCase) is the newer convention for settings that describe cert *content* the extensions share across the host/container boundary; `devcontainer-dev-certs.*` (hyphenated) is the older convention for extension behavior knobs. Both stay supported; we don't rename them to avoid churning user settings.
+**One settings prefix.** Every setting lives under `devcontainerDevCerts.*`, so they all group together in the Settings UI. Three settings (`autoProvision`, `autoInject`, `warnOnStaleDevCerts`) historically used a hyphenated `devcontainer-dev-certs.*` prefix — those legacy names are deprecated but still honored whenever the new name is unset, so existing configuration keeps working without changes.
 
 **One name, two scopes.** `generateDotNetCert` exists both as a *feature option* (container-side: "pull the host's dev cert into this container") and as a *host VS Code setting* `devcontainerDevCerts.generateDotNetCert` (host-side: "generate and trust a managed dev cert on this machine at all"). They are separate knobs at different layers — turning off the host setting means no managed dev cert exists anywhere; turning off the feature option means this one container doesn't receive it. Check which table you're reading.
 
@@ -184,8 +184,9 @@ Set in your host VS Code's user or workspace settings. Provided by the **Dev Con
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `devcontainer-dev-certs.autoProvision` | `true` | Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to `false` to disable provisioning entirely (host-generation AND acceptance of container-pushed certs). |
+| `devcontainerDevCerts.autoProvision` | `true` | Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to `false` to disable provisioning entirely (host-generation AND acceptance of container-pushed certs). |
 | `devcontainerDevCerts.generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert and trust it in the host OS store. When `false`, user-managed certificates (if any) are still synced, but no managed dev cert lives on the host — this also implicitly disables acceptance of container-pushed certs (a container push would land one in the same trust store the user opted out of). |
+| `devcontainerDevCerts.hostCertGenerator` | `"auto"` | Which backend generates the host dev cert: `native` (the extension's bundled cert primitives — no SDK required), `dotnet` (shell out to `dotnet dev-certs https`; requires the dotnet SDK on PATH), or `auto` (prefer `dotnet` on macOS when the CLI is available — the Apple-signed binary gives a smoother keychain-trust prompt — and `native` everywhere else). Only affects fresh provisioning of the auto-generated dev cert; an existing cert in the OS store is reused regardless of this setting, and user-managed certificates are unaffected. |
 | `devcontainerDevCerts.userCertificates` | `[]` | Host-managed certificates to sync from the host into Dev Containers. See "[User-managed certificates](#user-managed-certificates)" for the per-entry field table. User-managed certs are never added to the host OS trust store. |
 | `devcontainerDevCerts.installUserCertsToDotNetStore` | `false` | When `true`, also copies each key-bearing entry from `userCertificates` into the container's .NET X509Store. CA-only entries (no private key) are skipped — there's no PFX to write. **Security note:** the on-disk PFX there is passwordless (Linux's `StoreName.My` enumeration can't accept per-file passwords), so opting in strips your user cert's password on the in-container copy. Per-entry exemption via `excludeFromDotNetStore: true`. The auto-generated dotnet-dev cert is always installed to the store regardless. |
 | `devcontainerDevCerts.defaultKestrelCertificate` | `""` | Name of a `userCertificates` entry to use as the default Kestrel certificate inside Dev Containers. When set, the remote extension writes that cert's PFX to `~/.aspnet/dev-certs/https/kestrel-default.pfx` and exports `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` to processes launched from VS Code (terminals, debug, tasks). Leave empty to opt out — Kestrel will still discover the auto-generated dev cert via X509Store. See "[Default Kestrel certificate (opt-in)](#default-kestrel-certificate-opt-in)" for scope and caveats. |
@@ -197,8 +198,8 @@ Set in your workspace settings or user settings inside the Dev Container / remot
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `devcontainer-dev-certs.autoInject` | `true` | Automatically inject and configure the dev cert when a remote session starts. Set to `false` to require manual invocation via the "Dev Certs: Inject Certificate into Remote" command. |
-| `devcontainer-dev-certs.warnOnStaleDevCerts` | `true` | Show a warning when multiple dev certificates are detected in this Dev Container's .NET certificate stores after install — alongside the extension-managed certificate. Pairs with the "Dev Certs: Clean Up Other Dev Certificates in Dev Container" command. |
+| `devcontainerDevCerts.autoInject` | `true` | Automatically inject and configure the dev cert when a remote session starts. Set to `false` to require manual invocation via the "Dev Certs: Inject Certificate into Remote" command. |
+| `devcontainerDevCerts.warnOnStaleDevCerts` | `true` | Show a warning when multiple dev certificates are detected in this Dev Container's .NET certificate stores after install — alongside the extension-managed certificate. Pairs with the "Dev Certs: Clean Up Other Dev Certificates in Dev Container" command. |
 
 ### Commands
 
@@ -366,7 +367,7 @@ To enable, set the feature option on the container:
 }
 ```
 
-The host side is gated by the same VS Code settings that gate the normal host-generation flow: `devcontainerDevCerts.generateDotNetCert` (default `true`) and `devcontainer-dev-certs.autoProvision` (default `true`). If you've disabled either — because you don't want any extension-managed dev cert on your host — a container's push is rejected with the same intent. No separate "accept container certs" toggle: the user-level question "is this host willing to trust a managed ASP.NET dev cert?" has one answer, regardless of where the cert came from.
+The host side is gated by the same VS Code settings that gate the normal host-generation flow: `devcontainerDevCerts.generateDotNetCert` (default `true`) and `devcontainerDevCerts.autoProvision` (default `true`). If you've disabled either — because you don't want any extension-managed dev cert on your host — a container's push is rejected with the same intent. No separate "accept container certs" toggle: the user-level question "is this host willing to trust a managed ASP.NET dev cert?" has one answer, regardless of where the cert came from.
 
 With `syncContainerCert` enabled:
 
@@ -406,8 +407,8 @@ Failure notifications from the remote extension usually name which side to check
 Work through these in order:
 
 1. **Is the host extension installed?** The remote extension shows an **Install Host Extension** prompt when it can't reach the host side. If you dismissed it, install `dnegstad.devcontainer-dev-certs-host` on your local VS Code and reload.
-2. **Is auto-injection on?** If `devcontainer-dev-certs.autoInject` is `false`, run **Dev Certs: Inject Certificate into Remote** from the Command Palette.
-3. **Is provisioning on?** If `devcontainer-dev-certs.autoProvision` or `devcontainerDevCerts.generateDotNetCert` is `false` on the host, no managed dev cert is generated or served.
+2. **Is auto-injection on?** If `devcontainerDevCerts.autoInject` is `false`, run **Dev Certs: Inject Certificate into Remote** from the Command Palette.
+3. **Is provisioning on?** If `devcontainerDevCerts.autoProvision` or `devcontainerDevCerts.generateDotNetCert` is `false` on the host, no managed dev cert is generated or served.
 4. **Did the feature actually install?** Run `echo $SSL_CERT_DIR` in a container terminal. The first entry should be the trust directory under your home directory, expanded — e.g. `/home/vscode/.aspnet/dev-certs/trust`. If the variable is empty, the feature didn't run; rebuild the container.
 
 Running **Dev Certs: Inject Certificate into Remote** is the standard way to retry any of this without rebuilding.
@@ -498,23 +499,26 @@ src/
     src/
       cert/                        Cert primitives: classify, load, PFX build/parse,
                                    OID + SAN + key constants, validation rules
-      paths.ts                     .NET store and OpenSSL trust directory paths
-      certName.ts                  userCertificates[].name pattern and guard
-      logger.ts                    Output channel logging
-
-  vscode-ui-extension/             VS Code host extension (extensionKind: ui)
-    src/
-      cert/                        Host-side certificate work
         generator.ts               X.509 certificate generation (matches ASP.NET CertificateManager)
         exporter.ts                PFX and PEM export
         manager.ts                 Orchestrates generate/trust/export/check
-                                   (loader/pfx/properties/types here are re-export
-                                    shims over the canonical copies in shared/)
+        pkcs12LegacyPbe.ts         Narrow legacy 3DES PBE decoder for aspnetcore's
+                                   macOS disk cache (see its removal checklist)
       platform/                    OS-specific cert store implementations
         windowsStore.ts            Windows cert store via PowerShell
         macStore.ts                macOS keychain via security CLI
         linuxStore.ts              Linux X509Store + OpenSSL trust directory
         nssTrust.ts                Firefox/Chromium NSS trust via certutil
+        processUtil.ts             PATH-safe process spawning (Windows cwd-hijack defense)
+      backends/                    hostCertGenerator backends: native (bundled
+                                   primitives) and dotnet (dev-certs pass-through)
+      paths.ts                     .NET store and OpenSSL trust directory paths
+      certName.ts                  userCertificates[].name pattern and guard
+      logger.ts                    Pluggable logging (loggerVscode.ts binds the output channel)
+
+  vscode-ui-extension/             VS Code host extension (extensionKind: ui)
+    src/
+      cert/, platform/             Re-export shims over the canonical copies in shared/
       certProvider.ts              Serves cert material to the workspace extension
       containerCertAccept.ts       Validates and trusts container-pushed certs
 
@@ -538,6 +542,7 @@ test/
   sample-project/                  Test project template (hydrated into .out/ for testing)
     hydrate-sample-project.mjs     Assembles a runnable test project from the template + feature
   dotnet-pfx-roundtrip/            .NET PFX-load harness driven by the UI extension's tests
+  fixtures/                        Binary test fixtures (e.g. a legacy 3DES PKCS#12)
   install-sh.test.mjs              Behavioral test that actually runs install.sh
   validate-feature.mjs             Consistency checks across feature JSON, install.sh, package.json
   generate-test-cert.mjs           Test certificate fixture generator

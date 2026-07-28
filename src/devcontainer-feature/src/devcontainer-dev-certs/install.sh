@@ -17,6 +17,12 @@ GENERATE_DOTNET_CERT="${GENERATEDOTNETCERT:-true}"
 SYNC_USER_CERTIFICATES="${SYNCUSERCERTIFICATES:-true}"
 SYNC_CONTAINER_CERT="${SYNCCONTAINERCERT:-false}"
 EXTRA_CERT_DESTINATIONS="${EXTRACERTDESTINATIONS:-}"
+INSTALL_FALLBACK_TOOLS="${INSTALLFALLBACKTOOLS:-false}"
+
+# Resolve our own source directory so the fallback script copy works
+# regardless of where the devcontainer CLI mounts us.
+FEATURE_SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FALLBACK_BIN_PATH="/usr/local/bin/devcontainer-dev-certs-install"
 
 REMOTE_USER="${_REMOTE_USER:-vscode}"
 REMOTE_USER_HOME="${_REMOTE_USER_HOME:-/home/${REMOTE_USER}}"
@@ -39,6 +45,12 @@ if [ -n "${DEVCERTS_SYSROOT}" ]; then
 fi
 ETC_ENVIRONMENT="${DEVCERTS_SYSROOT}/etc/environment"
 PROFILE_DIR="${DEVCERTS_SYSROOT}/etc/profile.d"
+# Physical destination for the fallback installer. FALLBACK_BIN_PATH stays the
+# unprefixed runtime path — it's what gets exported to /etc/environment and
+# profile.d as DEVCONTAINER_DEV_CERTS_INSTALL_BIN — while the actual `install`
+# write goes under the sysroot so the hermetic test never touches the host's
+# /usr/local/bin.
+FALLBACK_BIN_DEST="${DEVCERTS_SYSROOT}${FALLBACK_BIN_PATH}"
 
 echo "Setting up dev certificate infrastructure..."
 
@@ -54,7 +66,7 @@ fi
 # Validate that no feature option contains a newline. We append these to
 # /etc/environment, and an embedded newline would inject an extra env line
 # (potentially with a name the operator didn't intend).
-for varname in SSL_CERT_DIRS PRUNE_MISSING_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS; do
+for varname in SSL_CERT_DIRS PRUNE_MISSING_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS INSTALL_FALLBACK_TOOLS; do
     case "${!varname}" in
         *$'\n'*)
             echo "Error: feature option ${varname} must not contain newlines." >&2
@@ -90,6 +102,80 @@ if [ "${PRUNE_MISSING_CERT_DIRS}" = "true" ]; then
         fi
     done
     SSL_CERT_DIRS="${PRUNED_SSL_CERT_DIRS}"
+fi
+
+# Workaround for containers/buildah#6747: a `RUN --mount=type=bind,target=X`
+# committed by buildah/podman can reset the mode and ownership of every
+# parent directory of the mount target. The devcontainer CLI generates such a
+# RUN for every feature with target `/tmp/build-features-src/<feature>_0`,
+# which leaves `/tmp` at mode 0755 root:root instead of 1777 in the committed
+# layer — even when nothing in the RUN touched `/tmp` itself.
+#
+# The next feature that runs `apt-get update` then fails with:
+#   Couldn't create temporary file /tmp/apt.conf.XXX for passing config to apt-key
+# because `_apt` (uid 42) can no longer write to `/tmp`. azure-functions-core-tools
+# is the canonical trigger; see issue #47.
+#
+# A bare `chmod 1777 /tmp` doesn't survive the layer commit: when the mode is
+# already 1777 in the lower overlay layer the chmod is a no-op and buildah
+# never serializes a corrected `/tmp` entry into the diff. The reliable
+# workaround is to force overlayfs to copy `/tmp` up to the upper layer by
+# creating and removing a marker file, then re-asserting the mode. No-op on
+# Docker, where the commit preserves `/tmp` correctly.
+#
+# This MUST run before any package-manager invocation below: when a PRIOR
+# feature's layer already broke `/tmp`, our own `apt-get update` in the
+# installFallbackTools block would otherwise hit the same failure (under
+# `set -e`, fatally) before the end-of-script placement this repair used
+# to have could ever execute. The copy-up survives the rest of the RUN, so
+# running it early both unbreaks our own installs and still corrects the
+# committed layer for subsequent features.
+if __tmpfix_marker="$(mktemp /tmp/.devcontainer-dev-certs-tmpfix.XXXXXX 2>/dev/null)"; then
+    rm -f -- "${__tmpfix_marker}"
+    chmod 1777 /tmp 2>/dev/null || true
+fi
+
+# Install fallback-script prerequisites if requested. The script requires
+# openssl unconditionally and jq for the --bundle-json form; install only
+# what's missing so this is a no-op on images that already provide them.
+if [ "${INSTALL_FALLBACK_TOOLS}" = "true" ]; then
+    declare -a FALLBACK_PKGS=()
+    command -v openssl &>/dev/null || FALLBACK_PKGS+=("openssl")
+    command -v jq &>/dev/null || FALLBACK_PKGS+=("jq")
+    if [ "${#FALLBACK_PKGS[@]}" -gt 0 ]; then
+        if command -v apt-get &>/dev/null; then
+            apt-get update -y
+            apt-get install -y --no-install-recommends "${FALLBACK_PKGS[@]}"
+            rm -rf /var/lib/apt/lists/*
+        elif command -v apk &>/dev/null; then
+            apk add --no-cache "${FALLBACK_PKGS[@]}"
+        elif command -v dnf &>/dev/null; then
+            dnf install -y "${FALLBACK_PKGS[@]}"
+            dnf clean all
+        elif command -v microdnf &>/dev/null; then
+            microdnf install -y "${FALLBACK_PKGS[@]}"
+            microdnf clean all
+        elif command -v yum &>/dev/null; then
+            yum install -y "${FALLBACK_PKGS[@]}"
+            yum clean all
+        elif command -v zypper &>/dev/null; then
+            zypper --non-interactive install "${FALLBACK_PKGS[@]}"
+            zypper clean
+        else
+            echo "Warning: installFallbackTools=true but no supported package manager found; skipping." >&2
+        fi
+    fi
+fi
+
+# Deliver the fallback installer to a stable PATH location so non-VS Code
+# consumers (JetBrains, Vim, raw CLI) have something to invoke. The script
+# is small and inert at rest, so we always copy regardless of options —
+# only its runtime prerequisites are gated by installFallbackTools above.
+if [ -f "${FEATURE_SRC_DIR}/scripts/setup-cert.sh" ]; then
+    mkdir -p "$(dirname "${FALLBACK_BIN_DEST}")"
+    install -m 0755 "${FEATURE_SRC_DIR}/scripts/setup-cert.sh" "${FALLBACK_BIN_DEST}"
+else
+    echo "Warning: scripts/setup-cert.sh not found under ${FEATURE_SRC_DIR}; fallback installer will not be available." >&2
 fi
 
 # Create .NET X509Store CurrentUser\My directory
@@ -279,6 +365,19 @@ append_profile "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
 append_profile "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
 append_profile "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
 
+# Path hints for non-VS Code consumers. These let a postStartCommand or an
+# editor "external tool" config invoke the installer and locate the trust
+# stores without hardcoding the canonical paths. We export the resolved
+# per-user paths into /etc/environment (pam_env can't expand $HOME) and the
+# $HOME-expanded form into profile.d so each user gets their own at login.
+append_profile "DEVCONTAINER_DEV_CERTS_INSTALL_BIN" "${FALLBACK_BIN_PATH}"
+# Profile.d entries that need per-user $HOME expansion at login time.
+{
+    echo "export DEVCONTAINER_DEV_CERTS_DOTNET_STORE_DIR=\"\$HOME/.dotnet/corefx/cryptography/x509stores/my\""
+    echo "export DEVCONTAINER_DEV_CERTS_DOTNET_ROOT_STORE_DIR=\"\$HOME/.dotnet/corefx/cryptography/x509stores/root\""
+    echo "export DEVCONTAINER_DEV_CERTS_TRUST_DIR=\"\$HOME/.aspnet/dev-certs/trust\""
+} >> "${PROFILE_SCRIPT}"
+
 # Suppress dotnet's first-run HTTPS dev cert provisioning ONLY when the
 # host is the source.
 #
@@ -331,6 +430,10 @@ append_env "DEVCONTAINER_DEV_CERTS_GENERATE_DOTNET" "${GENERATE_DOTNET_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_USER" "${SYNC_USER_CERTIFICATES}"
 append_env "DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER" "${SYNC_CONTAINER_CERT}"
 append_env "DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS" "${EXTRA_CERT_DESTINATIONS}"
+append_env "DEVCONTAINER_DEV_CERTS_INSTALL_BIN" "${FALLBACK_BIN_PATH}"
+append_env "DEVCONTAINER_DEV_CERTS_DOTNET_STORE_DIR" "${DOTNET_STORE_DIR}"
+append_env "DEVCONTAINER_DEV_CERTS_DOTNET_ROOT_STORE_DIR" "${DOTNET_ROOT_STORE_DIR}"
+append_env "DEVCONTAINER_DEV_CERTS_TRUST_DIR" "${TRUST_DIR}"
 # Mirror the dotnet-autogen suppression into /etc/environment so PAM-based
 # sessions (sshd, console) see the same gating logic as login shells. Same
 # conditional as the profile.d write above — see the comment there.
@@ -393,37 +496,16 @@ if id "${REMOTE_USER}" &>/dev/null; then
     done
 fi
 
-# Workaround for containers/buildah#6747: a `RUN --mount=type=bind,target=X`
-# committed by buildah/podman can reset the mode and ownership of every
-# parent directory of the mount target. The devcontainer CLI generates such a
-# RUN for every feature with target `/tmp/build-features-src/<feature>_0`,
-# which leaves `/tmp` at mode 0755 root:root instead of 1777 in the committed
-# layer — even when nothing in the RUN touched `/tmp` itself.
-#
-# The next feature that runs `apt-get update` then fails with:
-#   Couldn't create temporary file /tmp/apt.conf.XXX for passing config to apt-key
-# because `_apt` (uid 42) can no longer write to `/tmp`. azure-functions-core-tools
-# is the canonical trigger; see issue #47.
-#
-# A bare `chmod 1777 /tmp` doesn't survive the layer commit: when the mode is
-# already 1777 in the lower overlay layer the chmod is a no-op and buildah
-# never serializes a corrected `/tmp` entry into the diff. The reliable
-# workaround is to force overlayfs to copy `/tmp` up to the upper layer by
-# creating and removing a marker file, then re-asserting the mode. No-op on
-# Docker, where the commit preserves `/tmp` correctly.
-if __tmpfix_marker="$(mktemp /tmp/.devcontainer-dev-certs-tmpfix.XXXXXX 2>/dev/null)"; then
-    rm -f -- "${__tmpfix_marker}"
-    chmod 1777 /tmp 2>/dev/null || true
-fi
-
 echo "Dev certificate infrastructure ready."
 echo "  .NET cert store:      ${DOTNET_STORE_DIR}"
 echo "  .NET root store:      ${DOTNET_ROOT_STORE_DIR}"
 echo "  OpenSSL trust:        ${TRUST_DIR}"
 echo "  SSL_CERT_DIR:         ${SSL_CERT_DIR_RESOLVED}"
+echo "  fallback installer:   ${FALLBACK_BIN_PATH}"
 echo "  generateDotNetCert:   ${GENERATE_DOTNET_CERT}"
 echo "  syncUserCertificates: ${SYNC_USER_CERTIFICATES}"
 echo "  syncContainerCert:    ${SYNC_CONTAINER_CERT}"
+echo "  installFallbackTools: ${INSTALL_FALLBACK_TOOLS}"
 if [ "${SUPPRESS_DOTNET_AUTOGEN}" = "true" ]; then
     echo "  DOTNET_GENERATE_ASPNET_CERTIFICATE: false (host generates the dev cert — suppressing dotnet's racing first-run auto-gen)"
 else

@@ -283,6 +283,38 @@ console.log("install.sh: SSL_CERT_DIR management\n");
   }
 }
 
+// --- Fallback installer honors the sysroot ------------------------------------
+//
+// The physical `install` destination must be prefixed with DEVCERTS_SYSROOT
+// like every other system path — otherwise this very test suite mutates (or
+// fails on) the host's real /usr/local/bin. The exported runtime path in
+// /etc/environment stays unprefixed: inside a real container the sysroot is
+// empty and the two are the same path.
+{
+  console.log("\nFallback installer delivery under sysroot:");
+  const r = runInstall({ env: { SSLCERTDIRS: DEFAULT } });
+  try {
+    const delivered = path.join(
+      r.sysroot,
+      "usr/local/bin/devcontainer-dev-certs-install"
+    );
+    check(
+      "installer is delivered under the sysroot",
+      existsSync(delivered),
+      `expected ${delivered} to exist`
+    );
+    check(
+      "exported INSTALL_BIN path stays unprefixed",
+      (r.environment || "").includes(
+        'DEVCONTAINER_DEV_CERTS_INSTALL_BIN="/usr/local/bin/devcontainer-dev-certs-install"'
+      ),
+      `expected the runtime path in /etc/environment to stay /usr/local/bin/...; got:\n${r.environment}`
+    );
+  } finally {
+    r.cleanup();
+  }
+}
+
 console.log("");
 if (failures > 0) {
   console.error(`install.sh tests FAILED: ${failures} check(s) failed.`);

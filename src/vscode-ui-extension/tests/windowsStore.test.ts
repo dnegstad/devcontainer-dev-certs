@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { initLogger } from "@devcontainer-dev-certs/shared";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { logMessages } from "./__mocks__/vscode";
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
@@ -10,7 +10,11 @@ import { buildPfx } from "../src/cert/pfx";
 import { type DevCert, type DevKey } from "../src/cert/types";
 
 
-vi.mock("../src/platform/processUtil", () => ({
+// Mock runProcess at the shared internal path — WindowsCertificateStore
+// lives in `@devcontainer-dev-certs/shared/src/platform/windowsStore` after
+// the platform-layer move and imports `runProcess` from the sibling
+// `./processUtil`, so the mock must target that file.
+vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn(),
 }));
 
@@ -19,7 +23,7 @@ import {
   type PsCandidate,
   type PsSkipped,
 } from "../src/platform/windowsStore";
-import { runProcess } from "../src/platform/processUtil";
+import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
 

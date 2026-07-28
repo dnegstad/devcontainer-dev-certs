@@ -55,7 +55,7 @@ jobs:
     uses: ./.github/workflows/build-extensions.yml
     with:
       production: true
-      upload-vsix: true
+      upload-artifacts: true
 
   publish-feature:
     name: Publish feature to GHCR

@@ -7,8 +7,8 @@ on:
         description: Use production build (minified, no sourcemaps)
         type: boolean
         default: false
-      upload-vsix:
-        description: Package and upload VSIX artifacts
+      upload-artifacts:
+        description: Package and upload release artifacts (VSIXes) for downstream publish jobs.
         type: boolean
         default: false
 
@@ -70,7 +70,7 @@ jobs:
         run: npm run package -w src/vscode-workspace-extension
 
       - name: Upload VSIX artifacts
-        if: inputs.upload-vsix
+        if: inputs.upload-artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vsix
@@ -106,6 +106,56 @@ jobs:
 
       - name: Validate PFX with .NET
         run: npm test -w src/vscode-ui-extension -- tests/dotnetPfx.integration.test.ts
+
+  macos-dotnet-dev-certs-cache:
+    name: macOS dotnet dev-certs disk-cache compatibility
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build UI Extension
+        run: npm run ${{ inputs.production && 'build:prod' || 'build' }} -w src/vscode-ui-extension
+
+      - name: Set up .NET 10 SDK
+        # Test invokes `dotnet dev-certs https` to produce the actual
+        # on-disk cache file aspnetcore's MacOSCertificateManager
+        # writes. We need a real SDK on PATH; the exact major version
+        # is logged so we can correlate the result with SDK behavior
+        # if aspnetcore changes its export defaults.
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Unlock login keychain for dotnet dev-certs
+        # `dotnet dev-certs https` saves the generated cert into
+        # CurrentUser\My, which on macOS is the login keychain. GitHub
+        # Actions macos runners ship with the login keychain locked
+        # by default — without an unlock, the save call fails with
+        # "There was an error saving the HTTPS developer certificate
+        # to the current user personal certificate store." and the
+        # disk cache we're trying to test never gets written.
+        #
+        # The empty password is the documented GH Actions convention
+        # for the runner user's login keychain.
+        run: |
+          security unlock-keychain -p '' "$HOME/Library/Keychains/login.keychain-db"
+          security set-keychain-settings "$HOME/Library/Keychains/login.keychain-db"
+
+      - name: Validate dotnet dev-certs disk cache is loadable
+        # If this fails, the dotnet backend on macOS cannot discover
+        # the cert dotnet just created — platform-store discovery
+        # depends on `parsePfx` accepting whatever
+        # `certificate.Export(X509ContentType.Pfx)` writes on macOS.
+        # The same test pins the on-disk PBE algorithm OID so we get
+        # a loud signal the day aspnetcore switches to PBES2 and the
+        # legacy 3DES handler in `pkcs12LegacyPbe.ts` can be removed.
+        run: npm test -w src/vscode-ui-extension -- tests/dotnetMacosCache.integration.test.ts
 
   feature:
     name: Validate Devcontainer Feature

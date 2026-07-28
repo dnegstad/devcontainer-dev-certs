@@ -7,14 +7,20 @@ import { exportLoadedCert } from "./cert/exporter";
 import { loadPemPair, loadPfx } from "./cert/loader";
 import type { LoadedCert } from "./cert/loader";
 import { buildPfx } from "./cert/pfx";
-import { assertValidCertName, log } from "@devcontainer-dev-certs/shared";
+import {
+  assertValidCertName,
+  log,
+  selectBackend,
+} from "@devcontainer-dev-certs/shared";
 import type {
+  BackendMode,
   CertBundle,
   CertBundleV3,
   CertMaterial,
   CertMaterialV2,
   CertMaterialV3,
   DefaultKestrelCertSelection,
+  LinuxNssTrustReporter,
 } from "@devcontainer-dev-certs/shared";
 import { DOTNET_DEV_CERT_NAME } from "@devcontainer-dev-certs/shared";
 
@@ -49,7 +55,21 @@ export class CertProvider {
   private cachedUser = new Map<string, CachedCert>();
   private warnedExpiredCerts = new Set<string>();
 
-  constructor(private readonly certManager: CertManager) {}
+  /**
+   * @param certManager Drives the native provisioning path.
+   * @param linuxNssTrustReporter Forwarded to the dotnet backend's
+   *   `generate()` so the dotnet path on Linux supplements
+   *   `dotnet dev-certs --trust` (which only writes the OpenSSL trust
+   *   dir + .NET root) with our NSS browser-trust step. Without this
+   *   wiring, the host extension's toast guidance for NSS failures
+   *   never fires under `hostCertGenerator: "dotnet"`. The native /
+   *   auto-resolved-to-native paths get the reporter via `certManager`'s
+   *   own wiring.
+   */
+  constructor(
+    private readonly certManager: CertManager,
+    private readonly linuxNssTrustReporter?: LinuxNssTrustReporter
+  ) {}
 
   /**
    * Legacy single-cert entry point. Returns the dotnet-dev cert material in
@@ -183,6 +203,60 @@ export class CertProvider {
     return certs;
   }
 
+  /**
+   * Provision the host dev cert via the backend the user has selected
+   * (`devcontainerDevCerts.hostCertGenerator`). Default `auto` resolves
+   * to the dotnet backend on macOS (when the dotnet CLI is on PATH) and
+   * to native everywhere else — both end up writing the cert into the
+   * same OS platform store that `certManager` reads from, so the
+   * downstream `exportCert` path works regardless of which backend
+   * actually performed the provisioning.
+   */
+  private async provisionViaConfiguredBackend(): Promise<void> {
+    const setting = vscode.workspace
+      .getConfiguration("devcontainerDevCerts")
+      .get<BackendMode>("hostCertGenerator", "auto");
+
+    const backend = await selectBackend(setting);
+
+    // Native — whether the user explicitly picked it or `auto` resolved
+    // to it (non-macOS, or macOS without dotnet) — defers to the
+    // pre-configured CertManager on `this`. NativeBackend.generate would
+    // produce equivalent OS-store state, but its bare manager misses the
+    // extension-only `localize` wiring (vscode.l10n.t). Until that's
+    // also threadable through GenerateOptions, this is the one knob
+    // worth keeping the bypass for.
+    if (backend.kind === "native") {
+      await this.certManager.trust();
+      return;
+    }
+
+    // dotnet backend: the cert + trust side effects are what we care
+    // about; the on-disk PFX/PEM in the tmp dir is a byproduct of the
+    // backend's contract that we discard. The platform store ends up
+    // populated identically to the native path, so the subsequent
+    // `exportCert` calls work without further special-casing.
+    //
+    // On Linux we forward `linuxNssTrustReporter` so the dotnet backend
+    // supplements `dotnet dev-certs --trust` (which doesn't touch NSS
+    // browser DBs) with our own `trustInNss` step — wired through the
+    // same reporter the native path uses so the manual-guidance toast
+    // fires uniformly regardless of which backend the user picked.
+    log(`Provisioning host dev cert via '${backend.kind}' backend.`);
+    const tmpProvisioningDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "devcerts-provision-")
+    );
+    try {
+      await backend.generate({
+        outDir: tmpProvisioningDir,
+        noTrust: false,
+        linuxNssTrustReporter: this.linuxNssTrustReporter,
+      });
+    } finally {
+      fs.rmSync(tmpProvisioningDir, { recursive: true, force: true });
+    }
+  }
+
   private async ensureDotNetDevCert(
     autoProvision: boolean
   ): Promise<CachedCert | null> {
@@ -215,7 +289,28 @@ export class CertProvider {
         return null;
       }
       log("Ensuring certificate is generated and trusted...");
-      await this.certManager.trust();
+      await this.provisionViaConfiguredBackend();
+    }
+
+    // Read the store's post-provisioning state BEFORE exporting. If the
+    // platform store's cert no longer matches the manager's in-memory
+    // cert — the dotnet backend provisions out-of-process, and external
+    // tools can remove/replace the cert between requests — the manager
+    // must reload from the store. `exportCert` short-circuits on the
+    // loaded cert, so skipping this would emit the OLD key/cert bytes
+    // under the NEW thumbprint below: a bundle whose identity doesn't
+    // match its material, leaving the container serving an untrusted
+    // cert.
+    const updatedStatus = await this.certManager.check();
+    if (
+      this.certManager.loadedThumbprint !== null &&
+      this.certManager.loadedThumbprint !== updatedStatus.thumbprint
+    ) {
+      log(
+        `Platform store cert (${updatedStatus.thumbprint ?? "none"}) differs ` +
+          `from in-memory cert (${this.certManager.loadedThumbprint}); reloading.`
+      );
+      this.certManager.invalidateLoadedCert();
     }
 
     // mkdtempSync gives us a unique 0o700 dir in tmpdir. Combined with
@@ -232,8 +327,6 @@ export class CertProvider {
       const pemCertPath = path.join(tmpDir, "aspnetcore-dev.pem");
       const pemKeyPath = path.join(tmpDir, "aspnetcore-dev.key");
       const rootPfxPath = path.join(tmpDir, "aspnetcore-dev-root.pfx");
-
-      const updatedStatus = await this.certManager.check();
 
       // The dotnet-dev cert is intrinsically passwordless and its canonical
       // home is the .NET store, so `pfxBase64` and `dotNetStorePfxBase64`

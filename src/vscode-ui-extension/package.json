@@ -3,7 +3,7 @@
   "displayName": "Dev Container Dev Certificates (Host)",
   "description": "Generates and trusts ASP.NET and Aspire compatible HTTPS development certificates on the host machine for use in Dev Containers and remote environments.",
   "icon": "images/dn_ui_extension_icon_256.png",
-  "version": "1.3.3-pre",
+  "version": "1.4.0-pre",
   "publisher": "dnegstad",
   "license": "MIT",
   "repository": {
@@ -46,15 +46,35 @@
     "configuration": {
       "title": "Dev Certificates (Host)",
       "properties": {
-        "devcontainer-dev-certs.autoProvision": {
+        "devcontainerDevCerts.autoProvision": {
           "type": "boolean",
           "default": true,
           "description": "Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to false to disable provisioning entirely."
+        },
+        "devcontainer-dev-certs.autoProvision": {
+          "type": "boolean",
+          "default": true,
+          "markdownDeprecationMessage": "Renamed to `devcontainerDevCerts.autoProvision` so every setting shares one prefix. This legacy name is still honored when the new one is unset."
         },
         "devcontainerDevCerts.generateDotNetCert": {
           "type": "boolean",
           "default": true,
           "description": "Auto-generate the ASP.NET Core / Aspire compatible HTTPS development certificate and trust it in the host OS store. When false, user-managed certificates (if any) are still synced but no dev cert is generated."
+        },
+        "devcontainerDevCerts.hostCertGenerator": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "native",
+            "dotnet"
+          ],
+          "default": "auto",
+          "enumDescriptions": [
+            "On macOS, prefer the 'dotnet' backend when the dotnet CLI is on PATH (better keychain-trust UX via a signed binary); fall back to 'native' everywhere else.",
+            "Always use the bundled cert primitives. No dotnet SDK required. Same code path the extension has historically used; the OS trust prompt is fired by the extension's own binary.",
+            "Always shell out to `dotnet dev-certs https`. Requires the dotnet SDK to be installed and on PATH. Generates the cert and runs the OS trust step via the dotnet CLI."
+          ],
+          "description": "Which backend to use when this extension generates the host dev certificate. Only affects the auto-generated ASP.NET Core dev cert (gated by devcontainerDevCerts.generateDotNetCert); user-managed certificates are unaffected. Existing certs found in the OS store are not regenerated regardless of this setting — switching backends only affects fresh provisioning."
         },
         "devcontainerDevCerts.userCertificates": {
           "type": "array",

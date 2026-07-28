@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type * as PlatformTypes from "../src/platform/types";
+import type * as PlatformTypes from "@devcontainer-dev-certs/shared/src/platform/types";
 import {
   type PlatformCertificateStore,
   type CertificateStatus,
@@ -7,8 +7,11 @@ import {
 import { generateCertificate } from "../src/cert/generator";
 import { VALIDITY_DAYS } from "../src/cert/properties";
 
-// Mock createPlatformStore so the CertManager uses our fake store.
-vi.mock("../src/platform/types", async (importOriginal) => {
+// Mock createPlatformStore so the CertManager uses our fake store. The
+// CertManager now lives in `@devcontainer-dev-certs/shared` and imports
+// `createPlatformStore` from the sibling `../platform/types`; the mock has
+// to target that exact module path so the shared CertManager sees it too.
+vi.mock("@devcontainer-dev-certs/shared/src/platform/types", async (importOriginal) => {
   const original = await importOriginal<typeof PlatformTypes>();
   return {
     ...original,
@@ -17,7 +20,7 @@ vi.mock("../src/platform/types", async (importOriginal) => {
 });
 
 import { CertManager } from "../src/cert/manager";
-import { createPlatformStore } from "../src/platform/types";
+import { createPlatformStore } from "@devcontainer-dev-certs/shared/src/platform/types";
 
 const mockedCreateStore = vi.mocked(createPlatformStore);
 
@@ -147,6 +150,48 @@ describe("CertManager", () => {
 
       expect(store.saveCertificate).not.toHaveBeenCalled();
       expect(store.trustCertificate).toHaveBeenCalledOnce();
+    });
+
+    it("reloads from the store when the cached cert no longer matches (external replacement)", async () => {
+      // Regression: with cert A cached in memory and the store entry
+      // externally replaced by cert B, trust() used to keep A (the
+      // reload only ran when NOTHING was cached) and re-trust the
+      // orphaned A while B stayed untrusted — a later export would
+      // then serve untrusted B.
+      const certA = await makeTestCert();
+      const certB = await makeTestCert();
+      const notTrusted = (thumbprint: string) => ({
+        exists: true,
+        isTrusted: false,
+        thumbprint,
+        notBefore: new Date().toISOString(),
+        notAfter: new Date().toISOString(),
+        version: 6,
+      });
+      const checkStatus = vi
+        .fn()
+        .mockResolvedValueOnce(notTrusted(certA.thumbprint)) // trust #1: status
+        .mockResolvedValueOnce(notTrusted(certA.thumbprint)) // trust #1: recheck
+        .mockResolvedValueOnce(notTrusted(certB.thumbprint)) // trust #2: store replaced
+        .mockResolvedValueOnce(notTrusted(certB.thumbprint)); // trust #2: recheck
+      const findExistingDevCert = vi
+        .fn()
+        .mockResolvedValueOnce(certA)
+        .mockResolvedValueOnce(certB);
+
+      store = makeFakeStore({ checkStatus, findExistingDevCert });
+      mockedCreateStore.mockResolvedValue(store);
+
+      const manager = new CertManager();
+      await manager.trust(); // loads + trusts A
+      await manager.trust(); // must reload and trust B, not the cached A
+
+      expect(findExistingDevCert).toHaveBeenCalledTimes(2);
+      const trusted = vi
+        .mocked(store.trustCertificate)
+        .mock.calls.map((call) => call[0]);
+      expect(trusted[0]).toBe(certA.cert);
+      expect(trusted[1]).toBe(certB.cert);
     });
 
     it("skips both generation and trust if cert exists and is already trusted", async () => {

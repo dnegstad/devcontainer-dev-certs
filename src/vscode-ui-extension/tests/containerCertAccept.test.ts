@@ -10,10 +10,10 @@ import {
   DevCert,
   ASPNET_HTTPS_OID,
   CURRENT_CERTIFICATE_VERSION,
-  initLogger,
   SAN_DNS_NAMES,
   SAN_IP_ADDRESSES,
 } from "@devcontainer-dev-certs/shared";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import {
   acceptContainerDevCert,
   type AcceptContainerCertDeps,

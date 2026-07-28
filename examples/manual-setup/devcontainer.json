@@ -1,0 +1,19 @@
+{
+    "name": "manual-setup-example",
+    "image": "mcr.microsoft.com/devcontainers/dotnet:9.0",
+    "features": {
+        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
+            "installFallbackTools": true,
+            // bundle.json's extraDestinations targets /etc/nginx/certs. The
+            // fallback installer runs as the remote user via postStartCommand
+            // and cannot create root-owned directories — declaring the same
+            // path here has the privileged feature install pre-create and
+            // chown it.
+            "extraCertDestinations": "/etc/nginx/certs=pem"
+        }
+    },
+    "mounts": [
+        "source=${localEnv:HOME}/.dev-certs,target=/host-dev-certs,type=bind,readonly"
+    ],
+    "postStartCommand": "devcontainer-dev-certs-install --bundle-json /host-dev-certs/bundle.json || true"
+}

@@ -123,8 +123,8 @@ Available from the Command Palette (`F1`) in a Dev Container window:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `devcontainer-dev-certs.autoInject` | `true` | Automatically inject the cert when a remote session starts. Set to `false` to require manually invoking "Dev Certs: Inject Certificate into Remote". |
-| `devcontainer-dev-certs.warnOnStaleDevCerts` | `true` | Show the post-install warning when other dev certs are detected alongside the managed one. Set to `false` to silence the prompt; the cleanup command stays available from the Command Palette either way. |
+| `devcontainerDevCerts.autoInject` | `true` | Automatically inject the cert when a remote session starts. Set to `false` to require manually invoking "Dev Certs: Inject Certificate into Remote". |
+| `devcontainerDevCerts.warnOnStaleDevCerts` | `true` | Show the post-install warning when other dev certs are detected alongside the managed one. Set to `false` to silence the prompt; the cleanup command stays available from the Command Palette either way. |
 
 Certificate *content* — which certs exist and get synced — is configured on the host side (`devcontainerDevCerts.userCertificates`, `defaultKestrelCertificate`, and friends). See the [host extension](https://marketplace.visualstudio.com/items?itemName=dnegstad.devcontainer-dev-certs-host) or the [configuration reference](https://github.com/dnegstad/devcontainer-dev-certs#configuration-reference).
 

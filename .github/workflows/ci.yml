@@ -12,4 +12,4 @@ jobs:
     uses: ./.github/workflows/build-extensions.yml
     with:
       production: true
-      upload-vsix: true
+      upload-artifacts: true

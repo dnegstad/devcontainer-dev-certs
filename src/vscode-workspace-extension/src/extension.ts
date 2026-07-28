@@ -3,6 +3,7 @@
 // `@injectable` decorators against `Reflect.metadata` at module init.
 import "reflect-metadata";
 import * as vscode from "vscode";
+import { getRenamedSetting } from "./settings";
 import {
   installDotNetDevCert,
   installUserCert,
@@ -31,7 +32,8 @@ import {
 } from "./defaultKestrelDebugProvider";
 import { parseExtraCertDestinations } from "./util/destinations";
 import { upmapV1ToV3, upmapV2ToV3 } from "./util/upmap";
-import { initLogger, log, revealLogger } from "@devcontainer-dev-certs/shared";
+import { log, revealLogger } from "@devcontainer-dev-certs/shared";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import type {
   CertBundle,
   CertBundleV3,
@@ -88,8 +90,6 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
-
   // Reverse-sync: if the feature opted into pushing the container's own
   // dev cert to the host, run that before the standard pull so that the
   // push lands first and any subsequent pull naturally returns the cert
@@ -106,7 +106,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   }
 
-  if (config.get<boolean>("autoInject", true)) {
+  if (getRenamedSetting("autoInject", true)) {
     log("Auto-inject enabled, requesting certificate material...");
     void runActivationSync(context, syncFromContainer);
   } else if (syncFromContainer) {
@@ -302,8 +302,7 @@ async function resolveManagedDevCertContext(
 async function detectStaleAndPromptCleanup(
   bundle: CertBundleV3
 ): Promise<void> {
-  const config = vscode.workspace.getConfiguration("devcontainer-dev-certs");
-  if (!config.get<boolean>(WARN_STALE_CONFIG_KEY, true)) return;
+  if (!getRenamedSetting(WARN_STALE_CONFIG_KEY, true)) return;
 
   const syncFromContainer = isTruthyEnv(
     process.env["DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER"],
@@ -335,11 +334,9 @@ async function detectStaleAndPromptCleanup(
   if (choice === cleanup) {
     performCleanup(stale);
   } else if (choice === dismiss) {
-    await config.update(
-      WARN_STALE_CONFIG_KEY,
-      false,
-      vscode.ConfigurationTarget.Global
-    );
+    await vscode.workspace
+      .getConfiguration("devcontainerDevCerts")
+      .update(WARN_STALE_CONFIG_KEY, false, vscode.ConfigurationTarget.Global);
   }
 }
 

@@ -323,7 +323,7 @@ function reportAcceptOutcome(
   switch (result.reason) {
     case "host-setting-disabled":
       log(
-        `Container cert sync: host rejected ${thumbprint} — host has disabled managed dotnet dev certs (devcontainerDevCerts.generateDotNetCert) or automatic provisioning (devcontainer-dev-certs.autoProvision).`
+        `Container cert sync: host rejected ${thumbprint} — host has disabled managed dotnet dev certs (devcontainerDevCerts.generateDotNetCert) or automatic provisioning (devcontainerDevCerts.autoProvision).`
       );
       // No toast — the user disabled the host setting deliberately.
       return;
