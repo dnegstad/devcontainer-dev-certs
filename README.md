@@ -26,7 +26,6 @@ No `dotnet dev-certs` commands, no manual PFX exports, no environment variable c
 - [User-managed certificates](#user-managed-certificates) — sync your own certs (corporate CAs, wildcards)
 - [Extra destinations](#extra-destinations) — write certs for nginx, Java, and other non-.NET workloads
 - [Syncing a certificate from the container to the host](#syncing-a-certificate-from-the-container-to-the-host) — reverse sync (opt-in)
-- [Manual / non-VS Code use](#manual--non-vs-code-use) — the minimally supported escape hatch for JetBrains, Vim, and CI
 - [Troubleshooting](#troubleshooting) — logs and the common failure modes
 - [Known issues](#known-issues)
 - [Limitations](#limitations) · [Supported Platforms](#supported-platforms)
@@ -178,7 +177,6 @@ Set under the feature entry in `devcontainer.json`:
 | `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` VS Code setting. |
 | `syncContainerCert` | `false` | **Reverse sync (opt-in).** When the container itself already has a valid ASP.NET dev certificate (e.g. baked into the image with `dotnet dev-certs https`), push it to the host so the host trusts it instead of generating its own. Enabling this also implicitly overrides `generateDotNetCert` for this container — you don't need to set both. See "[Syncing a certificate from the container to the host](#syncing-a-certificate-from-the-container-to-the-host)". |
 | `extraCertDestinations` | `""` | Comma-separated list of additional directories to write cert artifacts to. Each entry is `<abs-dir>[=<format>]` where `format` is `pem`, `key`, `pem-bundle`, `pfx`, or `all` (default). Every synced cert is written under the directory as `{name}.{pem,key,pfx}` (and/or `{name}-bundle.pem`). Example: `/etc/nginx/certs=pem,/var/myapp`. See "[Extra destinations](#extra-destinations)". |
-| `installFallbackTools` | `false` | Install the runtime prerequisites (`openssl`, `jq`) the fallback `devcontainer-dev-certs-install` script needs. The script itself is always delivered to `/usr/local/bin/` regardless of this option — set this to `true` only when you intend to invoke it manually (JetBrains / Vim / CI users) and your base image doesn't already provide `openssl` and `jq`. See "[Manual / non-VS Code use](#manual--non-vs-code-use)". |
 
 ### Host VS Code settings
 
@@ -226,10 +224,6 @@ They are **not** set for non-interactive execs: `docker exec <container> env`, o
 | `DEVCONTAINER_DEV_CERTS_SYNC_USER` | The `syncUserCertificates` option | Always |
 | `DEVCONTAINER_DEV_CERTS_SYNC_FROM_CONTAINER` | The `syncContainerCert` option | Always |
 | `DEVCONTAINER_DEV_CERTS_EXTRA_DESTINATIONS` | The `extraCertDestinations` option | Always |
-| `DEVCONTAINER_DEV_CERTS_INSTALL_BIN` | `/usr/local/bin/devcontainer-dev-certs-install` — the [fallback installer](#manual--non-vs-code-use) | Always |
-| `DEVCONTAINER_DEV_CERTS_DOTNET_STORE_DIR` | `$HOME/.dotnet/corefx/cryptography/x509stores/my` | Always |
-| `DEVCONTAINER_DEV_CERTS_DOTNET_ROOT_STORE_DIR` | `$HOME/.dotnet/corefx/cryptography/x509stores/root` | Always |
-| `DEVCONTAINER_DEV_CERTS_TRUST_DIR` | `$HOME/.aspnet/dev-certs/trust` | Always |
 | `DOTNET_GENERATE_ASPNET_CERTIFICATE` | `false` | Only when `generateDotNetCert: true` AND `syncContainerCert: false` — see below |
 
 The remote extension sets two more at runtime, and honors one:
@@ -395,90 +389,6 @@ When this is on, non-local SAN entries are shown in the consent modal so you can
 
 Pushes from a Dev Container without the matching feature option are ignored — the host setting on its own doesn't do anything until a container actively pushes. Every distinct container-generated cert still gets added to your host trust store on its own, and on macOS each of those trust changes can raise its own keychain authorization prompt — so opening several containers that each generate their own cert accumulates trust entries, and prompts on macOS. That's part of why the option isn't on by default.
 
-## Manual / non-VS Code use
-
-> [!NOTE]
-> This is a **minimally supported** path. The first-class experience is the VS Code extension pair; everything below exists so a user without VS Code isn't left with no escape hatch, but the host half is hand-wired — there's no automation for cert generation or host OS trust outside VS Code.
-
-The companion-extension pattern is VS Code-specific, but the container-side machinery isn't. JetBrains, Vim, raw CLI, and CI users can drive the in-container half of the trust state through a shell tool the feature installs; host-side cert generation and OS trust remain on you (typically `dotnet dev-certs https --trust` plus an export).
-
-For an end-to-end walkthrough — generating and exporting the cert on the host, mounting it in, wiring `postStartCommand` — see [`examples/manual-setup/`](examples/manual-setup/). The summary here is the reference.
-
-### The fallback installer
-
-The feature delivers `devcontainer-dev-certs-install` to `/usr/local/bin/` during install. It writes to the same canonical paths the workspace extension uses — the `my`/`root` .NET X509 stores and the c_rehash'd OpenSSL trust directory — so Kestrel's `X509Store` fallback and OpenSSL clients discover certs installed this way exactly as they would extension-installed ones.
-
-```bash
-# Single cert (legacy positional form; needs only openssl)
-devcontainer-dev-certs-install /path/to/cert.pfx /path/to/cert.pem <sha1-fingerprint>
-
-# Multi-cert + extra destinations (preferred; needs openssl + jq)
-devcontainer-dev-certs-install --bundle-json /path/to/bundle.json
-
-# Read-only diagnostics — safe to chain into CI; exits non-zero only on real breakage
-devcontainer-dev-certs-install --doctor
-```
-
-Set the feature option `installFallbackTools: true` to have the feature install `openssl`/`jq` when the base image lacks them.
-
-### Bundle JSON
-
-A bundle describes one or more certs plus optional extra destinations. The schema lives at [`schema/bundle.schema.json`](schema/bundle.schema.json) — reference it from your bundle file for editor autocomplete and validation:
-
-```jsonc
-{
-    "$schema": "https://raw.githubusercontent.com/dnegstad/devcontainer-dev-certs/main/schema/bundle.schema.json",
-    "certs": [
-        {
-            "name": "aspnetcore-dev",
-            "kind": "dotnet-dev",              // dotnet-dev = historic trust-dir filename; user (default) = {name}.pem
-            "thumbprint": "ABCDEF...",         // SHA-1, exactly 40 hex chars — the .NET store filename
-            "pfxPath": "/host-dev-certs/aspnetcore-dev.pfx",
-            "pemPath": "/host-dev-certs/aspnetcore-dev.pem",
-            "pemKeyPath": "/host-dev-certs/aspnetcore-dev.key",
-            "trustInContainer": true
-        }
-    ],
-    "extraDestinations": [
-        { "path": "/etc/nginx/certs", "format": "pem" }
-    ]
-}
-```
-
-CA-only entries (no `pfxPath` / `pemKeyPath`) are valid — the cert is planted in the trust surfaces but no private key is synced.
-
-### Invoking from `devcontainer.json`
-
-Use `postStartCommand` (not `postCreateCommand`) so the install re-runs on every container start — regenerating the cert on the host then takes effect on the next start without a rebuild:
-
-```jsonc
-{
-    "features": {
-        "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
-            "installFallbackTools": true,
-            // Mirror any extraDestinations paths from your bundle.json here.
-            // postStartCommand runs as the remote user, which can't create
-            // root-owned directories like /etc/nginx/certs — declaring them
-            // as a feature option has the privileged feature install
-            // pre-create and chown them.
-            "extraCertDestinations": "/etc/nginx/certs=pem"
-        }
-    },
-    "mounts": [
-        "source=${localEnv:HOME}/.dev-certs,target=/host-dev-certs,type=bind,readonly"
-    ],
-    "postStartCommand": "devcontainer-dev-certs-install --bundle-json /host-dev-certs/bundle.json || true"
-}
-```
-
-The `|| true` keeps a missing or malformed bundle from blocking container startup. The `DEVCONTAINER_DEV_CERTS_*` [environment variables](#environment-variables) give scripts the installer path and canonical store directories without hardcoding them.
-
-### What's still VS Code-only
-
-- **Host-side cert generation and trust.** Use `dotnet dev-certs https --trust` (or your platform's equivalent) and export the PFX / PEM into your mounted host directory — [`examples/manual-setup/`](examples/manual-setup/) documents the exact commands and their flag pitfalls.
-- **`defaultKestrelCertificate`.** Delivered via VS Code's `EnvironmentVariableCollection`; set `ASPNETCORE_Kestrel__Certificates__Default__Path`/`__Password` yourself in `containerEnv` if you need it.
-- **Reverse sync (`syncContainerCert`).** Needs a privileged host-side process with a consent UI; the script can't perform host trust.
-
 ## Troubleshooting
 
 ### Start with the logs
@@ -627,15 +537,14 @@ src/
     src/devcontainer-dev-certs/
       devcontainer-feature.json    Feature metadata, options, extension references
       install.sh                   Container build-time setup (directories, SSL_CERT_DIR, env)
-      scripts/setup-cert.sh        Fallback installer delivered to /usr/local/bin/
-                                   (see "Manual / non-VS Code use")
+      scripts/setup-cert.sh        Standalone cert-install script delivered to
+                                   /usr/local/bin/ (unsupported outside the extensions)
 
 schema/
-  bundle.schema.json               JSON Schema for the fallback installer's bundle.json
+  bundle.schema.json               JSON Schema for setup-cert.sh's bundle.json input
 
 examples/
-  manual-setup/                    End-to-end non-VS Code walkthrough (host export,
-                                   mount, postStartCommand)
+  manual-setup/                    Manual setup example for setup-cert.sh (unsupported)
 
 test/
   sample-project/                  Test project template (hydrated into .out/ for testing)
