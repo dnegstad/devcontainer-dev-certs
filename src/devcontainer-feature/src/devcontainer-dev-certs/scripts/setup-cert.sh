@@ -299,8 +299,15 @@ if [ "${1:-}" = "--doctor" ]; then
             # Same standard as the My store above: .NET reads this store to
             # decide whether My's certs count as trusted, so an unparseable
             # trust anchor must fail the doctor rather than pass as info.
+            # The expiry probe matters independently here: CA-only bundle
+            # entries land ONLY in Root (no My-side PFX exists to trip the
+            # loop above), so without this check an expired trust anchor
+            # sails through doctor with zero errors.
             if desc=$(describe_pfx "${pfx}" 2>/dev/null); then
                 info "$(basename "${pfx}"): ${desc}"
+                if pfx_is_expired "${pfx}"; then
+                    fail "$(basename "${pfx}") has expired — certificates chained to this trust anchor will be rejected"
+                fi
             else
                 fail "$(basename "${pfx}"): unparseable PFX (openssl pkcs12 with empty passphrase failed) — .NET cannot load this trust anchor"
             fi

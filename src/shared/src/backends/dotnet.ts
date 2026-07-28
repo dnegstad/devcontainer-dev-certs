@@ -1,5 +1,7 @@
 import * as fs from "fs";
+import * as path from "path";
 import { exportPem, exportPfx } from "../cert/exporter";
+import { getOpenSslTrustDir, getPemFileName } from "../paths";
 import { trustInNss } from "../platform/nssTrust";
 import { runProcess } from "../platform/processUtil";
 import {
@@ -79,7 +81,11 @@ export class DotnetBackend implements Backend {
     );
 
     if (!options.noTrust && process.platform === "linux") {
-      await runNssTrust(pemPath, options.linuxNssTrustReporter);
+      await runNssTrust(
+        found.thumbprint,
+        pemPath,
+        options.linuxNssTrustReporter
+      );
     }
 
     return {
@@ -94,9 +100,29 @@ export class DotnetBackend implements Backend {
 }
 
 async function runNssTrust(
-  pemPath: string,
+  thumbprint: string,
+  exportedPemPath: string,
   reporter: LinuxNssTrustReporter | undefined
 ): Promise<void> {
-  const result = await trustInNss(pemPath);
-  reporter?.(result, pemPath);
+  // Anchor the NSS import — and, crucially, the path handed to the
+  // reporter — on the PERSISTENT OpenSSL trust-dir PEM, never on the
+  // exported copy in the caller's outDir. Callers routinely provision
+  // into a temp dir they delete as soon as generate() returns, while
+  // the reporter's failure guidance (the VS Code toast's "Copy
+  // Certificate Path" action) outlives that cleanup — a tmp-dir path
+  // would be dangling by the time the user pastes it.
+  //
+  // `dotnet dev-certs --trust` writes this PEM itself on SDKs that
+  // manage the Linux OpenSSL trust dir; on older SDKs the file may be
+  // absent, so place a copy there ourselves before importing.
+  const persistentPemPath = path.join(
+    getOpenSslTrustDir(),
+    getPemFileName(thumbprint)
+  );
+  if (!fs.existsSync(persistentPemPath)) {
+    fs.mkdirSync(path.dirname(persistentPemPath), { recursive: true });
+    fs.copyFileSync(exportedPemPath, persistentPemPath);
+  }
+  const result = await trustInNss(persistentPemPath);
+  reporter?.(result, persistentPemPath);
 }

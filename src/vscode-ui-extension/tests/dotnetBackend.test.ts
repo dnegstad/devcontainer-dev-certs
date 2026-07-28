@@ -142,8 +142,11 @@ describe("DotnetBackend.generate", () => {
     expect(fs.existsSync(path.join(outDir, "aspnetcore-dev.pem.key"))).toBe(false);
   });
 
-  it("supplements the trust step with NSS on Linux", async () => {
+  it("supplements the trust step with NSS on Linux, anchored on the persistent trust-dir PEM", async () => {
     const restore = stubPlatform("linux");
+    const trustDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-trustdir-"));
+    cleanupDirs.push(trustDir);
+    vi.stubEnv("DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY", trustDir);
     try {
       const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
       cleanupDirs.push(outDir);
@@ -167,16 +170,66 @@ describe("DotnetBackend.generate", () => {
 
       // Verifies the gap-fill: dotnet --trust on Linux misses NSS
       // browser DBs, so the backend invokes trustInNss separately.
-      expect(mockedTrustInNss).toHaveBeenCalledTimes(1);
-      expect(mockedTrustInNss).toHaveBeenCalledWith(
-        path.join(outDir, "aspnetcore-dev.pem")
+      // CRUCIALLY: with the persistent trust-dir path, NOT the exported
+      // copy in outDir — callers delete outDir as soon as generate()
+      // returns while the reporter's manual-import guidance (the
+      // toast's "Copy Certificate Path" action) can outlive it.
+      const persistentPem = path.join(
+        trustDir,
+        `aspnetcore-localhost-${generated.thumbprint}.pem`
       );
+      expect(mockedTrustInNss).toHaveBeenCalledTimes(1);
+      expect(mockedTrustInNss).toHaveBeenCalledWith(persistentPem);
       expect(reporter).toHaveBeenCalledTimes(1);
       expect(reporter).toHaveBeenCalledWith(
         { success: true, message: "ok" },
-        path.join(outDir, "aspnetcore-dev.pem")
+        persistentPem
+      );
+      // The trust dir started empty (older-SDK scenario where dotnet
+      // --trust doesn't manage it) — the backend must have placed the
+      // PEM there itself so the reported path actually exists.
+      expect(fs.existsSync(persistentPem)).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      restore();
+    }
+  });
+
+  it("does not overwrite an existing trust-dir PEM (dotnet --trust already wrote it)", async () => {
+    const restore = stubPlatform("linux");
+    const trustDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-trustdir-"));
+    cleanupDirs.push(trustDir);
+    vi.stubEnv("DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY", trustDir);
+    try {
+      const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
+      cleanupDirs.push(outDir);
+      const generated = await makeCert();
+      const persistentPem = path.join(
+        trustDir,
+        `aspnetcore-localhost-${generated.thumbprint}.pem`
+      );
+      // Simulate an SDK that manages the trust dir: the PEM is already
+      // there before the backend runs.
+      fs.writeFileSync(persistentPem, "sentinel-existing-pem");
+
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+      mockedCreatePlatformStore.mockResolvedValue({
+        findExistingDevCert: vi.fn(async () => generated),
+      } as unknown as Shared.PlatformCertificateStore);
+      mockedTrustInNss.mockResolvedValue({ success: true, message: "ok" });
+
+      await new DotnetBackend().generate({
+        outDir,
+        noTrust: false,
+        linuxNssTrustReporter: vi.fn(),
+      });
+
+      expect(mockedTrustInNss).toHaveBeenCalledWith(persistentPem);
+      expect(fs.readFileSync(persistentPem, "utf-8")).toBe(
+        "sentinel-existing-pem"
       );
     } finally {
+      vi.unstubAllEnvs();
       restore();
     }
   });

@@ -104,6 +104,37 @@ if [ "${PRUNE_MISSING_CERT_DIRS}" = "true" ]; then
     SSL_CERT_DIRS="${PRUNED_SSL_CERT_DIRS}"
 fi
 
+# Workaround for containers/buildah#6747: a `RUN --mount=type=bind,target=X`
+# committed by buildah/podman can reset the mode and ownership of every
+# parent directory of the mount target. The devcontainer CLI generates such a
+# RUN for every feature with target `/tmp/build-features-src/<feature>_0`,
+# which leaves `/tmp` at mode 0755 root:root instead of 1777 in the committed
+# layer — even when nothing in the RUN touched `/tmp` itself.
+#
+# The next feature that runs `apt-get update` then fails with:
+#   Couldn't create temporary file /tmp/apt.conf.XXX for passing config to apt-key
+# because `_apt` (uid 42) can no longer write to `/tmp`. azure-functions-core-tools
+# is the canonical trigger; see issue #47.
+#
+# A bare `chmod 1777 /tmp` doesn't survive the layer commit: when the mode is
+# already 1777 in the lower overlay layer the chmod is a no-op and buildah
+# never serializes a corrected `/tmp` entry into the diff. The reliable
+# workaround is to force overlayfs to copy `/tmp` up to the upper layer by
+# creating and removing a marker file, then re-asserting the mode. No-op on
+# Docker, where the commit preserves `/tmp` correctly.
+#
+# This MUST run before any package-manager invocation below: when a PRIOR
+# feature's layer already broke `/tmp`, our own `apt-get update` in the
+# installFallbackTools block would otherwise hit the same failure (under
+# `set -e`, fatally) before the end-of-script placement this repair used
+# to have could ever execute. The copy-up survives the rest of the RUN, so
+# running it early both unbreaks our own installs and still corrects the
+# committed layer for subsequent features.
+if __tmpfix_marker="$(mktemp /tmp/.devcontainer-dev-certs-tmpfix.XXXXXX 2>/dev/null)"; then
+    rm -f -- "${__tmpfix_marker}"
+    chmod 1777 /tmp 2>/dev/null || true
+fi
+
 # Install fallback-script prerequisites if requested. The script requires
 # openssl unconditionally and jq for the --bundle-json form; install only
 # what's missing so this is a no-op on images that already provide them.
@@ -463,29 +494,6 @@ if id "${REMOTE_USER}" &>/dev/null; then
     for d in "${EXTRA_DIRS_TO_CHOWN[@]}"; do
         chown -R "${REMOTE_USER}" "${d}" 2>/dev/null || true
     done
-fi
-
-# Workaround for containers/buildah#6747: a `RUN --mount=type=bind,target=X`
-# committed by buildah/podman can reset the mode and ownership of every
-# parent directory of the mount target. The devcontainer CLI generates such a
-# RUN for every feature with target `/tmp/build-features-src/<feature>_0`,
-# which leaves `/tmp` at mode 0755 root:root instead of 1777 in the committed
-# layer — even when nothing in the RUN touched `/tmp` itself.
-#
-# The next feature that runs `apt-get update` then fails with:
-#   Couldn't create temporary file /tmp/apt.conf.XXX for passing config to apt-key
-# because `_apt` (uid 42) can no longer write to `/tmp`. azure-functions-core-tools
-# is the canonical trigger; see issue #47.
-#
-# A bare `chmod 1777 /tmp` doesn't survive the layer commit: when the mode is
-# already 1777 in the lower overlay layer the chmod is a no-op and buildah
-# never serializes a corrected `/tmp` entry into the diff. The reliable
-# workaround is to force overlayfs to copy `/tmp` up to the upper layer by
-# creating and removing a marker file, then re-asserting the mode. No-op on
-# Docker, where the commit preserves `/tmp` correctly.
-if __tmpfix_marker="$(mktemp /tmp/.devcontainer-dev-certs-tmpfix.XXXXXX 2>/dev/null)"; then
-    rm -f -- "${__tmpfix_marker}"
-    chmod 1777 /tmp 2>/dev/null || true
 fi
 
 echo "Dev certificate infrastructure ready."
