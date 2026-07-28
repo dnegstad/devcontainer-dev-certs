@@ -89,7 +89,7 @@ dotnet dev-certs https --check --trust
 Then start your app and call it over HTTPS from inside the container **without** `-k` / `--insecure`:
 
 ```bash
-curl https://localhost:<port>
+curl https://localhost:5001   # replace 5001 with your app's HTTPS port
 ```
 
 On the host, open the forwarded port in your browser — it should show a padlock with no warning. (On Linux hosts, browser trust goes through a separate NSS store that the extension imports into automatically; if the browser still warns, see [Linux hosts: browser trust](#linux-hosts-browser-trust).)
@@ -130,7 +130,7 @@ To import manually in Firefox: **Settings → Privacy & Security → Certificate
 
 Restart the browser after trusting so it picks up the updated NSS database.
 
-For browser trust *inside* the container (rarely needed — usually only when running a headless browser there), set the [`trustNss`](#dev-container-feature-options) feature option.
+Browser trust *inside* the container (rarely needed — usually only when running a headless browser there) is **not** automated. The [`trustNss`](#dev-container-feature-options) feature option installs `certutil` in the container, but nothing imports the certificate into a container browser's NSS database for you; you have to run `certutil -A` against that browser's profile yourself, pointing at the PEM in `~/.aspnet/dev-certs/trust/`.
 
 ## How It Works
 
@@ -171,7 +171,7 @@ Set under the feature entry in `devcontainer.json`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container. For browser trust on a Linux *host*, see "[Linux hosts: browser trust](#linux-hosts-browser-trust)" instead. |
+| `trustNss` | `false` | Install the NSS tools (`certutil`) in the container, so you can import the cert into a container browser's NSS database yourself. It only provides the tooling — no automatic in-container NSS import happens. For browser trust on a Linux *host* (which **is** automatic), see "[Linux hosts: browser trust](#linux-hosts-browser-trust)" instead. |
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override for non-standard base images. |
 | `pruneMissingCertDirs` | `true` | Filter out non-existent directories from `sslCertDirs` before writing `SSL_CERT_DIR` (some TLS stacks error on a missing entry). Set to `false` to use `sslCertDirs` verbatim — e.g. for a directory created after install but before it's needed. |
 | `generateDotNetCert` | `true` | Pull the host-generated ASP.NET / Aspire compatible HTTPS dev cert into this container. Set to `false` to skip it (useful when this container only needs user-managed certs). Distinct from the host setting of the same name — see the note above. |
@@ -276,7 +276,7 @@ User-managed certs are **never** added to the host OS trust store; the assumptio
 | `pfxPassword` | optional | Password for the PFX (or, for `pemCertPath` sources, the password used when synthesizing the `.pfx` for extra destinations). |
 | `pemCertPath` | one of | Absolute path on the host to a PEM-encoded certificate. |
 | `pemKeyPath` | optional | Absolute path on the host to a PEM-encoded private key. Omit for CA-only entries. |
-| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust directory and .NET root store, so tools inside the container trust the issuer. Setting it to `false` suppresses both of those writes — it does **not** mean "copy the files without trusting them". With trust off, the cert reaches the container only via the .NET `my/` store (when `installUserCertsToDotNetStore` applies to the entry) or [`extraCertDestinations`](#extra-destinations); with neither of those configured, nothing is written for that entry at all. |
+| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust directory and .NET root store, so tools inside the container trust the issuer. Setting it to `false` suppresses both of those writes — it does **not** mean "copy the files without trusting them". With trust off, the cert reaches the container only via the .NET `my/` store (when `installUserCertsToDotNetStore` applies to the entry) or [`extraCertDestinations`](#extra-destinations); with neither of those configured, nothing is written for that entry at all. **Not retroactive:** flipping this off stops future trust writes but doesn't undo past ones — an entry previously synced with trust on keeps its root-store PFX and trust PEM, and stays trusted, until you delete them by hand. |
 | `excludeFromDotNetStore` | optional, default `false` | When `installUserCertsToDotNetStore` is on globally, exempt this single cert from the `my/` write (avoids the password-stripping copy for sensitive entries). No effect when the global setting is `false`. |
 
 ### Password handling

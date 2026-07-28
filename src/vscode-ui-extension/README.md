@@ -127,7 +127,7 @@ Per-entry fields:
 | `pfxPassword` | optional | Password for the PFX (or, for `pemCertPath` sources, the password used when synthesizing the `.pfx` for extra destinations). |
 | `pemCertPath` | one of | Absolute path on the host to a PEM-encoded certificate. |
 | `pemKeyPath` | optional | Absolute path on the host to a PEM-encoded private key. Omit for CA-only entries. |
-| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust dir + .NET root store. Setting it to `false` suppresses those writes rather than copying the files untrusted — the entry then only reaches the container via the .NET `my/` store or `extraCertDestinations`, if either is configured. |
+| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust dir + .NET root store. Setting it to `false` suppresses those writes rather than copying the files untrusted — the entry then only reaches the container via the .NET `my/` store or `extraCertDestinations`, if either is configured. Not retroactive — an entry previously synced with trust on keeps its root-store PFX and trust PEM until you remove them manually. |
 | `excludeFromDotNetStore` | optional, default `false` | When `installUserCertsToDotNetStore` is on globally, exempt this single cert from the `my/` write (avoids the password-stripping copy for sensitive entries). |
 
 ## Container-to-host sync (opt-in)

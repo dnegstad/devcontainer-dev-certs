@@ -68,7 +68,7 @@ dotnet dev-certs https --check --trust             # if the .NET SDK is present
 
 `--check` on its own only confirms a valid cert exists in `my/`; adding `--trust` makes it report the trusted state as well (both are read-only in this combination).
 
-Then call your app over HTTPS from inside the container without `-k`: `curl https://localhost:<port>`.
+Then call your app over HTTPS from inside the container without `-k` — `curl https://localhost:5001`, substituting your app's HTTPS port.
 
 ## What This Extension Does
 
@@ -78,6 +78,8 @@ On activation in a remote context, this extension:
 2. **Installs each certificate in the bundle** — the auto-generated dotnet dev cert plus any user-managed certs the host is configured to sync. Where the files land depends on which kind it is:
    - **The dotnet dev cert** always gets all three canonical writes: the PFX to `~/.dotnet/corefx/cryptography/x509stores/my/{thumbprint}.pfx` so ASP.NET's `GetDevelopmentCertificateFromStore()` discovers it, the PEM to `~/.aspnet/dev-certs/trust/` with OpenSSL hash symlinks (c_rehash implemented in pure TypeScript — no `openssl` binary required), and a public-cert-only PFX to the .NET root store so dotnet reports it as trusted.
    - **User-managed certs** get those writes conditionally. The `my/` PFX only when `installUserCertsToDotNetStore` is on, the entry isn't carrying `excludeFromDotNetStore`, and it has a private key; the trust PEM and root-store PFX only while that entry's `trustInContainer` stays on. An entry with trust off and no `my/` opt-in produces no canonical files at all — just whatever `extraCertDestinations` writes.
+
+   Opting out is not retroactive for the trust writes. The `my/` PFX is swept when an entry loses its opt-in, but turning `trustInContainer` off only stops *future* root-store and trust-PEM writes — files from a previous sync stay, and the cert stays trusted in the container, until you delete `~/.dotnet/corefx/cryptography/x509stores/root/{thumbprint}.pfx` and `~/.aspnet/dev-certs/trust/{name}.pem` (plus its hash symlink) yourself. The stale-cert cleanup command doesn't cover these — it only identifies ASP.NET dev cert PFXes in the `my/` store.
 3. **Writes user-managed certs to extra destinations** when configured — each entry in `extraCertDestinations` becomes a directory inside the container the extension writes per-cert `{name}.pem` / `.key` / `.pfx` / `-bundle.pem` files to (useful for nginx, Java keystores, requests bundles, etc.).
 4. **Pushes the container's own dev cert to the host** when `syncContainerCert` is enabled — the optional reverse-sync flow (see below).
 5. **Surfaces a one-time cleanup prompt** when it detects other ASP.NET dev cert artifacts in the container's .NET store alongside the managed one, so leftover certs from previous installs don't confuse Kestrel's selection logic.
