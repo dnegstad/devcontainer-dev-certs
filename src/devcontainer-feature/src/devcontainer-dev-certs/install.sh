@@ -2,7 +2,6 @@
 set -e
 
 # Options from devcontainer-feature.json (uppercased)
-TRUST_NSS="${TRUSTNSS:-false}"
 # Keep this literal in sync with the `sslCertDirs` default in
 # devcontainer-feature.json (asserted by test/validate-feature.mjs).
 DEFAULT_SSL_CERT_DIRS="/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl"
@@ -67,7 +66,7 @@ fi
 # Validate that no feature option contains a newline. We append these to
 # /etc/environment, and an embedded newline would inject an extra env line
 # (potentially with a name the operator didn't intend).
-for varname in TRUST_NSS SSL_CERT_DIRS PRUNE_MISSING_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS INSTALL_FALLBACK_TOOLS; do
+for varname in SSL_CERT_DIRS PRUNE_MISSING_CERT_DIRS GENERATE_DOTNET_CERT SYNC_USER_CERTIFICATES SYNC_CONTAINER_CERT EXTRA_CERT_DESTINATIONS INSTALL_FALLBACK_TOOLS; do
     case "${!varname}" in
         *$'\n'*)
             echo "Error: feature option ${varname} must not contain newlines." >&2
@@ -103,20 +102,6 @@ if [ "${PRUNE_MISSING_CERT_DIRS}" = "true" ]; then
         fi
     done
     SSL_CERT_DIRS="${PRUNED_SSL_CERT_DIRS}"
-fi
-
-# Install NSS tools if requested (for Chromium/Firefox trust)
-if [ "${TRUST_NSS}" = "true" ]; then
-    if command -v apt-get &>/dev/null; then
-        apt-get update -y
-        apt-get install -y --no-install-recommends libnss3-tools
-        rm -rf /var/lib/apt/lists/*
-    elif command -v apk &>/dev/null; then
-        apk add --no-cache nss-tools
-    elif command -v dnf &>/dev/null; then
-        dnf install -y nss-tools
-        dnf clean all
-    fi
 fi
 
 # Install fallback-script prerequisites if requested. The script requires

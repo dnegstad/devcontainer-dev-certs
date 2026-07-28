@@ -14,11 +14,6 @@
     "remote"
   ],
   "options": {
-    "trustNss": {
-      "type": "boolean",
-      "default": false,
-      "description": "Install NSS tools (certutil) for Chromium/Firefox certificate trust inside the container"
-    },
     "sslCertDirs": {
       "type": "string",
       "default": "/etc/ssl/certs:/usr/lib/ssl/certs:/etc/pki/tls/certs:/var/lib/ca-certificates/openssl",
