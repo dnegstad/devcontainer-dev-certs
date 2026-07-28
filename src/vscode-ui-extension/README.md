@@ -66,6 +66,8 @@ The NSS step is best-effort and never blocks the rest of trust: `certutil` may b
 
 To recover, install `certutil` and retry the import with **Dev Certs: Trust Certificate in Browsers** from the Command Palette (`F1`).
 
+That retry only covers host-generated certificates: it finds the cert through the host's .NET `my/` store, and a certificate accepted from a container via `syncContainerCert` is deliberately kept out of that store. For a reverse-synced cert the command reports no certificate found (or re-imports a different host-generated one). The automatic NSS import still runs for pushed certs when they're trusted — if it failed, import the PEM manually from `~/.aspnet/dev-certs/trust/`, matching the thumbprint from the consent prompt or the output channel.
+
 To install `certutil`:
 
 | Distro | Command |
@@ -84,7 +86,7 @@ Available from the Command Palette (`F1`):
 
 | Command | Command ID | Description |
 |---------|------------|-------------|
-| **Dev Certs: Trust Certificate in Browsers** | `devcontainer-dev-certs.trustInBrowsers` | Retry the Firefox / Chromium NSS import after the automatic attempt couldn't complete. Linux only — on Windows and macOS this reports that the OS handles browser trust automatically. |
+| **Dev Certs: Trust Certificate in Browsers** | `devcontainer-dev-certs.trustInBrowsers` | Retry the Firefox / Chromium NSS import for the **host-generated** dev cert after the automatic attempt couldn't complete. Linux only — on Windows and macOS this reports that the OS handles browser trust automatically. Can't target a cert accepted via `syncContainerCert`. |
 
 The remote companion extension contributes the in-container commands (**Dev Certs: Inject Certificate into Remote** and **Dev Certs: Clean Up Other Dev Certificates in Dev Container**); they appear in the Command Palette when a Dev Container window is focused.
 

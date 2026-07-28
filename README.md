@@ -109,6 +109,8 @@ That import is best-effort and can't always complete — `certutil` may not be o
 
 To recover: install `certutil`, then re-run the import from the Command Palette with **Dev Certs: Trust Certificate in Browsers**.
 
+**That command only covers host-generated certificates.** It locates the certificate through the host's .NET `my/` store, and a cert accepted from a container via [`syncContainerCert`](#syncing-a-certificate-from-the-container-to-the-host) is deliberately never written there — so for a reverse-synced cert the command reports "No development certificate found", or re-imports an unrelated host-generated cert instead. Automatic NSS import still runs for pushed certs when they're first trusted; it's only this manual retry that can't target them. If that automatic attempt failed, import the PEM by hand from `~/.aspnet/dev-certs/trust/` — pushed certs are written there as `aspnetcore-localhost-{thumbprint}.pem` alongside any host-generated cert, so match the thumbprint from the consent prompt or the **Dev Container Dev Certs** output channel.
+
 To install `certutil`:
 
 | Distro | Command |
@@ -197,7 +199,7 @@ All three are available from the Command Palette (`F1`). The host command runs o
 
 | Command | Runs on | Command ID | Description |
 |---------|---------|------------|-------------|
-| **Dev Certs: Trust Certificate in Browsers** | Host | `devcontainer-dev-certs.trustInBrowsers` | Trust the dev cert in Firefox / Chromium NSS databases. Linux hosts only — on Windows and macOS browser trust follows the OS store automatically. See "[Linux hosts: browser trust](#linux-hosts-browser-trust)". |
+| **Dev Certs: Trust Certificate in Browsers** | Host | `devcontainer-dev-certs.trustInBrowsers` | Retry the Firefox / Chromium NSS import for the **host-generated** dev cert after the automatic attempt couldn't complete. Linux hosts only — on Windows and macOS browser trust follows the OS store automatically. Can't target a cert accepted via `syncContainerCert`. See "[Linux hosts: browser trust](#linux-hosts-browser-trust)". |
 | **Dev Certs: Inject Certificate into Remote** | Remote | `devcontainer-dev-certs.injectCert` | Re-run the certificate injection flow manually. Normally automatic on activation; needed when `autoInject` is `false`, or to retry after a failure. |
 | **Dev Certs: Clean Up Other Dev Certificates in Dev Container** | Remote | `devcontainer-dev-certs.cleanupStaleDevCerts` | Remove dev cert artifacts in the container's .NET stores that aren't the extension-managed one, then rehash the OpenSSL trust directory. Refuses to run when no managed dev cert is known, so it can't delete every dev cert on disk. |
 
@@ -412,7 +414,7 @@ Start with the two that apply everywhere:
 
 Then by platform:
 
-- **Linux:** browsers read NSS, not the OS/OpenSSL trust stores. The extension imports there automatically, so a warning usually means that import couldn't complete — check for a warning notification, then install `certutil` and run **Dev Certs: Trust Certificate in Browsers** to retry. See "[Linux hosts: browser trust](#linux-hosts-browser-trust)".
+- **Linux:** browsers read NSS, not the OS/OpenSSL trust stores. The extension imports there automatically, so a warning usually means that import couldn't complete — check for a warning notification, then install `certutil` and run **Dev Certs: Trust Certificate in Browsers** to retry. That retry only works for host-generated certs; for one accepted via `syncContainerCert`, import the PEM manually. See "[Linux hosts: browser trust](#linux-hosts-browser-trust)".
 - **macOS:** the keychain may have asked you to authorize the trust change. If that was cancelled, the cert exists but isn't trusted — the **Dev Container Dev Certs** output channel will show the `security add-trusted-cert` failure.
 - **Windows:** trust is applied non-interactively with `certutil.exe`, so there's no dialog to have missed. A warning means the import itself failed; the host output channel has the `certutil` exit code.
 
