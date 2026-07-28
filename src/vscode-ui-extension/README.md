@@ -125,7 +125,7 @@ Per-entry fields:
 | `pfxPassword` | optional | Password for the PFX (or, for `pemCertPath` sources, the password used when synthesizing the `.pfx` for extra destinations). |
 | `pemCertPath` | one of | Absolute path on the host to a PEM-encoded certificate. |
 | `pemKeyPath` | optional | Absolute path on the host to a PEM-encoded private key. Omit for CA-only entries. |
-| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust dir + .NET root store. |
+| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust dir + .NET root store. Setting it to `false` suppresses those writes rather than copying the files untrusted — the entry then only reaches the container via the .NET `my/` store or `extraCertDestinations`, if either is configured. |
 | `excludeFromDotNetStore` | optional, default `false` | When `installUserCertsToDotNetStore` is on globally, exempt this single cert from the `my/` write (avoids the password-stripping copy for sensitive entries). |
 
 ## Container-to-host sync (opt-in)
@@ -199,12 +199,13 @@ The cert is trusted in your OS certificate store:
 | macOS | Added to the login keychain via `security add-trusted-cert`; the keychain may ask you to authorize the trust change |
 | Linux | Added to .NET root store + OpenSSL trust directory + NSS browser databases + `SSL_CERT_DIR` in VS Code terminals |
 
-On Linux, `trustCertificate()` covers four layers:
+On Linux, trusting a certificate writes to three trust stores:
 
 1. **.NET root store** (`~/.dotnet/corefx/cryptography/x509stores/root/`) — trusted automatically by the .NET runtime
 2. **OpenSSL trust directory** (`~/.aspnet/dev-certs/trust/`) — PEM certificate with hash symlinks for OpenSSL-based tools
-3. **`SSL_CERT_DIR` in VS Code terminals** — the extension prepends the trust directory to `SSL_CERT_DIR` in VS Code's integrated terminal environment, so `curl`, `wget`, and other CLI tools trust the cert automatically
-4. **NSS browser databases** — Chromium and Firefox profiles, via `certutil`. Best-effort: it never blocks layers 1–3, and reports a warning notification instead of failing. See "[Linux browser trust](#linux-browser-trust)".
+3. **NSS browser databases** — Chromium and Firefox profiles, via `certutil`. Best-effort: it never blocks 1–2, and reports a warning notification instead of failing. See "[Linux browser trust](#linux-browser-trust)".
+
+Separately from those writes, when the extension serves a host-generated dev cert it prepends the trust directory to **`SSL_CERT_DIR`** in VS Code's integrated terminal environment, so `curl`, `wget`, and other CLI tools on the host pick it up without manual configuration. That's an environment change rather than a trust-store write, and it doesn't run for certs pushed up from a container.
 
 For tools running **outside** VS Code integrated terminals (e.g., a system terminal), set `SSL_CERT_DIR` manually:
 

@@ -266,7 +266,7 @@ User-managed certs are **never** added to the host OS trust store; the assumptio
 | `pfxPassword` | optional | Password for the PFX (or, for `pemCertPath` sources, the password used when synthesizing the `.pfx` for extra destinations). |
 | `pemCertPath` | one of | Absolute path on the host to a PEM-encoded certificate. |
 | `pemKeyPath` | optional | Absolute path on the host to a PEM-encoded private key. Omit for CA-only entries. |
-| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust directory and .NET root store, so tools inside the container trust it. Set to `false` to sync the cert files without making the container trust the issuer. |
+| `trustInContainer` | optional, default `true` | Plant the cert in the container's OpenSSL trust directory and .NET root store, so tools inside the container trust the issuer. Setting it to `false` suppresses both of those writes — it does **not** mean "copy the files without trusting them". With trust off, the cert reaches the container only via the .NET `my/` store (when `installUserCertsToDotNetStore` applies to the entry) or [`extraCertDestinations`](#extra-destinations); with neither of those configured, nothing is written for that entry at all. |
 | `excludeFromDotNetStore` | optional, default `false` | When `installUserCertsToDotNetStore` is on globally, exempt this single cert from the `my/` write (avoids the password-stripping copy for sensitive entries). No effect when the global setting is `false`. |
 
 ### Password handling
