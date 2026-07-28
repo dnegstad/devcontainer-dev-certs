@@ -141,8 +141,27 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     _cert: DevCert,
     thumbprint: string
   ): Promise<boolean> {
+    // Both authoritative trust surfaces `trustCertificate` writes must be
+    // present, or callers (CertManager.trust's recheck, the container-push
+    // short-circuit in trustExternalCertificate) would skip the repair of
+    // whichever one went missing — e.g. a user clearing
+    // ~/.dotnet/corefx/.../root/ while the OpenSSL PEM survives would
+    // otherwise leave .NET-side trust broken forever. Verifying only one
+    // surface was exactly that bug.
+    //
+    // NSS is intentionally NOT part of this predicate: it's best-effort
+    // (certutil is commonly absent), failures are surfaced through the
+    // reporter toast with manual guidance, and requiring it here would
+    // flap `checkStatus().isTrusted` to permanently-false on hosts
+    // without NSS tooling.
     const pemPath = path.join(getOpenSslTrustDir(), getPemFileName(thumbprint));
-    return Promise.resolve(fs.existsSync(pemPath));
+    const rootPfxPath = path.join(
+      this.dotNetRootStorePath,
+      `${thumbprint}.pfx`
+    );
+    return Promise.resolve(
+      fs.existsSync(pemPath) && fs.existsSync(rootPfxPath)
+    );
   }
 
   // --- Linux-specific trust helpers ---

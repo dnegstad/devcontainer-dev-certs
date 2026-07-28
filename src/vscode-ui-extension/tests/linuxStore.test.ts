@@ -284,6 +284,36 @@ describe("LinuxCertificateStore", () => {
       const status = await store.checkStatus();
       expect(status.isTrusted).toBe(false);
     });
+
+    it("returns false when the .NET Root store PFX is missing though the PEM survives", async () => {
+      // Regression: `isTrusted` used to check only the OpenSSL PEM, so
+      // clearing ~/.dotnet/corefx/.../root/ (manual cleanup, partial
+      // removal) while the PEM survived left .NET-side trust broken
+      // forever — CertManager.trust's recheck and the container-push
+      // short-circuit both saw "trusted" and never re-ran the
+      // idempotent trust path to repair the Root store.
+      const { cert, key, thumbprint } = await makeTestCert();
+      await store.saveCertificate(cert, key, thumbprint);
+      await store.trustCertificate(cert);
+
+      fs.rmSync(path.join(testRootStoreDir, `${thumbprint}.pfx`));
+
+      const status = await store.checkStatus();
+      expect(status.isTrusted).toBe(false);
+    });
+
+    it("returns false when the PEM is missing though the Root store PFX survives", async () => {
+      const { cert, key, thumbprint } = await makeTestCert();
+      await store.saveCertificate(cert, key, thumbprint);
+      await store.trustCertificate(cert);
+
+      for (const entry of fs.readdirSync(testTrustDir)) {
+        fs.rmSync(path.join(testTrustDir, entry), { force: true });
+      }
+
+      const status = await store.checkStatus();
+      expect(status.isTrusted).toBe(false);
+    });
   });
 
   describe("findExistingDevCert", () => {
