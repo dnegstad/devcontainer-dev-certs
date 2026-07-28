@@ -70,7 +70,6 @@ function runInstall({ env = {}, sysrootSeed = () => {} } = {}) {
       // a temp dir we own.
       _REMOTE_USER: "devcerts-test-nouser",
       _REMOTE_USER_HOME: home,
-      TRUSTNSS: "false",
       ...env,
     },
     stdio: "pipe",
@@ -231,7 +230,6 @@ console.log("install.sh: SSL_CERT_DIR management\n");
         DEVCERTS_SYSROOT: r.sysroot,
         _REMOTE_USER: "devcerts-test-nouser",
         _REMOTE_USER_HOME: r.home,
-        TRUSTNSS: "false",
         SSLCERTDIRS: DEFAULT,
       },
       stdio: "pipe",

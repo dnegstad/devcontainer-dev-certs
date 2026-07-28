@@ -174,7 +174,7 @@ These are the options that change what this extension does:
 | `syncUserCertificates` | `true` | Per-container opt-out for syncing certs configured in the host `devcontainerDevCerts.userCertificates` setting. |
 | `syncContainerCert` | `false` | Opt in to pushing the container's own dev cert to the host (reverse-sync). When true, also implicitly overrides `generateDotNetCert` — you don't need to set both. |
 
-The feature also accepts `trustNss`, `sslCertDirs`, `pruneMissingCertDirs`, and `extraCertDestinations`, which only affect the container side. See the [full option reference](https://github.com/dnegstad/devcontainer-dev-certs#dev-container-feature-options).
+The feature also accepts `sslCertDirs`, `pruneMissingCertDirs`, and `extraCertDestinations`, which only affect the container side. See the [full option reference](https://github.com/dnegstad/devcontainer-dev-certs#dev-container-feature-options).
 
 When the host is the dev cert source (the default), the feature additionally sets `DOTNET_GENERATE_ASPNET_CERTIFICATE=false` inside the container so dotnet's implicit first-run cert provisioning doesn't race the workspace extension's install. It's only applied when `generateDotNetCert: true` AND `syncContainerCert: false`, and explicit `dotnet dev-certs https` commands are unaffected either way. [Details](https://github.com/dnegstad/devcontainer-dev-certs#why-dotnet_generate_aspnet_certificatefalse).
 

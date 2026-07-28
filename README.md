@@ -130,7 +130,7 @@ To import manually in Firefox: **Settings → Privacy & Security → Certificate
 
 Restart the browser after trusting so it picks up the updated NSS database.
 
-Browser trust *inside* the container (rarely needed — usually only when running a headless browser there) is **not** automated. The [`trustNss`](#dev-container-feature-options) feature option installs `certutil` in the container, but nothing imports the certificate into a container browser's NSS database for you; you have to run `certutil -A` against that browser's profile yourself, pointing at the PEM in `~/.aspnet/dev-certs/trust/`.
+Browser trust *inside* the container (rarely needed — usually only when running a headless browser there) is out of scope for this feature. Install `libnss3-tools` from your Dockerfile or `postCreateCommand`, then run `certutil -A` against that browser's profile yourself, pointing at the PEM in `~/.aspnet/dev-certs/trust/`.
 
 ## How It Works
 
@@ -163,7 +163,7 @@ Set under the feature entry in `devcontainer.json`:
 {
     "features": {
         "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
-            "trustNss": true
+            "syncContainerCert": true
         }
     }
 }
@@ -171,7 +171,6 @@ Set under the feature entry in `devcontainer.json`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `trustNss` | `false` | Install the NSS tools (`certutil`) in the container, so you can import the cert into a container browser's NSS database yourself. It only provides the tooling — no automatic in-container NSS import happens. For browser trust on a Linux *host* (which **is** automatic), see "[Linux hosts: browser trust](#linux-hosts-browser-trust)" instead. |
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override for non-standard base images. |
 | `pruneMissingCertDirs` | `true` | Filter out non-existent directories from `sslCertDirs` before writing `SSL_CERT_DIR` (some TLS stacks error on a missing entry). Set to `false` to use `sslCertDirs` verbatim — e.g. for a directory created after install but before it's needed. |
 | `generateDotNetCert` | `true` | Pull the host-generated ASP.NET / Aspire compatible HTTPS dev cert into this container. Set to `false` to skip it (useful when this container only needs user-managed certs). Distinct from the host setting of the same name — see the note above. |

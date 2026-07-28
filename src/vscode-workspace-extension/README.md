@@ -151,7 +151,7 @@ These are the options that change what this extension does:
 | `syncContainerCert` | `false` | Opt in to pushing the container's own dev cert to the host (reverse-sync). When true, also implicitly overrides `generateDotNetCert` — you don't need to set both. |
 | `extraCertDestinations` | `""` | Comma-separated list of additional directories to write cert artifacts to. Each entry is `<abs-dir>[=<format>]` where format is `pem`, `key`, `pem-bundle`, `pfx`, or `all` (default). Useful for non-.NET workloads (nginx, Java keystores, etc.). |
 
-The feature also accepts `trustNss`, `sslCertDirs`, and `pruneMissingCertDirs`, which configure the container's trust infrastructure at build time. See the [full option reference](https://github.com/dnegstad/devcontainer-dev-certs#dev-container-feature-options).
+The feature also accepts `sslCertDirs` and `pruneMissingCertDirs`, which configure the container's trust infrastructure at build time. See the [full option reference](https://github.com/dnegstad/devcontainer-dev-certs#dev-container-feature-options).
 
 ## Environment Variables
 
