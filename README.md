@@ -147,7 +147,7 @@ Set under the feature entry in `devcontainer.json`:
 {
     "features": {
         "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
-            "trustNss": true
+            "syncContainerCert": true
         }
     }
 }
@@ -155,7 +155,6 @@ Set under the feature entry in `devcontainer.json`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container. |
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override for non-standard base images. |
 | `pruneMissingCertDirs` | `true` | Filter out non-existent directories from `sslCertDirs` before writing `SSL_CERT_DIR` (some TLS stacks error on a missing entry). Set to `false` to use `sslCertDirs` verbatim — e.g. for a directory created after install but before it's needed. |
 | `generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert. Set to `false` to skip generation (useful when you only want to sync user-managed certs). |

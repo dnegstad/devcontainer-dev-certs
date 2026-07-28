@@ -196,7 +196,6 @@ These options are set on the feature in your project's `devcontainer.json` (not 
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `trustNss` | `false` | Install NSS tools for Chromium/Firefox trust inside the container. |
 | `sslCertDirs` | Standard distro paths | System CA directories for `SSL_CERT_DIR`. Override if your base image uses non-standard paths. |
 | `pruneMissingCertDirs` | `true` | Filter out directories that don't exist on this image from `sslCertDirs` before writing `SSL_CERT_DIR` (some TLS stacks error on a missing entry). Set to `false` to use `sslCertDirs` verbatim — e.g. when a directory is created after install but before it's needed. |
 | `generateDotNetCert` | `true` | Pull the host-generated ASP.NET dev cert into this container. Set to `false` if you're only using user-managed certs in this container. |
