@@ -101,10 +101,13 @@ export function resolveSafeExecPath(
     .map((e) => e.trim().toLowerCase())
     .filter((e) => e.length > 0);
 
-  const commandLower = command.toLowerCase();
-  const hasExplicitExtension = extensions.some((ext) =>
-    commandLower.endsWith(ext)
-  );
+  // Any filename extension counts as explicit — Windows resolves
+  // `certutil.exe` verbatim even when the user's PATHEXT omits `.EXE`.
+  // PATHEXT only governs which suffixes are tried for extensionLESS
+  // names; deriving "explicit" from PATHEXT membership would probe
+  // `certutil.exe.cmd` / `.bat` on such a machine and miss the real
+  // binary.
+  const hasExplicitExtension = winPath.extname(command) !== "";
 
   for (const dir of dirs) {
     if (hasExplicitExtension) {

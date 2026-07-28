@@ -40,10 +40,15 @@ function devCertsDir(): string {
 }
 
 /**
- * Build a security-CLI mock that:
- *  - `find-certificate -Z <thumb>` succeeds for thumbprints in `keychainThumbs`
- *  - `find-certificate -a -p -Z` returns a synthetic PEM block listing every
- *    `extraKeychainPems` entry
+ * Build a security-CLI mock that models the real find-certificate
+ * semantics — `-Z` is an output modifier (prints hash lines), NOT a
+ * filter, so presence checks enumerate with `-a -Z` and match on the
+ * `SHA-1 hash:` lines:
+ *  - `find-certificate -a -Z <keychain>` (no `-p`) emits one
+ *    `SHA-1 hash: <thumb>` line per entry in `keychainThumbs`, mirroring
+ *    modern macOS by also emitting a `SHA-256 hash:` line per cert
+ *  - `find-certificate -a -p -Z` returns a synthetic PEM block listing
+ *    every `extraKeychainPems` entry
  *  - any other call resolves to a benign success
  *  - tracks every command for assertions
  */
@@ -59,18 +64,18 @@ function setupSecurityMock(opts: {
     }
     const sub = args[0];
     if (sub === "find-certificate") {
-      // single-thumb lookup
-      if (args.includes("-Z") && !args.includes("-a")) {
-        const zIdx = args.indexOf("-Z");
-        const thumb = args[zIdx + 1];
-        const present = opts.keychainThumbs?.has(thumb) ?? false;
-        return {
-          exitCode: present ? 0 : 1,
-          stdout: present ? `SHA-1 hash: ${thumb}\n` : "",
-          stderr: present ? "" : "SecKeychainSearchCopyNext: The specified item could not be found",
-        };
+      // hash enumeration (presence checks)
+      if (args.includes("-a") && args.includes("-Z") && !args.includes("-p")) {
+        const thumbs = [...(opts.keychainThumbs ?? [])];
+        const stdout = thumbs
+          .map(
+            (t) =>
+              `SHA-256 hash: ${"AB".repeat(32)}\nSHA-1 hash: ${t}\nkeychain: "/Users/test/Library/Keychains/login.keychain-db"\n`
+          )
+          .join("");
+        return { exitCode: 0, stdout, stderr: "" };
       }
-      // enumerate all
+      // enumerate all as PEM
       if (args.includes("-a") && args.includes("-p")) {
         const pems = opts.extraKeychainPems ?? [];
         return {

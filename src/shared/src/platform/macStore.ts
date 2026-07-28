@@ -127,18 +127,28 @@ export class MacCertificateStore extends BaseCertificateStore {
 
   /**
    * Returns true if a certificate with the given SHA-1 thumbprint is
-   * present in the login keychain. Uses `security find-certificate -Z`
-   * which only reads the public certificate — no ACL prompt is raised
-   * regardless of the cert's private-key ACL.
+   * present in the login keychain. `security find-certificate` has no
+   * filter-by-hash option — `-Z` is an output MODIFIER that prints each
+   * matched certificate's SHA-1 hash and takes no argument (a thumbprint
+   * passed after it would be parsed as a keychain path) — so enumerate
+   * every certificate's hash line and compare. Public-only read; no ACL
+   * prompt is raised regardless of the cert's private-key ACL.
    */
   private async isCertInKeychain(thumbprint: string): Promise<boolean> {
     const result = await runProcess("security", [
       "find-certificate",
+      "-a",
       "-Z",
-      thumbprint,
       this.keychainPath,
     ]);
-    return result.exitCode === 0;
+    if (result.exitCode !== 0) return false;
+    const needle = thumbprint.toUpperCase();
+    // Modern macOS prints both `SHA-256 hash:` and `SHA-1 hash:` lines
+    // per cert; match the SHA-1 line specifically.
+    return result.stdout.split("\n").some((line) => {
+      const match = /^SHA-1 hash:\s*([0-9A-Fa-f]{40})\b/.exec(line);
+      return match !== null && match[1].toUpperCase() === needle;
+    });
   }
 
   /**

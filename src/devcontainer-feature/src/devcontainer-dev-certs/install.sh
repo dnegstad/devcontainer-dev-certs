@@ -121,6 +121,15 @@ if [ "${INSTALL_FALLBACK_TOOLS}" = "true" ]; then
         elif command -v dnf &>/dev/null; then
             dnf install -y "${FALLBACK_PKGS[@]}"
             dnf clean all
+        elif command -v microdnf &>/dev/null; then
+            microdnf install -y "${FALLBACK_PKGS[@]}"
+            microdnf clean all
+        elif command -v yum &>/dev/null; then
+            yum install -y "${FALLBACK_PKGS[@]}"
+            yum clean all
+        elif command -v zypper &>/dev/null; then
+            zypper --non-interactive install "${FALLBACK_PKGS[@]}"
+            zypper clean
         else
             echo "Warning: installFallbackTools=true but no supported package manager found; skipping." >&2
         fi

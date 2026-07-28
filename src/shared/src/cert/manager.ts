@@ -140,21 +140,36 @@ export class CertManager {
 
     if (!status.exists) {
       await this.generate();
-    }
-
-    // Re-check: load from store if we didn't just generate
-    if (!this.currentCert) {
+    } else if (
+      !this.currentCert ||
+      this.currentCert.thumbprint !== status.thumbprint
+    ) {
+      // The store is authoritative. A cached cert whose thumbprint
+      // differs from the store's (an external tool replaced the entry
+      // since we loaded) must be discarded here — otherwise the
+      // trustCertificate call below would re-trust the ORPHANED cert
+      // while the store's actual cert stays untrusted, and a
+      // subsequent export would serve that untrusted cert.
       const found = await store.findExistingDevCert();
       if (!found) {
-        throw new Error("Failed to find certificate after generation.");
+        throw new Error("Failed to load the certificate from the platform store.");
       }
       this.currentCert = found;
+    }
+
+    // Both branches above guarantee a loaded cert (generate() assigns
+    // it; the reload throws when the store comes up empty) — the local
+    // is for TS narrowing plus a defensive check should that invariant
+    // ever break.
+    const current = this.currentCert;
+    if (!current) {
+      throw new Error("No certificate loaded after provisioning.");
     }
 
     const recheck = await store.checkStatus();
     if (!recheck.isTrusted) {
       log("Trusting certificate in OS store...");
-      await store.trustCertificate(this.currentCert.cert);
+      await store.trustCertificate(current.cert);
       log("Certificate trusted.");
     }
   }

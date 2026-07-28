@@ -3,7 +3,7 @@
 End-to-end example for using `devcontainer-dev-certs` outside of VS Code.
 
 > [!IMPORTANT]
-> Usage outside of VS Code is **minimally supported** and the host-side half of the workflow is hand-wired. The host extension that ships with this project does cert generation, OS trust, and routing automatically; without it you're driving `dotnet dev-certs` (or a comparable tool) yourself and only the in-container installer is automated. If you're choosing between this and the VS Code extensions, pick the extensions.
+> Usage outside of VS Code is **unsupported**. This example exists as a working reference for a potential future non-VS Code effort, not as a workflow the project stands behind: the pieces it wires together are bare-bones, ship without support commitments, and may change or disappear without notice. The supported experience is the VS Code host + remote extension pair — if you're choosing between this and the extensions, pick the extensions.
 
 ## What this gives you
 

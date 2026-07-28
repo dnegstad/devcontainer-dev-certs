@@ -115,6 +115,30 @@ describe("resolveSafeExecPath", () => {
     expect(result).toBe("C:\\Program Files\\dotnet\\dotnet.exe");
   });
 
+  it("resolves a command with an extension verbatim even when PATHEXT omits it", () => {
+    // Regression: "has an extension" used to be derived from PATHEXT
+    // membership, so a user who customized PATHEXT to drop `.EXE` got
+    // `certutil.exe` probed as `certutil.exe.cmd` / `.bat` and a 127
+    // even though the binary was on PATH. Windows resolves any name
+    // that carries an extension verbatim; PATHEXT only governs the
+    // suffixes tried for extensionLESS names.
+    const seen: string[] = [];
+    const fileExists = (candidate: string): boolean => {
+      seen.push(candidate);
+      return candidate === "C:\\Windows\\System32\\certutil.exe";
+    };
+
+    const result = resolveSafeExecPath("certutil.exe", {
+      platform: "win32",
+      searchPath: "C:\\Windows\\System32",
+      pathExt: ".CMD;.BAT",
+      fileExists,
+    });
+
+    expect(result).toBe("C:\\Windows\\System32\\certutil.exe");
+    expect(seen).toEqual(["C:\\Windows\\System32\\certutil.exe"]);
+  });
+
   it("treats PATHEXT case-insensitively (handles upper/mixed case extensions)", () => {
     // Real-world Windows defaults to upper-case `.COM;.EXE;.BAT;.CMD`, but the
     // matcher must work whether the user has rewritten it or not — and whether

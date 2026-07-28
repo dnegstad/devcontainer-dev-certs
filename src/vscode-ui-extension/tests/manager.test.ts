@@ -152,6 +152,48 @@ describe("CertManager", () => {
       expect(store.trustCertificate).toHaveBeenCalledOnce();
     });
 
+    it("reloads from the store when the cached cert no longer matches (external replacement)", async () => {
+      // Regression: with cert A cached in memory and the store entry
+      // externally replaced by cert B, trust() used to keep A (the
+      // reload only ran when NOTHING was cached) and re-trust the
+      // orphaned A while B stayed untrusted — a later export would
+      // then serve untrusted B.
+      const certA = await makeTestCert();
+      const certB = await makeTestCert();
+      const notTrusted = (thumbprint: string) => ({
+        exists: true,
+        isTrusted: false,
+        thumbprint,
+        notBefore: new Date().toISOString(),
+        notAfter: new Date().toISOString(),
+        version: 6,
+      });
+      const checkStatus = vi
+        .fn()
+        .mockResolvedValueOnce(notTrusted(certA.thumbprint)) // trust #1: status
+        .mockResolvedValueOnce(notTrusted(certA.thumbprint)) // trust #1: recheck
+        .mockResolvedValueOnce(notTrusted(certB.thumbprint)) // trust #2: store replaced
+        .mockResolvedValueOnce(notTrusted(certB.thumbprint)); // trust #2: recheck
+      const findExistingDevCert = vi
+        .fn()
+        .mockResolvedValueOnce(certA)
+        .mockResolvedValueOnce(certB);
+
+      store = makeFakeStore({ checkStatus, findExistingDevCert });
+      mockedCreateStore.mockResolvedValue(store);
+
+      const manager = new CertManager();
+      await manager.trust(); // loads + trusts A
+      await manager.trust(); // must reload and trust B, not the cached A
+
+      expect(findExistingDevCert).toHaveBeenCalledTimes(2);
+      const trusted = vi
+        .mocked(store.trustCertificate)
+        .mock.calls.map((call) => call[0]);
+      expect(trusted[0]).toBe(certA.cert);
+      expect(trusted[1]).toBe(certB.cert);
+    });
+
     it("skips both generation and trust if cert exists and is already trusted", async () => {
       const existing = await makeTestCert();
       const checkStatus = vi.fn().mockResolvedValue({
