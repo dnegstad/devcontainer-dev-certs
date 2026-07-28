@@ -59,7 +59,7 @@ export interface AcceptContainerCertDeps {
    */
   generateDotNetCert: boolean;
   /**
-   * `devcontainer-dev-certs.autoProvision` host setting. When false, the
+   * `devcontainerDevCerts.autoProvision` host setting. When false, the
    * user has disabled automatic provisioning entirely; we don't prompt
    * or trust in response to an unsolicited push.
    */
@@ -93,7 +93,7 @@ export interface AcceptContainerCertDeps {
  *  1. Host gating: gate on the SAME settings the host-generation flow
  *     uses — `devcontainerDevCerts.generateDotNetCert` (the user opted
  *     out of having any extension-managed dotnet dev cert on their
- *     host) and `devcontainer-dev-certs.autoProvision` (the user
+ *     host) and `devcontainerDevCerts.autoProvision` (the user
  *     disabled automatic provisioning altogether). If either is off,
  *     decline with `host-setting-disabled`.
  *  2. Parse the supplied PEM cert. Failure → `parse-failed`.
@@ -156,7 +156,7 @@ async function acceptContainerDevCertInner(
   }
   if (!deps.autoProvision) {
     log(
-      "acceptContainerDevCert: devcontainer-dev-certs.autoProvision is false; declining (host disabled automatic provisioning)."
+      "acceptContainerDevCert: devcontainerDevCerts.autoProvision is false; declining (host disabled automatic provisioning)."
     );
     return { accepted: false, reason: "host-setting-disabled" };
   }

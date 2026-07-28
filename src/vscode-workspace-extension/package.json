@@ -45,15 +45,25 @@
     "configuration": {
       "title": "Dev Certificates (Remote)",
       "properties": {
-        "devcontainer-dev-certs.autoInject": {
+        "devcontainerDevCerts.autoInject": {
           "type": "boolean",
           "default": true,
           "description": "Automatically inject and configure the dev cert when a remote session starts"
         },
-        "devcontainer-dev-certs.warnOnStaleDevCerts": {
+        "devcontainerDevCerts.warnOnStaleDevCerts": {
           "type": "boolean",
           "default": true,
           "description": "Show a warning when multiple dev certificates are detected in this Dev Container's .NET certificate stores after install — alongside the extension-managed certificate."
+        },
+        "devcontainer-dev-certs.autoInject": {
+          "type": "boolean",
+          "default": true,
+          "markdownDeprecationMessage": "Renamed to `devcontainerDevCerts.autoInject` so every setting shares one prefix. This legacy name is still honored when the new one is unset."
+        },
+        "devcontainer-dev-certs.warnOnStaleDevCerts": {
+          "type": "boolean",
+          "default": true,
+          "markdownDeprecationMessage": "Renamed to `devcontainerDevCerts.warnOnStaleDevCerts` so every setting shares one prefix. This legacy name is still honored when the new one is unset."
         }
       }
     }

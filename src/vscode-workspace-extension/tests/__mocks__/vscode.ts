@@ -31,11 +31,43 @@ export const window = {
   },
 };
 
+interface ConfigMap {
+  [section: string]: Record<string, unknown> | undefined;
+}
+
+const configStore: ConfigMap = {};
+
+export function __setConfig(section: string, values: Record<string, unknown>) {
+  configStore[section] = values;
+}
+
+export function __resetConfig() {
+  for (const key of Object.keys(configStore)) {
+    delete configStore[key];
+  }
+}
+
 export const workspace = {
-  getConfiguration(_section?: string) {
+  getConfiguration(section?: string) {
+    const values = (section ? configStore[section] : undefined) ?? {};
     return {
-      get<T>(_key: string, defaultValue?: T): T | undefined {
+      get<T>(key: string, defaultValue?: T): T | undefined {
+        if (key in values) {
+          return values[key] as T;
+        }
         return defaultValue;
+      },
+      // Values planted via __setConfig model an explicit user setting, so
+      // they surface as globalValue (what settings.ts's renamed-setting
+      // fallback inspects). Absent keys yield an all-undefined record,
+      // matching the real API for a setting the user never touched.
+      inspect<T>(key: string) {
+        return {
+          key: section ? `${section}.${key}` : key,
+          globalValue: key in values ? (values[key] as T) : undefined,
+          workspaceValue: undefined as T | undefined,
+          workspaceFolderValue: undefined as T | undefined,
+        };
       },
       update(_key: string, _value: unknown, _target?: unknown): Promise<void> {
         return Promise.resolve();

@@ -46,10 +46,15 @@
     "configuration": {
       "title": "Dev Certificates (Host)",
       "properties": {
-        "devcontainer-dev-certs.autoProvision": {
+        "devcontainerDevCerts.autoProvision": {
           "type": "boolean",
           "default": true,
           "description": "Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to false to disable provisioning entirely."
+        },
+        "devcontainer-dev-certs.autoProvision": {
+          "type": "boolean",
+          "default": true,
+          "markdownDeprecationMessage": "Renamed to `devcontainerDevCerts.autoProvision` so every setting shares one prefix. This legacy name is still honored when the new one is unset."
         },
         "devcontainerDevCerts.generateDotNetCert": {
           "type": "boolean",

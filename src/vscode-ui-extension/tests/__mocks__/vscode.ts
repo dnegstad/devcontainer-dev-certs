@@ -55,6 +55,18 @@ export const workspace = {
         }
         return defaultValue;
       },
+      // Values planted via __setConfig model an explicit user setting, so
+      // they surface as globalValue (what settings.ts's renamed-setting
+      // fallback inspects). Absent keys yield an all-undefined record,
+      // matching the real API for a setting the user never touched.
+      inspect<T>(key: string) {
+        return {
+          key: section ? `${section}.${key}` : key,
+          globalValue: key in values ? (values[key] as T) : undefined,
+          workspaceValue: undefined as T | undefined,
+          workspaceFolderValue: undefined as T | undefined,
+        };
+      },
     };
   },
 };

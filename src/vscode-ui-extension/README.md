@@ -94,7 +94,7 @@ The remote companion extension contributes the in-container commands (**Dev Cert
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `devcontainer-dev-certs.autoProvision` | `true` | Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to `false` to disable provisioning entirely (host-generation AND acceptance of container-pushed certs). |
+| `devcontainerDevCerts.autoProvision` | `true` | Allow certificate provisioning when the workspace extension requests one. On first use, a consent prompt explains what will happen before any certificates are generated. Set to `false` to disable provisioning entirely (host-generation AND acceptance of container-pushed certs). |
 | `devcontainerDevCerts.generateDotNetCert` | `true` | Auto-generate the ASP.NET / Aspire compatible HTTPS dev cert and trust it in the host OS store. When `false`, user-managed certificates (if any) are still synced, but no managed dev cert lives on the host — also implicitly disables acceptance of container-pushed dev certs. |
 | `devcontainerDevCerts.hostCertGenerator` | `"auto"` | Which backend generates the host dev cert: `native` (bundled cert primitives — no SDK required), `dotnet` (shell out to `dotnet dev-certs https`; requires the dotnet SDK on PATH), or `auto` (prefer `dotnet` on macOS when available for a smoother keychain prompt, `native` everywhere else). Only affects fresh provisioning; an existing cert in the OS store is reused regardless, and user-managed certificates are unaffected. |
 | `devcontainerDevCerts.userCertificates` | `[]` | Host-managed certificates to sync from the host into Dev Containers (see "User-managed certificates" below). |
@@ -141,7 +141,7 @@ The default flow is host-as-source. If you have a Dev Container that already pro
     { "features": { "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": { "syncContainerCert": true } } }
     ```
 
-2. No new host setting is needed — the same `devcontainerDevCerts.generateDotNetCert` + `devcontainer-dev-certs.autoProvision` settings that gate host-generation also gate accepting a container-pushed cert. The host independently re-validates the incoming certificate (ASP.NET dev-cert format + local-only SAN entries by default) and prompts you once before trusting it.
+2. No new host setting is needed — the same `devcontainerDevCerts.generateDotNetCert` + `devcontainerDevCerts.autoProvision` settings that gate host-generation also gate accepting a container-pushed cert. The host independently re-validates the incoming certificate (ASP.NET dev-cert format + local-only SAN entries by default) and prompts you once before trusting it.
 
 The host only ever trusts the **public** certificate — the private key never leaves the container. The trust step goes through the same OS-level path host-generated certs use: on Linux that includes the .NET root store, the OpenSSL trust directory, and NSS browser databases; on macOS the login keychain trust policy; on Windows `CurrentUser/Root` via `certutil`. The cert is NOT written to `CurrentUser/My`, the macOS keychain identity slot, or the .NET `my/` directory.
 
