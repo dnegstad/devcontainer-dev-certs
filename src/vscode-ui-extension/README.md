@@ -54,19 +54,17 @@ The feature declares both companion extensions and configures the container's tr
 4. ASP.NET, Aspire, and other services discover the cert automatically — no environment variables or manual configuration needed
 5. Your host browser trusts the cert on forwarded ports
 
-**On a Linux host, step 5 needs one extra command** — see below.
+**On a Linux host, browser trust goes through a separate store** — handled automatically, but see below if the browser still warns.
 
 ## Linux browser trust
 
-On Windows and macOS, trusting the certificate in the OS store is enough for browsers. You can skip this section.
+On Windows and macOS, trusting the certificate in the OS store covers browsers too. You can skip this section.
 
-On Linux, Firefox and Chromium use [NSS](https://firefox-source-docs.mozilla.org/security/nss/) for certificate trust — they do **not** read from OpenSSL trust directories or the .NET root store. Without this step, forwarded ports still show a certificate warning in the browser even though `curl` works.
+On Linux, Firefox and Chromium use [NSS](https://firefox-source-docs.mozilla.org/security/nss/) for certificate trust — they do **not** read from OpenSSL trust directories or the .NET root store. This extension imports the cert into your Chromium (`~/.pki/nssdb/`) and Firefox profile NSS databases as part of trusting it, using `certutil` (from `libnss3-tools`). Normally that just works and there's nothing to run.
 
-Run **Dev Certs: Trust Certificate in Browsers** from the Command Palette (`F1`). It:
+The NSS step is best-effort and never blocks the rest of trust: `certutil` may be missing from the `PATH`, there may be no browser profile databases yet, or the import may fail. In those cases the extension shows a warning notification with the certificate path (and a **Copy Certificate Path** action), and forwarded ports keep warning in the browser even though `curl` works.
 
-- Checks for `certutil` (from `libnss3-tools`) on the PATH
-- If available, automatically trusts the cert in Chromium (`~/.pki/nssdb/`) and Firefox profile NSS databases
-- If `certutil` is not installed or no browser databases are found, displays the certificate path so you can import it manually
+To recover, install `certutil` and retry the import with **Dev Certs: Trust Certificate in Browsers** from the Command Palette (`F1`).
 
 To install `certutil`:
 
@@ -86,7 +84,7 @@ Available from the Command Palette (`F1`):
 
 | Command | Command ID | Description |
 |---------|------------|-------------|
-| **Dev Certs: Trust Certificate in Browsers** | `devcontainer-dev-certs.trustInBrowsers` | Trust the dev cert in Firefox / Chromium NSS databases. Linux only — on Windows and macOS this reports that the OS handles browser trust automatically. |
+| **Dev Certs: Trust Certificate in Browsers** | `devcontainer-dev-certs.trustInBrowsers` | Retry the Firefox / Chromium NSS import after the automatic attempt couldn't complete. Linux only — on Windows and macOS this reports that the OS handles browser trust automatically. |
 
 The remote companion extension contributes the in-container commands (**Dev Certs: Inject Certificate into Remote** and **Dev Certs: Clean Up Other Dev Certificates in Dev Container**); they appear in the Command Palette when a Dev Container window is focused.
 
@@ -197,17 +195,16 @@ The cert is trusted in your OS certificate store:
 
 | Platform | Trust Mechanism |
 |----------|----------------|
-| Windows | Added to `CurrentUser\Root` (triggers system dialog on first use) |
-| macOS | Added to login keychain via `security add-trusted-cert` |
-| Linux | Added to .NET root store + OpenSSL trust directory + `SSL_CERT_DIR` in VS Code terminals |
+| Windows | Added to `CurrentUser\Root` with `certutil.exe -addstore`, which goes through CryptoAPI directly and shows no confirmation dialog |
+| macOS | Added to the login keychain via `security add-trusted-cert`; the keychain may ask you to authorize the trust change |
+| Linux | Added to .NET root store + OpenSSL trust directory + NSS browser databases + `SSL_CERT_DIR` in VS Code terminals |
 
-On Linux, host trust involves three layers:
+On Linux, `trustCertificate()` covers four layers:
 
 1. **.NET root store** (`~/.dotnet/corefx/cryptography/x509stores/root/`) — trusted automatically by the .NET runtime
 2. **OpenSSL trust directory** (`~/.aspnet/dev-certs/trust/`) — PEM certificate with hash symlinks for OpenSSL-based tools
 3. **`SSL_CERT_DIR` in VS Code terminals** — the extension prepends the trust directory to `SSL_CERT_DIR` in VS Code's integrated terminal environment, so `curl`, `wget`, and other CLI tools trust the cert automatically
-
-Browsers are a fourth, separate layer on Linux — see "[Linux browser trust](#linux-browser-trust)".
+4. **NSS browser databases** — Chromium and Firefox profiles, via `certutil`. Best-effort: it never blocks layers 1–3, and reports a warning notification instead of failing. See "[Linux browser trust](#linux-browser-trust)".
 
 For tools running **outside** VS Code integrated terminals (e.g., a system terminal), set `SSL_CERT_DIR` manually:
 

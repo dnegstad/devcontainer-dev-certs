@@ -56,7 +56,7 @@ Then rebuild or reopen your project in the Dev Container. The feature declares b
 
 On first use:
 
-1. The host extension shows a one-time consent prompt, then generates a development certificate and trusts it in your OS certificate store. On Windows this triggers a system dialog; on macOS the keychain may prompt for a password.
+1. The host extension shows a one-time consent prompt, then generates a development certificate and trusts it in your OS certificate store. On macOS the keychain may ask you to authorize the trust change; on Windows and Linux the import is non-interactive.
 2. The remote extension receives the certificate and installs it in the container's .NET X509 store and OpenSSL trust directory.
 3. ASP.NET, Aspire, and CLI tools like `curl` and `wget` trust the certificate automatically — no environment variables or manual configuration needed.
 4. Your host browser trusts the certificate on forwarded ports.
@@ -85,7 +85,7 @@ Then start your app and call it over HTTPS from inside the container **without**
 curl https://localhost:<port>
 ```
 
-On the host, open the forwarded port in your browser — it should show a padlock with no warning. (On Linux hosts, browsers need one extra step; see [Linux hosts: browser trust](#linux-hosts-browser-trust).)
+On the host, open the forwarded port in your browser — it should show a padlock with no warning. (On Linux hosts, browser trust goes through a separate NSS store that the extension imports into automatically; if the browser still warns, see [Linux hosts: browser trust](#linux-hosts-browser-trust).)
 
 If any of these fail, see [Troubleshooting](#troubleshooting).
 
@@ -101,15 +101,13 @@ The remote extension (`dnegstad.devcontainer-dev-certs-remote`) runs inside the 
 
 ### Linux hosts: browser trust
 
-On Windows and macOS, trusting the certificate in the OS store is enough for browsers — you can skip this section.
+On Windows and macOS, trusting the certificate in the OS store covers browsers too — you can skip this section.
 
-On Linux, Firefox and Chromium use [NSS](https://firefox-source-docs.mozilla.org/security/nss/) for certificate trust and do **not** read OpenSSL trust directories or the .NET root store. Without this step, forwarded ports still show a certificate warning in the browser even though `curl` works fine.
+On Linux, Firefox and Chromium use [NSS](https://firefox-source-docs.mozilla.org/security/nss/) for certificate trust and do **not** read OpenSSL trust directories or the .NET root store. **The host extension handles this for you:** trusting the dev cert also imports it into your Chromium (`~/.pki/nssdb/`) and Firefox profile NSS databases via `certutil` (from `libnss3-tools`). In the normal case there's nothing to do here.
 
-Run **Dev Certs: Trust Certificate in Browsers** from the Command Palette on the host. It:
+That import is best-effort and can't always complete — `certutil` may not be on the `PATH`, there may be no browser profile databases yet, or the import may fail. When that happens the extension shows a warning notification offering the certificate path, and forwarded ports keep showing a certificate warning in the browser even though `curl` works fine.
 
-- Checks for `certutil` (from `libnss3-tools`) on the `PATH`
-- If available, trusts the cert in Chromium (`~/.pki/nssdb/`) and in your Firefox profile NSS databases
-- If `certutil` is missing or no browser databases are found, shows the certificate path so you can import it manually
+To recover: install `certutil`, then re-run the import from the Command Palette with **Dev Certs: Trust Certificate in Browsers**.
 
 To install `certutil`:
 
@@ -222,7 +220,8 @@ The remote extension sets two more at runtime, and honors one:
 
 | Variable | Notes |
 |----------|-------|
-| `ASPNETCORE_Kestrel__Certificates__Default__Path` / `__Password` | Set only when `devcontainerDevCerts.defaultKestrelCertificate` names a user cert, and only for processes launched from VS Code. See "[Default Kestrel certificate (opt-in)](#default-kestrel-certificate-opt-in)". |
+| `ASPNETCORE_Kestrel__Certificates__Default__Path` | Set only when `devcontainerDevCerts.defaultKestrelCertificate` names a user cert, and only for processes launched from VS Code. See "[Default Kestrel certificate (opt-in)](#default-kestrel-certificate-opt-in)". |
+| `ASPNETCORE_Kestrel__Certificates__Default__Password` | Same conditions as `…__Path`, and only when the named entry has a `pfxPassword`. |
 | `DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY` | *Honored, not set.* Overrides the default OpenSSL trust directory (`~/.aspnet/dev-certs/trust/`), matching the official .NET `CertificateManager` behavior. |
 
 #### Why `DOTNET_GENERATE_ASPNET_CERTIFICATE=false`
@@ -342,7 +341,7 @@ So with `extraCertDestinations = /etc/nginx/certs` and a user cert named `corp-c
 
 ## Syncing a certificate from the container to the host
 
-By default the host is the source of truth: the host extension generates the ASP.NET dev cert, trusts it locally, then pushes it into every Dev Container that asks for it. That keeps the OS-level trust prompt count low — you confirm trust once on the host and every container reuses the same cert.
+By default the host is the source of truth: the host extension generates the ASP.NET dev cert, trusts it locally, then pushes it into every Dev Container that asks for it. That keeps trust prompts to a minimum — you confirm once on the host and every container reuses the same cert.
 
 Some projects flip that around: the container's own build step (or a `dotnet dev-certs https` invocation baked into the image) is the canonical generator of the cert. In that case you can opt the container in to pushing its dev cert *to* the host, so the host trusts the container's cert instead of generating its own.
 
@@ -366,7 +365,7 @@ With `syncContainerCert` enabled:
 - If a usable cert is found, the workspace extension pushes **just the public certificate** (PEM-encoded) to the host via a new IPC command. The private key never leaves the container — Kestrel keeps using its own copy of the key inside the container, and the host's job in this flow is to act purely as a trust anchor (so forwarded HTTPS ports and browser-side validation work on the host) rather than as a cert distribution point. If no usable cert is found, the push is a no-op — there's no fallback to host generation.
 - **`syncContainerCert: true` overrides the `generateDotNetCert` feature option for this container.** You don't need to also set `generateDotNetCert: false` to opt out of host generation — when the container is pushing its own cert to the host, the workspace extension drops the dotnet dev cert from its pull-from-host request automatically. (Otherwise the container would end up with both its own cert AND a different host-generated cert in its .NET store.) User-managed certificates configured via `userCertificates` are unaffected — those still flow normally.
 - The host extension independently re-validates the cert (same `isValidDevCert` rules; matches dev-cert OID, version, validity window). It then restricts SAN entries to local-only scopes by default — `localhost`, `*.localhost`, `*.dev.localhost`, `*.dev.internal`, `host.docker.internal`, `host.containers.internal`, IPv4 loopback / RFC1918 / link-local, IPv6 loopback / unique-local / link-local. A cert with SAN entries outside that set is rejected.
-- If validation passes, the host shows a one-time modal consent prompt before adding the cert to the platform trust store. The OS-level trust prompt (macOS keychain dialog, Windows MMC dialog) fires for each unique cert as usual. The cert lands in the OS trust surfaces only — the .NET root store on Linux, the login keychain's policy settings on macOS, CurrentUser/Root on Windows — never in `CurrentUser/My`, the keychain's identity slot, or the .NET store's `my/` directory. The host has nothing keyed by this thumbprint that contains a private key.
+- If validation passes, the host shows a modal consent prompt before adding the cert to the platform trust store. That consent is recorded once per host, not per certificate — accepting it covers subsequent container pushes too. Any OS-level authorization the platform requires still applies on top: on macOS the keychain may prompt when trust settings change, while on Windows and Linux the import is non-interactive. The cert lands in the OS trust surfaces only — the .NET root store on Linux, the login keychain's policy settings on macOS, CurrentUser/Root on Windows — never in `CurrentUser/My`, the keychain's identity slot, or the .NET store's `my/` directory. The host has nothing keyed by this thumbprint that contains a private key.
 
 To allow SAN entries that aren't local (rare; security-sensitive — the cert will be trusted by your host browser for the listed names), opt in explicitly:
 
@@ -378,7 +377,7 @@ To allow SAN entries that aren't local (rare; security-sensitive — the cert wi
 
 When this is on, non-local SAN entries are shown in the consent modal so you can see exactly what you're agreeing to trust.
 
-Pushes from a Dev Container without the matching feature option are ignored — the host setting on its own doesn't do anything until a container actively pushes. Host trust prompts fire per unique thumbprint, so opening multiple containers with different container-generated certs will accumulate trust prompts; this is intentional and is why the option isn't on by default.
+Pushes from a Dev Container without the matching feature option are ignored — the host setting on its own doesn't do anything until a container actively pushes. Every distinct container-generated cert still gets added to your host trust store on its own, and on macOS each of those trust changes can raise its own keychain authorization prompt — so opening several containers that each generate their own cert accumulates trust entries, and prompts on macOS. That's part of why the option isn't on by default.
 
 ## Troubleshooting
 
@@ -406,9 +405,16 @@ Running **Dev Certs: Inject Certificate into Remote** is the standard way to ret
 
 ### The browser still warns on a forwarded port
 
-- **Linux host:** browsers use NSS, not the OS/OpenSSL trust stores. Run **Dev Certs: Trust Certificate in Browsers** and restart the browser — see "[Linux hosts: browser trust](#linux-hosts-browser-trust)".
-- **Windows / macOS:** confirm you accepted the OS trust dialog on first use. If you dismissed it, the cert exists but isn't trusted — reload the window to re-trigger the flow.
-- **Any host:** if the certificate was regenerated (expiry, a new container-pushed cert), browsers may hold the old one until restarted.
+Start with the two that apply everywhere:
+
+- Confirm you accepted the extension's one-time consent prompt. If you dismissed it, no cert was generated or trusted — reload the window to re-trigger the flow.
+- If the certificate was recently regenerated (expiry, a new container-pushed cert), the browser may still be holding the old one. Restart it.
+
+Then by platform:
+
+- **Linux:** browsers read NSS, not the OS/OpenSSL trust stores. The extension imports there automatically, so a warning usually means that import couldn't complete — check for a warning notification, then install `certutil` and run **Dev Certs: Trust Certificate in Browsers** to retry. See "[Linux hosts: browser trust](#linux-hosts-browser-trust)".
+- **macOS:** the keychain may have asked you to authorize the trust change. If that was cancelled, the cert exists but isn't trusted — the **Dev Container Dev Certs** output channel will show the `security add-trusted-cert` failure.
+- **Windows:** trust is applied non-interactively with `certutil.exe`, so there's no dialog to have missed. A warning means the import itself failed; the host output channel has the `certutil` exit code.
 
 ### `curl` / `wget` fails inside the container
 
@@ -445,8 +451,8 @@ This feature applies the workaround at the end of its own install script, so com
 
 - **Auto-generated dev cert matches .NET's format only.** The `generateDotNetCert` flow produces a cert identical to `dotnet dev-certs https` (specific OID marker, subject, SAN entries). To sync differently-shaped certs (corporate CAs, custom wildcard certs, etc.), add them via the `devcontainerDevCerts.userCertificates` VS Code setting — they're copied as-is.
 - **VS Code only.** The companion extension pattern relies on VS Code's cross-host command routing, so VS Code is currently the only supported editor. Other editors (JetBrains, Vim, etc.) can't use this flow today.
-- **Host trust requires user interaction.** On Windows, trusting the auto-generated dev cert triggers a system dialog. On macOS, the keychain may prompt for a password. This only happens once and only for the .NET dev cert — user-managed certs are never added to the host OS trust store.
-- **Linux browser trust is a separate step.** Firefox and Chromium on Linux don't read the OS/OpenSSL trust stores; see "[Linux hosts: browser trust](#linux-hosts-browser-trust)".
+- **Host trust needs your consent.** The extension asks once, via a modal prompt, before generating and trusting a dev cert. On macOS the keychain may additionally ask you to authorize the trust change; on Windows and Linux the import itself is non-interactive. This applies only to the .NET dev cert — user-managed certs are never added to the host OS trust store.
+- **Linux browser trust uses a separate store.** Firefox and Chromium on Linux read NSS, not the OS/OpenSSL trust stores. The extension imports into NSS automatically, but that step needs `certutil` and existing browser profiles; when it can't complete you get a notification and have to finish it manually. See "[Linux hosts: browser trust](#linux-hosts-browser-trust)".
 
 ## Supported Platforms
 
