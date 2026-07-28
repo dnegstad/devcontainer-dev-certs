@@ -537,14 +537,6 @@ src/
     src/devcontainer-dev-certs/
       devcontainer-feature.json    Feature metadata, options, extension references
       install.sh                   Container build-time setup (directories, SSL_CERT_DIR, env)
-      scripts/setup-cert.sh        Standalone cert-install script delivered to
-                                   /usr/local/bin/ (unsupported outside the extensions)
-
-schema/
-  bundle.schema.json               JSON Schema for setup-cert.sh's bundle.json input
-
-examples/
-  manual-setup/                    Manual setup example for setup-cert.sh (unsupported)
 
 test/
   sample-project/                  Test project template (hydrated into .out/ for testing)
