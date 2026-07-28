@@ -292,6 +292,27 @@ export class CertProvider {
       await this.provisionViaConfiguredBackend();
     }
 
+    // Read the store's post-provisioning state BEFORE exporting. If the
+    // platform store's cert no longer matches the manager's in-memory
+    // cert — the dotnet backend provisions out-of-process, and external
+    // tools can remove/replace the cert between requests — the manager
+    // must reload from the store. `exportCert` short-circuits on the
+    // loaded cert, so skipping this would emit the OLD key/cert bytes
+    // under the NEW thumbprint below: a bundle whose identity doesn't
+    // match its material, leaving the container serving an untrusted
+    // cert.
+    const updatedStatus = await this.certManager.check();
+    if (
+      this.certManager.loadedThumbprint !== null &&
+      this.certManager.loadedThumbprint !== updatedStatus.thumbprint
+    ) {
+      log(
+        `Platform store cert (${updatedStatus.thumbprint ?? "none"}) differs ` +
+          `from in-memory cert (${this.certManager.loadedThumbprint}); reloading.`
+      );
+      this.certManager.invalidateLoadedCert();
+    }
+
     // mkdtempSync gives us a unique 0o700 dir in tmpdir. Combined with
     // 0o600 modes on the key/PFX writes themselves, the unencrypted key
     // material is never readable by other local users while it's on disk.
@@ -306,8 +327,6 @@ export class CertProvider {
       const pemCertPath = path.join(tmpDir, "aspnetcore-dev.pem");
       const pemKeyPath = path.join(tmpDir, "aspnetcore-dev.key");
       const rootPfxPath = path.join(tmpDir, "aspnetcore-dev-root.pfx");
-
-      const updatedStatus = await this.certManager.check();
 
       // The dotnet-dev cert is intrinsically passwordless and its canonical
       // home is the .NET store, so `pfxBase64` and `dotNetStorePfxBase64`

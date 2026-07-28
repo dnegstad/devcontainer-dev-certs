@@ -398,7 +398,13 @@ Use `postStartCommand` (not `postCreateCommand`) so the install re-runs on every
 {
     "features": {
         "ghcr.io/dnegstad/devcontainer-dev-certs/devcontainer-dev-certs:1": {
-            "installFallbackTools": true
+            "installFallbackTools": true,
+            // Mirror any extraDestinations paths from your bundle.json here.
+            // postStartCommand runs as the remote user, which can't create
+            // root-owned directories like /etc/nginx/certs — declaring them
+            // as a feature option has the privileged feature install
+            // pre-create and chown them.
+            "extraCertDestinations": "/etc/nginx/certs=pem"
         }
     },
     "mounts": [

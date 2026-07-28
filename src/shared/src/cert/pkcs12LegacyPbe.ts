@@ -141,9 +141,12 @@ export function parseLegacyPbeParams(
  * only that path is tried.
  *
  * PKCS#7 padding the cipher leaves on the plaintext is stripped by
- * Node's `decipher.final()`. A `final()` throw under both conventions
- * propagates outward — the password supplied is wrong, the file is
- * corrupt, or aspnetcore changed its export convention again.
+ * Node's `decipher.final()`. Padding validity alone doesn't identify
+ * the right convention (see the false-accept note inside), so each
+ * candidate plaintext must also look like a BER SEQUENCE before it's
+ * returned. Failure under both conventions throws — the password
+ * supplied is wrong, the file is corrupt, or aspnetcore changed its
+ * export convention again.
  */
 export function decryptLegacyPbe(
   oid: string,
@@ -164,11 +167,60 @@ export function decryptLegacyPbe(
   // Empty password: try OpenSSL convention first (matches our test
   // fixture + most real-world legacy PFXes), fall back to RFC-literal
   // (matches dotnet's macOS disk cache).
+  //
+  // A `decipher.final()` success alone is NOT proof the convention was
+  // right: valid-looking PKCS#7 padding arises from a wrong key with
+  // probability ≈ 1/256 (trailing 0x01), and the salt is random per
+  // file — so without a structural check, ~0.4% of dotnet-written
+  // cache files would garbage-pass the first attempt, fail ASN.1
+  // parsing downstream, and never reach the convention that actually
+  // decrypts them. Both plaintext shapes we ever decrypt here
+  // (SafeContents, PrivateKeyInfo) are BER SEQUENCEs, so require that
+  // before committing to a convention.
   try {
-    return tryDecrypt3DesPbe(params, ciphertext, "", true);
+    const first = tryDecrypt3DesPbe(params, ciphertext, "", true);
+    if (isPlausibleBerSequence(first)) return first;
   } catch {
-    return tryDecrypt3DesPbe(params, ciphertext, "", false);
+    // fall through to the RFC-literal convention
   }
+  const second = tryDecrypt3DesPbe(params, ciphertext, "", false);
+  if (!isPlausibleBerSequence(second)) {
+    throw new Error(
+      "Legacy 3DES decrypt produced structurally invalid output under " +
+        "both empty-password conventions — wrong password or corrupt file."
+    );
+  }
+  return second;
+}
+
+/**
+ * Structural sniff for a decrypted PKCS#12 payload: a BER/DER SEQUENCE
+ * whose encoded length is consistent with the buffer. Accepts
+ * definite-length DER (what dotnet and modern OpenSSL emit) and
+ * indefinite-length BER (0x30 0x80 … 0x00 0x00, which older OpenSSL
+ * uses for streamed SafeContents). A wrong-key decrypt that slipped
+ * past PKCS#7 padding validation passes this too with only ~2^-40
+ * probability — enough to make the convention fallback reliable.
+ */
+function isPlausibleBerSequence(buf: Buffer): boolean {
+  if (buf.length < 2 || buf[0] !== 0x30) return false;
+  const lenByte = buf[1];
+  if (lenByte === 0x80) {
+    // Indefinite length: must end with an end-of-contents marker.
+    return buf.length >= 4 && buf[buf.length - 1] === 0 && buf[buf.length - 2] === 0;
+  }
+  if (lenByte < 0x80) {
+    return buf.length === 2 + lenByte;
+  }
+  const numLenBytes = lenByte & 0x7f;
+  if (numLenBytes === 0 || numLenBytes > 4 || buf.length < 2 + numLenBytes) {
+    return false;
+  }
+  let contentLength = 0;
+  for (let i = 0; i < numLenBytes; i++) {
+    contentLength = contentLength * 256 + buf[2 + i];
+  }
+  return buf.length === 2 + numLenBytes + contentLength;
 }
 
 function tryDecrypt3DesPbe(

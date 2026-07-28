@@ -192,6 +192,27 @@ export class CertManager {
   }
 
   /**
+   * SHA-1 thumbprint of the cert currently loaded in memory, or null if
+   * none is loaded. Callers that mutate the platform store outside this
+   * manager (e.g. the dotnet backend shelling out to `dotnet dev-certs`)
+   * compare this against a fresh `check()` to detect staleness.
+   */
+  get loadedThumbprint(): string | null {
+    return this.currentCert?.thumbprint ?? null;
+  }
+
+  /**
+   * Drop the in-memory cert so the next `exportCert`/`trust` call
+   * reloads from the platform store. MUST be called after the store is
+   * modified by an out-of-process tool — `exportCert` short-circuits on
+   * the loaded cert, so exporting after an external change would
+   * otherwise emit stale key material under a fresh thumbprint.
+   */
+  invalidateLoadedCert(): void {
+    this.currentCert = null;
+  }
+
+  /**
    * Remove all dev certificates from the platform store.
    */
   async clean(): Promise<void> {

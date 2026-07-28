@@ -46,6 +46,12 @@ if [ -n "${DEVCERTS_SYSROOT}" ]; then
 fi
 ETC_ENVIRONMENT="${DEVCERTS_SYSROOT}/etc/environment"
 PROFILE_DIR="${DEVCERTS_SYSROOT}/etc/profile.d"
+# Physical destination for the fallback installer. FALLBACK_BIN_PATH stays the
+# unprefixed runtime path — it's what gets exported to /etc/environment and
+# profile.d as DEVCONTAINER_DEV_CERTS_INSTALL_BIN — while the actual `install`
+# write goes under the sysroot so the hermetic test never touches the host's
+# /usr/local/bin.
+FALLBACK_BIN_DEST="${DEVCERTS_SYSROOT}${FALLBACK_BIN_PATH}"
 
 echo "Setting up dev certificate infrastructure..."
 
@@ -141,7 +147,8 @@ fi
 # is small and inert at rest, so we always copy regardless of options —
 # only its runtime prerequisites are gated by installFallbackTools above.
 if [ -f "${FEATURE_SRC_DIR}/scripts/setup-cert.sh" ]; then
-    install -m 0755 "${FEATURE_SRC_DIR}/scripts/setup-cert.sh" "${FALLBACK_BIN_PATH}"
+    mkdir -p "$(dirname "${FALLBACK_BIN_DEST}")"
+    install -m 0755 "${FEATURE_SRC_DIR}/scripts/setup-cert.sh" "${FALLBACK_BIN_DEST}"
 else
     echo "Warning: scripts/setup-cert.sh not found under ${FEATURE_SRC_DIR}; fallback installer will not be available." >&2
 fi

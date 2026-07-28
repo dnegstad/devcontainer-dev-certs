@@ -35,8 +35,8 @@
         },
         "thumbprint": {
           "type": "string",
-          "pattern": "^[A-Fa-f0-9]+$",
-          "description": "SHA-1 fingerprint of the certificate, hex-encoded with no separators. Used as the on-disk filename in the .NET X509Store (`{thumbprint}.pfx`) where Kestrel discovers it."
+          "pattern": "^[A-Fa-f0-9]{40}$",
+          "description": "SHA-1 fingerprint of the certificate, hex-encoded with no separators (exactly 40 hex characters). Used as the on-disk filename in the .NET X509Store (`{thumbprint}.pfx`) where Kestrel discovers it — a value that isn't the cert's actual SHA-1 thumbprint (e.g. a SHA-256 digest) breaks store discovery."
         },
         "pemPath": {
           "type": "string",

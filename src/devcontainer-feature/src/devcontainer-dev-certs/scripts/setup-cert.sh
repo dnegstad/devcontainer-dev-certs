@@ -268,10 +268,19 @@ if [ "${1:-}" = "--doctor" ]; then
         for pfx in "${DOTNET_STORE_DIR}"/*.pfx; do
             [ -f "${pfx}" ] || continue
             my_count=$((my_count + 1))
-            desc=$(describe_pfx "${pfx}" 2>/dev/null) || desc="(unparseable PFX)"
-            info "$(basename "${pfx}"): ${desc}"
-            if pfx_is_expired "${pfx}"; then
-                fail "$(basename "${pfx}") has expired — Kestrel will not serve HTTPS with this cert"
+            # An unparseable PFX in My is a hard error: Kestrel constructs
+            # X509Certificate2(path, null) over exactly these files, so a
+            # file openssl can't open with an empty passphrase is one .NET
+            # can't load either. The expiry probe is skipped for it —
+            # pfx_is_expired returns "not expired" on parse failure, which
+            # would misleadingly read as healthy.
+            if desc=$(describe_pfx "${pfx}" 2>/dev/null); then
+                info "$(basename "${pfx}"): ${desc}"
+                if pfx_is_expired "${pfx}"; then
+                    fail "$(basename "${pfx}") has expired — Kestrel will not serve HTTPS with this cert"
+                fi
+            else
+                fail "$(basename "${pfx}"): unparseable PFX (openssl pkcs12 with empty passphrase failed) — Kestrel cannot load this identity"
             fi
         done
         if [ "${my_count}" -eq 0 ]; then
@@ -287,8 +296,14 @@ if [ "${1:-}" = "--doctor" ]; then
         for pfx in "${DOTNET_ROOT_STORE_DIR}"/*.pfx; do
             [ -f "${pfx}" ] || continue
             root_count=$((root_count + 1))
-            desc=$(describe_pfx "${pfx}" 2>/dev/null) || desc="(unparseable PFX)"
-            info "$(basename "${pfx}"): ${desc}"
+            # Same standard as the My store above: .NET reads this store to
+            # decide whether My's certs count as trusted, so an unparseable
+            # trust anchor must fail the doctor rather than pass as info.
+            if desc=$(describe_pfx "${pfx}" 2>/dev/null); then
+                info "$(basename "${pfx}"): ${desc}"
+            else
+                fail "$(basename "${pfx}"): unparseable PFX (openssl pkcs12 with empty passphrase failed) — .NET cannot load this trust anchor"
+            fi
         done
         if [ "${root_count}" -eq 0 ]; then
             info "no .pfx files present — .NET will not consider any of My's certs as locally trusted"
@@ -303,7 +318,10 @@ if [ "${1:-}" = "--doctor" ]; then
             pem_count=$((pem_count + 1))
             pem_name=$(basename "${pem}")
             if command -v openssl &>/dev/null; then
-                hash=$(openssl x509 -hash -noout -in "${pem}" 2>/dev/null)
+                # `|| hash=""` keeps the script-wide `set -e` from
+                # terminating the doctor on a malformed PEM — the empty
+                # value routes to the fail branch below instead.
+                hash=$(openssl x509 -hash -noout -in "${pem}" 2>/dev/null) || hash=""
                 if [ -n "${hash}" ]; then
                     # Look for at least one symlink "${hash}.N" that resolves to this PEM.
                     found_link=""

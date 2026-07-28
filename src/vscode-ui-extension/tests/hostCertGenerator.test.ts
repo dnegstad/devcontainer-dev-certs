@@ -50,6 +50,7 @@ interface ManagerSpyHandles {
   // which side of the union you mean.
   trustSpy: Mock<() => Promise<void>>;
   checkSpy: Mock<() => Promise<unknown>>;
+  invalidateSpy: Mock<() => void>;
 }
 
 /**
@@ -60,8 +61,14 @@ interface ManagerSpyHandles {
  * step. `exportCert` writes real cert files into the export dir so the
  * subsequent base64-reading + cache-population step doesn't blow up.
  */
-function buildManagerMock(cert: DevCert, key: DevKey, thumbprint: string): ManagerSpyHandles {
+function buildManagerMock(
+  cert: DevCert,
+  key: DevKey,
+  thumbprint: string,
+  opts: { staleLoadedThumbprint?: string } = {}
+): ManagerSpyHandles {
   let provisioned = false;
+  let invalidated = false;
   const status = () => ({
     exists: provisioned,
     isTrusted: provisioned,
@@ -74,9 +81,25 @@ function buildManagerMock(cert: DevCert, key: DevKey, thumbprint: string): Manag
     provisioned = true;
   });
   const checkSpy = vi.fn(async () => status());
+  const invalidateSpy = vi.fn(() => {
+    invalidated = true;
+  });
   const manager = {
     check: checkSpy,
     trust: trustSpy,
+    // Default: the mock has no in-memory cert distinct from the store,
+    // so report the store's own thumbprint (null before provisioning) —
+    // the provider's staleness comparison then sees a consistent
+    // manager. With `staleLoadedThumbprint` set, report that value
+    // until `invalidateLoadedCert` runs — simulating a manager still
+    // holding a cert the store no longer contains.
+    get loadedThumbprint() {
+      if (opts.staleLoadedThumbprint !== undefined && !invalidated) {
+        return opts.staleLoadedThumbprint;
+      }
+      return status().thumbprint;
+    },
+    invalidateLoadedCert: invalidateSpy,
     exportCert: vi.fn(
       async (format: "pfx" | "pem" | "root-pfx", outputDir: string) => {
         fs.mkdirSync(outputDir, { recursive: true });
@@ -98,7 +121,7 @@ function buildManagerMock(cert: DevCert, key: DevKey, thumbprint: string): Manag
     ),
     trustExternalCertificate: vi.fn(async () => {}),
   } as unknown as CertManager;
-  return { manager, trustSpy, checkSpy };
+  return { manager, trustSpy, checkSpy, invalidateSpy };
 }
 
 /**
@@ -212,6 +235,39 @@ describe("CertProvider.provisionViaConfiguredBackend", () => {
     expect(trustSpy).toHaveBeenCalledTimes(1);
     // (The one call we saw was from the fake generate itself, simulating
     // the dotnet side effect.)
+  });
+
+  it("invalidates the manager's stale in-memory cert after dotnet provisioning", async () => {
+    const { cert, key, thumbprint } = await makeValidCert();
+    // The manager still holds a cert that no longer exists in the
+    // platform store (removed externally). The dotnet backend then
+    // provisions a NEW cert out-of-process. Without invalidation,
+    // `exportCert` would short-circuit on the stale in-memory cert and
+    // the bundle would pair OLD key material with the NEW thumbprint.
+    const { manager, trustSpy, invalidateSpy } = buildManagerMock(
+      cert,
+      key,
+      thumbprint,
+      { staleLoadedThumbprint: "0123456789ABCDEF0123456789ABCDEF01234567" }
+    );
+    mockedSelectBackend.mockResolvedValue(
+      fakeBackend("dotnet", () => {
+        void trustSpy();
+      })
+    );
+
+    __setConfig("devcontainerDevCerts", {
+      generateDotNetCert: true,
+      hostCertGenerator: "dotnet",
+    });
+
+    const provider = new CertProvider(manager);
+    const material = await provider.getCertMaterial(true);
+
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    // The returned bundle must be keyed by the store's (new) thumbprint,
+    // not the stale in-memory one.
+    expect(material?.thumbprint).toBe(thumbprint);
   });
 
   it("propagates selectBackend errors so the user sees the failure", async () => {

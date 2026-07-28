@@ -28,11 +28,12 @@ Generate the ASP.NET dev cert and export both forms:
 
 ```bash
 dotnet dev-certs https --trust
-dotnet dev-certs https --format Pfx --no-password \
-    --export-path ~/.dev-certs/aspnetcore-dev.pfx
 dotnet dev-certs https --format PEM --no-password \
     --export-path ~/.dev-certs/aspnetcore-dev.pem
+dotnet dev-certs https --export-path ~/.dev-certs/aspnetcore-dev.pfx --password ""
 ```
+
+The PEM export writes the private key alongside as `aspnetcore-dev.key` (older SDKs used `aspnetcore-dev.pem.key` — rename it if yours does). Two PFX flag traps to avoid: `--format Pfx --no-password` is rejected as an incompatible flag combination, and a bare `--export-path x.pfx` *without* `--password ""` silently exports only the public certificate (DER, no private key) despite the `.pfx` extension — Kestrel can't serve TLS from that. The explicit `--password ""` form above produces a real passwordless PKCS#12 with the key included.
 
 Compute the SHA-1 fingerprint (this is what `bundle.json` calls `thumbprint`):
 
