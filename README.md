@@ -402,6 +402,12 @@ Both extensions log to output channels (**View → Output**, then pick the chann
 
 Failure notifications from the remote extension usually name which side to check. A failure to *obtain* certificates points at the host channel; a failure to *install* them points at the remote channel.
 
+Each sync ends with a line in the remote channel that breaks the total down by source, so a disabled option doesn't hide behind a healthy-looking count:
+
+```
+Synced 3 certificate(s) (1 auto-generated dev cert, 2 user-provided): 1 new, 2 already present
+```
+
 ### Nothing happened at all
 
 Work through these in order:
