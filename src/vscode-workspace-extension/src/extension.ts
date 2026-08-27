@@ -192,6 +192,11 @@ async function injectCertificate(
   const newInstalls: string[] = [];
   const alreadyInstalled: string[] = [];
   const failures: string[] = [];
+  // Split the synced total by source. A bare count can't distinguish "the
+  // auto-generated dev cert is off" from "it synced fine" when a user cert
+  // makes up the difference.
+  let dotNetSynced = 0;
+  let userSynced = 0;
 
   for (const material of bundle.certs) {
     try {
@@ -211,6 +216,8 @@ async function injectCertificate(
         installUserCert(material);
         newInstalls.push(material.name);
       }
+      if (material.kind === "dotnet-dev") dotNetSynced++;
+      else userSynced++;
 
       for (const dest of parsed.destinations) {
         const result = writeExtraDestination(dest, material);
@@ -238,8 +245,9 @@ async function injectCertificate(
   const processed = newInstalls.length + alreadyInstalled.length;
   if (processed > 0) {
     log(
-      `Synced ${processed} certificate(s): ${newInstalls.length} new, ` +
-        `${alreadyInstalled.length} already present` +
+      `Synced ${processed} certificate(s) ` +
+        `(${dotNetSynced} auto-generated dev cert, ${userSynced} user-provided): ` +
+        `${newInstalls.length} new, ${alreadyInstalled.length} already present` +
         (failures.length ? `, ${failures.length} failed` : "")
     );
   }
