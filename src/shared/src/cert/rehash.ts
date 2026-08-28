@@ -230,13 +230,27 @@ export function hasHashSymlink(
   if (!hash) return false;
   for (let i = 0; i < MAX_HASH_SLOTS; i++) {
     const linkPath = path.join(directory, `${hash}.${i}`);
+
+    // A slot is "missing" only when nothing is there. A regular file sitting
+    // at `{hash}.N` is OCCUPIED, not a gap: `ensureHashSymlink` steps over it
+    // and puts our link in a later slot, and OpenSSL's `by_dir` likewise
+    // processes whatever it finds and keeps walking. Reading a non-symlink
+    // with readlink raises EINVAL, so treating any error as end-of-search
+    // would stop before reaching our link and report "not linked" for a
+    // certificate that is in fact reachable.
+    let entry: fs.Stats;
+    try {
+      entry = fs.lstatSync(linkPath);
+    } catch {
+      return false; // ENOENT — a real gap, and OpenSSL stops here too.
+    }
+    if (!entry.isSymbolicLink()) continue;
+
     let target: string;
     try {
       target = fs.readlinkSync(linkPath);
     } catch {
-      // ENOENT (no more slots) or not a symlink — OpenSSL stops at the first
-      // gap too, so there is nothing further to find.
-      return false;
+      continue;
     }
     if (target === pemFileName) return true;
   }

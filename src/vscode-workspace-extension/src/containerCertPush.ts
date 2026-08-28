@@ -365,7 +365,7 @@ function reportAcceptOutcome(
       );
       void vscode.window.showWarningMessage(
         vscode.l10n.t(
-          "Dev Certs: The container's certificate is a certificate authority, not a leaf server certificate, so the host refused to trust it. Regenerate the dev certificate with 'dotnet dev-certs https' instead of using a custom CA."
+          "Dev Certs: The container's certificate is a certificate authority, or does not declare itself a leaf (no basicConstraints), so the host refused to trust it. Only leaf server certificates are accepted — regenerate with 'dotnet dev-certs https' rather than using a CA."
         )
       );
       return;
@@ -386,7 +386,7 @@ function reportAcceptOutcome(
       );
       void vscode.window.showWarningMessage(
         vscode.l10n.t(
-          "Dev Certs: The container's certificate has no usable host names in its subject alternative name extension, so the host refused to trust it."
+          "Dev Certs: The container's certificate has a subject alternative name extension the host could not use — missing, unreadable, empty, or carrying entry types other than DNS names and IP addresses — so it was not trusted."
         )
       );
       return;

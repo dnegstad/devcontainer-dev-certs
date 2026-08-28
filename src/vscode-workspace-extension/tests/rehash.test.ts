@@ -6,6 +6,7 @@ import * as path from "path";
 import {
   computeSubjectHash,
   ensureHashSymlink,
+  hasHashSymlink,
   rehashDirectory,
 } from "@devcontainer-dev-certs/shared";
 
@@ -416,6 +417,35 @@ describe("computeSubjectHash", () => {
       "hex"
     );
     expect(computeSubjectHash(certWithCn(0x1e, utf16be))).toBe("b02e8735");
+  });
+
+  it("hasHashSymlink steps over a regular file occupying a slot", () => {
+    // `ensureHashSymlink` treats a non-symlink `{hash}.N` as OCCUPIED and puts
+    // our link in a later slot; OpenSSL's `by_dir` likewise processes whatever
+    // it finds and keeps walking. Reading a regular file with readlink raises
+    // EINVAL, so treating any error as end-of-search would stop short of our
+    // link and wrongly report the certificate as unlinked — which, now that
+    // "installed" and "trusted" both consult this, means a perpetual reinstall.
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, "mycert.pem"), SAMPLE_PEM_A);
+    ensureHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A);
+    const slot0 = listHashSymlinks(dir)[0];
+
+    // Replace slot 0 with a squatting regular file and re-link into slot 1.
+    fs.unlinkSync(path.join(dir, slot0));
+    fs.writeFileSync(path.join(dir, slot0), "not-a-symlink");
+    ensureHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A);
+    expect(fs.lstatSync(path.join(dir, slot0)).isSymbolicLink()).toBe(false);
+
+    expect(hasHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A)).toBe(true);
+  });
+
+  it("hasHashSymlink stops at a genuinely missing slot", () => {
+    // A real gap is where OpenSSL stops, so we must too — otherwise the scan
+    // would keep probing past the point `by_dir` gives up.
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, "mycert.pem"), SAMPLE_PEM_A);
+    expect(hasHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A)).toBe(false);
   });
 
   it("returns null for input that isn't a certificate", () => {

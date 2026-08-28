@@ -53,6 +53,29 @@ const REAL_PEM =
   "AbsmPwy3J7t4cqo3PVPmF6mPiK7M+M0CAwEAATANBgkqhkiG9w0BAQsFAAOBgQAt\n" +
   "-----END CERTIFICATE-----\n";
 
+const ROTATED_PEM =
+  "-----BEGIN CERTIFICATE-----\n" +
+  "MIIDXzCCAkegAwIBAgIUbKzt8uWkwdhKI7QVANKvuaAuga4wDQYJKoZIhvcNAQEL\n" +
+  "BQAwPzELMAkGA1UEBhMCVVMxFjAUBgNVBAoMDUV4YW1wbGUgIE9yZyAxGDAWBgNV\n" +
+  "BAMMD01peGVkIENhc2UgTmFtZTAeFw0yNjA4MjgwMDAzNThaFw0zNjA4MjUwMDAz\n" +
+  "NThaMD8xCzAJBgNVBAYTAlVTMRYwFAYDVQQKDA1FeGFtcGxlICBPcmcgMRgwFgYD\n" +
+  "VQQDDA9NaXhlZCBDYXNlIE5hbWUwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK\n" +
+  "AoIBAQDLuNsJ2dI5mBGcGeK5lfzKA/8dY5Dunjl10gZybeKcLCUuBwIecUg4rHFR\n" +
+  "5OoH9s5UIIvOLA+aGR1gNxx4Jai3IUJtcGS67oh9Gz7F1w6hswO2y0rzXPVq0W+N\n" +
+  "mAXmEqDpRjqmS6sGHFqtQkKNtc3WRhxc42RD4FiuMuWDkq5//fEEPClg/16i16uF\n" +
+  "u/17fwq3rnJPQQbxMpxlJp/wJgJdfTNN0eypuvqRMc+4HYELcagtjOX0rBkIO3SG\n" +
+  "xXqm2uJOCyPMoxWCVZax3+tuZY4onqajxtaz1ztURlbLejxXw4DfEH2CI6VPIc7X\n" +
+  "bK/Ec5UBnyo1OVOaEcGNLIoQNjxFAgMBAAGjUzBRMB0GA1UdDgQWBBTLRAf/8wQx\n" +
+  "YLYQMDUW/g+HiamzSDAfBgNVHSMEGDAWgBTLRAf/8wQxYLYQMDUW/g+HiamzSDAP\n" +
+  "BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAbc3i28qmW6cbOwpIR\n" +
+  "OzSgg0BlyK9dOyGrfwRI44i1NEyZGM9Y8ced4AS7DgnZpuKfy54QiibCKxMzENOX\n" +
+  "kogGgoDriLdDdGfdz2zrFQvHfYa2ccieJ6NV5Bi8Mgnnx+s/DGxZN6Yz76n5/Qic\n" +
+  "eqmw7pgOMeeqGB5spiOw28INsZK5bxZEcpTyhgPUbhC3EjFp0UMNd7SFstfY7zGo\n" +
+  "H6t+jC75hgl0PivQC97LrBpzNn0EZCdzoyCUomilR5XEk+L5WIC5H8Z+LxU1hBOS\n" +
+  "ziEyIosRJFOAv0D4KYNITnCe6km2AzD+AAC5juMXFwaaDYtzmfKUsTFzGGIvC3C8\n" +
+  "9l5Y\n" +
+  "-----END CERTIFICATE-----\n";
+
 function userMaterial(overrides: Partial<CertMaterialV3> = {}): CertMaterialV3 {
   return {
     kind: "user",
@@ -244,6 +267,27 @@ describe.skipIf(process.platform === "win32")("isCertInstalled", () => {
     // Re-running the install repairs it, which is what activation will now do.
     installUserCert(userMaterial());
     expect(isCertInstalled(userMaterial())).toBe(true);
+  });
+
+  it("returns false when a user cert rotated under the same name", () => {
+    // User certs are keyed by the user-chosen `name`, not by thumbprint, so a
+    // rotated certificate lands on the same `{name}.pem`. The stale file's own
+    // hash link resolves perfectly well, so an existence check would report
+    // "installed" and the container would keep serving the superseded cert
+    // indefinitely. Content comparison is what catches it.
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+
+    const rotated = userMaterial({
+      pemCertBase64: Buffer.from(ROTATED_PEM).toString("base64"),
+    });
+    expect(isCertInstalled(rotated)).toBe(false);
+
+    installUserCert(rotated);
+    expect(isCertInstalled(rotated)).toBe(true);
+    expect(fs.readFileSync(path.join(trustDir, "corp-ca.pem"), "utf-8")).toBe(
+      ROTATED_PEM
+    );
   });
 
   it("does not demand a symlink for a PEM whose subject cannot be hashed", () => {

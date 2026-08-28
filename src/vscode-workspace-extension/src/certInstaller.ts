@@ -178,16 +178,12 @@ export function isCertInstalled(material: CertMaterialV3): boolean {
       getDotNetRootStorePath(),
       getPfxFileName(material.thumbprint)
     );
-    const pemFileName = getPemFileName(material.thumbprint);
-    const pemPath = path.join(trustDir, pemFileName);
-    if (
-      !fs.existsSync(pfxPath) ||
-      !fs.existsSync(rootPfxPath) ||
-      !fs.existsSync(pemPath)
-    ) {
-      return false;
-    }
-    return hashSymlinkSettled(trustDir, pemFileName, pemPath);
+    if (!fs.existsSync(pfxPath) || !fs.existsSync(rootPfxPath)) return false;
+    return pemInstalledAndLinked(
+      trustDir,
+      getPemFileName(material.thumbprint),
+      decodePem(material)
+    );
   }
 
   const storePfxPath = path.join(
@@ -206,36 +202,49 @@ export function isCertInstalled(material: CertMaterialV3): boolean {
     return false;
   }
   if (material.trustInContainer) {
-    const pemFileName = getPemFileNameForUser(material.name);
-    const pemPath = path.join(trustDir, pemFileName);
-    if (!fs.existsSync(pemPath)) return false;
-    if (!hashSymlinkSettled(trustDir, pemFileName, pemPath)) return false;
+    return pemInstalledAndLinked(
+      trustDir,
+      getPemFileNameForUser(material.name),
+      decodePem(material)
+    );
   }
   return true;
 }
 
+function decodePem(material: CertMaterialV3): string {
+  return Buffer.from(material.pemCertBase64, "base64").toString("utf-8");
+}
+
 /**
- * True when the installed PEM's hash symlink is in its final state — either it
- * resolves, or no hash can be derived from the file at all.
+ * True when the trust directory already holds exactly this certificate under
+ * `pemFileName`, with a hash symlink OpenSSL can resolve to it.
  *
- * The second case matters: `ensureHashSymlink` is a no-op for a PEM whose
- * subject won't parse, so reporting "not installed" for one would re-run the
- * install on every activation without ever changing anything. Only a PEM we
- * CAN hash, yet have no link for, indicates a repair worth making.
+ * Compares content, not just existence, because user certs are keyed by the
+ * user-chosen `name` rather than by thumbprint: rotating the certificate while
+ * keeping the same name leaves a stale `{name}.pem` whose own hash link
+ * resolves perfectly well, so an existence check would report "installed" and
+ * the container would go on serving the superseded certificate indefinitely.
+ * (The dotnet-dev PEM is thumbprint-keyed, so rotation changes its filename —
+ * comparing content there is merely consistent rather than load-bearing.)
+ *
+ * A PEM whose subject can't be hashed counts as settled: `ensureHashSymlink`
+ * is a no-op for it, so demanding a link would re-run the install on every
+ * activation and never converge.
  */
-function hashSymlinkSettled(
+function pemInstalledAndLinked(
   trustDir: string,
   pemFileName: string,
-  pemPath: string
+  expectedPem: string
 ): boolean {
-  let pem: string;
+  let onDisk: string;
   try {
-    pem = fs.readFileSync(pemPath, "utf-8");
+    onDisk = fs.readFileSync(path.join(trustDir, pemFileName), "utf-8");
   } catch {
     return false;
   }
-  if (computeSubjectHash(pem) === null) return true;
-  return hasHashSymlink(trustDir, pemFileName, pem);
+  if (onDisk !== expectedPem) return false;
+  if (computeSubjectHash(onDisk) === null) return true;
+  return hasHashSymlink(trustDir, pemFileName, onDisk);
 }
 
 /**
