@@ -66,6 +66,10 @@ export type AcceptContainerCertRejectReason =
   | "host-setting-disabled"
   | "user-declined"
   | "parse-failed"
+  // The cert parsed and validated; establishing trust on the host failed.
+  // Kept distinct from `parse-failed` so the container can tell the user
+  // something true — the two have entirely different remedies.
+  | "trust-failed"
   | "not-valid-dev-cert"
   /**
    * basicConstraints says cA=TRUE, or is absent so we can't tell. Trusting
@@ -384,13 +388,26 @@ async function acceptContainerDevCertInner(
     }
   }
 
-  // Run the trust step BEFORE persisting consent. If trustCertificate
-  // throws (macOS keychain dialog cancelled, NSS DB not writable, etc.)
-  // we let the outer try/catch convert it to `parse-failed` — and
-  // crucially the consent stays UN-persisted, so the next push retries
-  // the modal prompt with the same fresh state instead of silently
-  // re-trying trust without UX.
-  await deps.trustCertificate(parsed);
+  // Run the trust step BEFORE persisting consent, so that when it fails the
+  // consent stays UN-persisted and the next push retries the modal prompt
+  // with the same fresh state instead of silently re-trying trust without UX.
+  //
+  // Caught here rather than left to the outer handler: the certificate has
+  // already parsed and validated by this point, so a failure now is an
+  // install/trust failure, not a parse failure. Letting it fall through
+  // reported a cancelled macOS keychain dialog — or an `ensureHashSymlink`
+  // slot exhaustion, which throws as of this branch — to the user as "the
+  // host could not parse the certificate", which is both wrong and
+  // un-actionable.
+  try {
+    await deps.trustCertificate(parsed);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(
+      `acceptContainerDevCert: trusting ${parsed.thumbprint} on host failed: ${message}`
+    );
+    return { accepted: false, reason: "trust-failed", detail: message };
+  }
 
   if (consent === "unset") {
     await deps.recordConsent("granted");

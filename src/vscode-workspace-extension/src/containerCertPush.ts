@@ -26,9 +26,11 @@ export interface AcceptContainerCertResult {
    * on the host; `user-declined` means the consent prompt was rejected;
    * `non-local-sans` / `malformed-sans` / `parse-failed` /
    * `not-valid-dev-cert` / `not-a-leaf-cert` / `unsupported-eku` describe
-   * server-side validation outcomes. An older host extension can only ever
-   * send the original five; a newer one can send codes this build doesn't
-   * know, which `reportAcceptOutcome`'s `default` branch handles.
+   * server-side validation outcomes; `trust-failed` means the cert passed
+   * every check and the host's trust step itself failed. An older host
+   * extension can only ever send the original five; a newer one can send
+   * codes this build doesn't know, which `reportAcceptOutcome`'s `default`
+   * branch handles.
    */
   reason?:
     | "host-setting-disabled"
@@ -38,7 +40,8 @@ export interface AcceptContainerCertResult {
     | "not-a-leaf-cert"
     | "unsupported-eku"
     | "malformed-sans"
-    | "non-local-sans";
+    | "non-local-sans"
+    | "trust-failed";
   /** Free-form supplemental detail (e.g. the offending SAN entries). */
   detail?: string;
 }
@@ -366,6 +369,21 @@ function reportAcceptOutcome(
       void vscode.window.showWarningMessage(
         vscode.l10n.t(
           "Dev Certs: The container's certificate is a certificate authority, or does not declare itself a leaf (no basicConstraints), so the host refused to trust it. Only leaf server certificates are accepted — regenerate with 'dotnet dev-certs https' rather than using a CA."
+        )
+      );
+      return;
+    case "trust-failed":
+      // Not a rejection: the host accepted the certificate and then failed
+      // to install it. Distinct from `parse-failed` because the remedy is
+      // completely different — retry the trust prompt, free a hash slot,
+      // fix directory permissions — and none of it involves the cert we
+      // sent, which was fine.
+      log(
+        `Container cert sync: host validated ${thumbprint} but could not establish trust${detail}.`
+      );
+      void vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          "Dev Certs: The host accepted the container's dev certificate but could not add it to its trust stores. The certificate itself is fine — check the host's Dev Container Dev Certs output for the underlying error."
         )
       );
       return;

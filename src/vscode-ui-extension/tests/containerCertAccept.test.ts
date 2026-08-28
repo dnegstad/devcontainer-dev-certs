@@ -432,12 +432,36 @@ describe("acceptContainerDevCert", () => {
       { pemCertBase64, thumbprint },
       deps
     );
-    // The outer try/catch maps the throw to parse-failed.
     expect(result.accepted).toBe(false);
-    expect(result.reason).toBe("parse-failed");
+    // Reported as a trust failure, not a parse failure: the cert parsed and
+    // validated, so telling the user it was unreadable would be false and
+    // point them at the wrong remedy.
+    expect(result.reason).toBe("trust-failed");
+    expect(result.detail).toContain("simulated trust failure");
     expect(deps.promptUser).toHaveBeenCalledTimes(1);
     // KEY ASSERTION: consent was NOT persisted.
     expect(deps.recordConsent).not.toHaveBeenCalled();
+  });
+
+  it("reports trust-failed for an already-consented push whose trust step fails", async () => {
+    // The consented path skips the modal entirely, so this is the branch a
+    // returning user hits — e.g. `ensureHashSymlink` throwing on slot
+    // exhaustion, which this branch made a thrown error rather than a
+    // silent no-op. It must not surface as "could not parse".
+    const { pemCertBase64, thumbprint } = await makeDevPem();
+    const deps = makeDeps({
+      readConsent: () => "granted" as const,
+      trustCertificate: vi.fn(async () => {
+        throw new Error("no free hash slot");
+      }),
+    });
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("trust-failed");
+    expect(deps.promptUser).not.toHaveBeenCalled();
   });
 });
 

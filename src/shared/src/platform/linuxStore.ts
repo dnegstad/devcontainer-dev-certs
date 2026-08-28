@@ -5,7 +5,11 @@ import { trustInNss, type NssTrustResult } from "./nssTrust";
 import { type LinuxNssTrustReporter, type BaseStoreOptions } from "./types";
 import { type DevCert, type DevKey } from "../cert/types";
 import { buildPfx } from "../cert/pfx";
-import { ensureHashSymlink, hasHashSymlink } from "../cert/rehash";
+import {
+  computeSubjectHash,
+  ensureHashSymlink,
+  hasHashSymlink,
+} from "../cert/rehash";
 import {
   getDotNetStorePath,
   getDotNetRootStorePath,
@@ -143,11 +147,31 @@ export class LinuxCertificateStore extends BaseCertificateStore {
       this.dotNetRootStorePath,
       `${thumbprint}.pfx`
     );
-    return Promise.resolve(
-      fs.existsSync(pemPath) &&
-        fs.existsSync(rootPfxPath) &&
-        hasHashSymlink(trustDir, pemFileName, cert.pem)
-    );
+    // The PEM's *contents* are checked, not just its existence. The filename
+    // is thumbprint-derived, so a different cert lands elsewhere — but a
+    // truncated or externally-rewritten file keeps the name, and a name-only
+    // check would report trust for bytes OpenSSL cannot load. The link is
+    // then resolved against what is actually on disk rather than against
+    // `cert.pem`, so a stale link can't vouch for replaced content. This
+    // mirrors `pemInstalledAndLinked` in the workspace extension's
+    // `certInstaller.ts`; the two sides of the same trust dir should not
+    // disagree about what "installed" means.
+    if (!fs.existsSync(rootPfxPath)) return Promise.resolve(false);
+
+    let onDisk: string;
+    try {
+      onDisk = fs.readFileSync(pemPath, "utf-8");
+    } catch {
+      return Promise.resolve(false);
+    }
+    if (onDisk !== cert.pem) return Promise.resolve(false);
+
+    // A subject we can't hash gets no symlink from `ensureHashSymlink`
+    // either, so demanding one would re-trust on every activation and never
+    // converge. Same carve-out, same reason, as the workspace side.
+    if (computeSubjectHash(onDisk) === null) return Promise.resolve(true);
+
+    return Promise.resolve(hasHashSymlink(trustDir, pemFileName, onDisk));
   }
 
   // --- Linux-specific trust helpers ---

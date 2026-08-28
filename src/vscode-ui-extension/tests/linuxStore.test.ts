@@ -192,6 +192,39 @@ describe("LinuxCertificateStore", () => {
       expect(await store.isCertTrusted(cert)).toBe(true);
     });
 
+    it("reports NOT trusted when the PEM on disk no longer matches the cert", async () => {
+      // The filename is thumbprint-derived, so a *different* cert can't land
+      // here — but the file can still be truncated or rewritten in place
+      // while the hash link and root PFX survive. Checking only the name
+      // would report trust for bytes OpenSSL cannot load, and
+      // trustExternalCertificate's short-circuit would skip the repair.
+      const { cert, thumbprint } = await makeTestCert();
+      await store.trustCertificate(cert);
+      expect(await store.isCertTrusted(cert)).toBe(true);
+
+      const pemPath = path.join(
+        testTrustDir,
+        `aspnetcore-localhost-${thumbprint}.pem`
+      );
+      fs.writeFileSync(
+        pemPath,
+        "-----BEGIN CERTIFICATE-----\ntruncated\n"
+      );
+
+      // Link and root PFX are untouched — only the content changed.
+      const links = fs
+        .readdirSync(testTrustDir)
+        .filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+      expect(links).toHaveLength(1);
+      expect(fs.existsSync(path.join(testRootStoreDir, `${thumbprint}.pfx`))).toBe(true);
+
+      expect(await store.isCertTrusted(cert)).toBe(false);
+
+      // Re-trusting rewrites the PEM and restores trust.
+      await store.trustCertificate(cert);
+      expect(await store.isCertTrusted(cert)).toBe(true);
+    });
+
     it("is purely additive — does NOT remove other aspnetcore-localhost-*.pem files in the trust dir", async () => {
       // Pin the post-fix contract: trustCertificate must never remove or
       // modify other dev cert PEMs that happen to share the
