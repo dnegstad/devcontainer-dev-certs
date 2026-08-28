@@ -42,6 +42,33 @@ function nicknameFor(pemPath: string): string {
 
 type NssTargetKind = "chromium-shared" | "firefox-profiles";
 
+/**
+ * NSS SSL trust flag, chosen per browser family.
+ *
+ * The cert we add is a self-signed **end entity** (`generateCertificate`
+ * emits `basicConstraints` `cA=FALSE`), not a CA, so the honest encoding is
+ * `P` — `CERTDB_TRUSTED`, "trusted peer", consulted when the cert *is* the
+ * certificate being validated. `C` is `CERTDB_TRUSTED_CA`, consulted only
+ * when the cert sits in an *issuer* position, which ours never does.
+ *
+ * Firefox is the exception, and it's an empirical one: it does not honour
+ * `P` for server certs, so `C` is what actually produces trust there. This
+ * mirrors `dotnet dev-certs https --trust`, whose `UnixCertificateManager`
+ * makes the same split (`usage = nssDb.IsFirefox ? "C" : "P"`) with the
+ * comment "Firefox doesn't seem to respected the more correct 'trusted
+ * peer' (P) usage". Microsoft validated that against real browsers; we
+ * follow it rather than re-deriving it.
+ *
+ * Sending `C` to a Chromium DB does not work: `certutil -V -u V` rejects
+ * such an entry with "Issuer certificate is invalid", because nothing ever
+ * consults the CA bit for an end entity. dotnet's own verify step encodes
+ * the same asymmetry — it runs `-V -u V` for Chromium but only `-L`
+ * (existence) for Firefox, since `-V` cannot pass under `C`.
+ */
+function trustFlagsFor(kind: NssTargetKind): string {
+  return kind === "firefox-profiles" ? "C,," : "P,,";
+}
+
 interface NssTarget {
   label: string;
   kind: NssTargetKind;
@@ -215,7 +242,12 @@ async function scanChromiumShared(
     log(`NSS scan: ${target.label} not present at ${target.root}, skipping.`);
     return;
   }
-  const r = await trustInNssDb(`sql:${target.root}`, pemPath, nickname);
+  const r = await trustInNssDb(
+    `sql:${target.root}`,
+    pemPath,
+    nickname,
+    target.kind
+  );
   outcomes.push({
     label: target.label,
     ok: r.exitCode === 0,
@@ -258,7 +290,12 @@ async function scanFirefoxProfiles(
 
   for (const profile of profiles) {
     const dbPath = path.join(target.root, profile);
-    const r = await trustInNssDb(`sql:${dbPath}`, pemPath, nickname);
+    const r = await trustInNssDb(
+      `sql:${dbPath}`,
+      pemPath,
+      nickname,
+      target.kind
+    );
     outcomes.push({
       label: `${target.label} (${profile})`,
       ok: r.exitCode === 0,
@@ -270,7 +307,8 @@ async function scanFirefoxProfiles(
 async function trustInNssDb(
   dbArg: string,
   pemPath: string,
-  nickname: string
+  nickname: string,
+  kind: NssTargetKind
 ): Promise<{ exitCode: number; stderr: string }> {
   // Drop the shared nickname older versions used, so upgrading doesn't leave
   // a cert permanently trusted under a name we no longer manage. Skipped when
@@ -284,12 +322,16 @@ async function trustInNssDb(
   // that's the common case and not an error.
   await runProcess("certutil", ["-D", "-d", dbArg, "-n", nickname]);
 
+  // The deletes above also migrate an entry written by an older version
+  // under different flags: `certutil -A` does not rewrite the trust string
+  // of an existing nickname, so delete-then-add is what actually moves a
+  // Chromium DB off the previous blanket `CT,,`.
   const result = await runProcess("certutil", [
     "-A",
     "-d",
     dbArg,
     "-t",
-    "CT,,",
+    trustFlagsFor(kind),
     "-n",
     nickname,
     "-i",

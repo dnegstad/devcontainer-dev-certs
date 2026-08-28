@@ -62,7 +62,7 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
     // Add the cert
     const addResult = await runProcess("certutil", [
       "-A", "-d", `sql:${nssDbDir}`,
-      "-t", "CT,,",
+      "-t", "P,,",
       "-n", certName,
       "-i", pemPath,
     ]);
@@ -82,7 +82,7 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
     // Add the cert
     await runProcess("certutil", [
       "-A", "-d", `sql:${nssDbDir}`,
-      "-t", "CT,,", "-n", certName, "-i", pemPath,
+      "-t", "P,,", "-n", certName, "-i", pemPath,
     ]);
 
     // Delete it
@@ -94,7 +94,7 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
     // Re-add it
     const readdResult = await runProcess("certutil", [
       "-A", "-d", `sql:${nssDbDir}`,
-      "-t", "CT,,", "-n", certName, "-i", pemPath,
+      "-t", "P,,", "-n", certName, "-i", pemPath,
     ]);
     expect(readdResult.exitCode).toBe(0);
 
@@ -105,19 +105,46 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
     expect(listResult.stdout).toContain(certName);
   });
 
-  it("certificate is trusted with CT flags after import", async () => {
+  it("stores the trust flags it was given", async () => {
     const certName = "Trust Flags Test";
 
     await runProcess("certutil", [
       "-A", "-d", `sql:${nssDbDir}`,
-      "-t", "CT,,", "-n", certName, "-i", pemPath,
+      "-t", "P,,", "-n", certName, "-i", pemPath,
     ]);
 
     // List with details to check trust flags
     const listResult = await runProcess("certutil", [
       "-L", "-d", `sql:${nssDbDir}`,
     ]);
-    expect(listResult.stdout).toContain("CT");
+    expect(listResult.stdout).toContain("P,,");
+  });
+
+  // The reason `trustFlagsFor` sends `P` to Chromium-family databases. Our
+  // cert is a self-signed end entity (cA=FALSE), so the CA trust bit is
+  // never consulted for it and `C` yields a cert NSS refuses to validate.
+  // This is the regression guard for the blanket `CT,,` we used to send to
+  // every database — Chromium's included. Firefox is deliberately not
+  // covered: it ignores `P` and needs `C`, which by construction cannot
+  // pass `-V`, which is why dotnet's own check is existence-only there.
+  it("only the peer trust flag makes the dev cert usable for server auth", async () => {
+    const verifyWith = async (flags: string): Promise<number> => {
+      const db = path.join(tmpDir, `verify-${flags.replace(/,/g, "")}`);
+      fs.mkdirSync(db, { recursive: true });
+      execFileSync("certutil", ["-N", "-d", `sql:${db}`, "--empty-password"]);
+      await runProcess("certutil", [
+        "-A", "-d", `sql:${db}`,
+        "-t", flags, "-n", "Dev Container Dev Cert", "-i", pemPath,
+      ]);
+      // -u V is server-auth usage; the same check dotnet runs on Chromium DBs.
+      const r = await runProcess("certutil", [
+        "-V", "-d", `sql:${db}`, "-n", "Dev Container Dev Cert", "-u", "V",
+      ]);
+      return r.exitCode;
+    };
+
+    expect(await verifyWith("P,,")).toBe(0);
+    expect(await verifyWith("CT,,")).not.toBe(0);
   });
 
   it("trustInNss finds and trusts in a Chromium-style NSS database", async () => {
@@ -144,7 +171,7 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
     ]);
     const addResult = await runProcess("certutil", [
       "-A", "-d", `sql:${chromiumNssDir}`,
-      "-t", "CT,,", "-n", certName, "-i", pemPath,
+      "-t", "P,,", "-n", certName, "-i", pemPath,
     ]);
     expect(addResult.exitCode).toBe(0);
 
@@ -153,7 +180,7 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
       "-L", "-d", `sql:${chromiumNssDir}`,
     ]);
     expect(listResult.stdout).toContain(certName);
-    expect(listResult.stdout).toContain("CT");
+    expect(listResult.stdout).toContain("P,,");
   });
 
   it("delete of non-existent cert does not fail the add", async () => {
@@ -169,7 +196,7 @@ describe.skipIf(!certutilAvailable)("NSS trust (integration)", () => {
     // Add should still succeed
     const addResult = await runProcess("certutil", [
       "-A", "-d", `sql:${nssDbDir}`,
-      "-t", "CT,,", "-n", certName, "-i", pemPath,
+      "-t", "P,,", "-n", certName, "-i", pemPath,
     ]);
     expect(addResult.exitCode).toBe(0);
   });

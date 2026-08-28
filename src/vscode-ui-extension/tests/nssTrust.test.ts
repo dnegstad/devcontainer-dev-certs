@@ -139,7 +139,7 @@ describe("trustInNss", () => {
       (call) => call[0] === "certutil" && call[1].includes("-A")
     );
     expect(addCall).toBeDefined();
-    expect(addCall![1]).toContain("CT,,");
+    expect(addCall![1]).toContain("P,,");
     expect(addCall![1]).toContain(pemPath);
     expect(addCall![1]).toContain(`sql:${nssDir}`);
   });
@@ -259,6 +259,51 @@ describe("trustInNss", () => {
     const addCall = mockedRunProcess.mock.calls[2];
     expect(addCall[0]).toBe("certutil");
     expect(addCall[1]).toContain("-A");
+  });
+
+  // The cert is a self-signed end entity (cA=FALSE), so `P` (CERTDB_TRUSTED,
+  // "trusted peer") is the correct NSS encoding — except in Firefox, which
+  // empirically ignores `P` for server certs. `dotnet dev-certs https
+  // --trust` makes exactly this split, and Microsoft validated it against
+  // real browsers. A blanket flag is wrong for one family either way.
+  it("uses trusted-peer (P,,) for Chromium databases", async () => {
+    makeNssDb(".pki", "nssdb");
+    whichOk();
+    certutilOk(2);
+
+    await trustInNss(pemPath);
+
+    const addCall = mockedRunProcess.mock.calls[2];
+    expect(addCall[1]).toContain("-A");
+    expect(addCall[1][addCall[1].indexOf("-t") + 1]).toBe("P,,");
+  });
+
+  it("uses trusted-CA (C,,) for Firefox profiles", async () => {
+    makeNssDb(".mozilla", "firefox", "flags.profile");
+    whichOk();
+    certutilOk(2);
+
+    await trustInNss(pemPath);
+
+    const addCall = mockedRunProcess.mock.calls[2];
+    expect(addCall[1]).toContain("-A");
+    expect(addCall[1][addCall[1].indexOf("-t") + 1]).toBe("C,,");
+  });
+
+  it("picks the flag per database when both families are present", async () => {
+    makeNssDb(".pki", "nssdb");
+    makeNssDb(".mozilla", "firefox", "both.default");
+    whichOk();
+    certutilOk(4);
+
+    await trustInNss(pemPath);
+
+    // getNssTargets is ordered Chromium-family first, so calls 2 and 4 are
+    // the two `-A` invocations (each preceded by its idempotency delete).
+    const chromiumAdd = mockedRunProcess.mock.calls[2];
+    const firefoxAdd = mockedRunProcess.mock.calls[4];
+    expect(chromiumAdd[1][chromiumAdd[1].indexOf("-t") + 1]).toBe("P,,");
+    expect(firefoxAdd[1][firefoxAdd[1].indexOf("-t") + 1]).toBe("C,,");
   });
 
   it("handles native Chromium and Firefox in a single call", async () => {
