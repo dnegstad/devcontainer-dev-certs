@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
-import { Extension, SubjectAlternativeNameExtension, X509CertificateGenerator, cryptoProvider, } from "@peculiar/x509";
+import { BasicConstraintsExtension, ExtendedKeyUsage, ExtendedKeyUsageExtension, Extension, SubjectAlternativeNameExtension, X509CertificateGenerator, cryptoProvider, } from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 import {
   DevCert,
+  generateCertificate,
   ASPNET_HTTPS_OID,
   CURRENT_CERTIFICATE_VERSION,
   SAN_DNS_NAMES,
   SAN_IP_ADDRESSES,
+  VALIDITY_DAYS,
 } from "@devcontainer-dev-certs/shared";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { acceptContainerDevCert, type AcceptContainerCertDeps, type AcceptContainerCertPayload, } from "../src/containerCertAccept";
@@ -20,7 +22,14 @@ interface MakeDevCertOptions {
   notBefore?: Date;
   notAfter?: Date;
   sans?: { type: "dns" | "ip"; value: string }[];
+  omitSanExtension?: boolean;
   omitOid?: boolean;
+  /** basicConstraints cA value. Default false (a leaf), like a real dev cert. */
+  ca?: boolean;
+  /** Drop basicConstraints entirely. */
+  omitBasicConstraints?: boolean;
+  /** EKU OIDs. Default [serverAuth]. `null` drops the extension. */
+  eku?: string[] | null;
 }
 
 /**
@@ -47,9 +56,27 @@ async function makeDevPem(
     ...SAN_DNS_NAMES.map((d) => ({ type: "dns" as const, value: d })),
     ...SAN_IP_ADDRESSES.map((ip) => ({ type: "ip" as const, value: ip })),
   ];
-  const extensions: Extension[] = [
-    new SubjectAlternativeNameExtension(sans, true),
-  ];
+  // Default to the shape a genuine ASP.NET dev cert has: a leaf
+  // (basicConstraints cA=FALSE, critical) scoped to server authentication.
+  // Both are required by `validateLeafTrustShape`, so the happy-path fixture
+  // has to carry them or every test would exercise a rejection.
+  const extensions: Extension[] = [];
+  if (!opts.omitSanExtension) {
+    extensions.push(new SubjectAlternativeNameExtension(sans, true));
+  }
+  if (!opts.omitBasicConstraints) {
+    extensions.push(
+      new BasicConstraintsExtension(opts.ca ?? false, undefined, true)
+    );
+  }
+  if (opts.eku !== null) {
+    extensions.push(
+      new ExtendedKeyUsageExtension(
+        opts.eku ?? [ExtendedKeyUsage.serverAuth],
+        true
+      )
+    );
+  }
   if (!opts.omitOid) {
     extensions.push(
       new Extension(
@@ -385,5 +412,183 @@ describe("acceptContainerDevCert end-to-end against a generated dev cert", () =>
       thumbprint: string;
     };
     expect(trusted.thumbprint).toBe(thumbprint);
+  });
+});
+
+/**
+ * The SAN-local restriction only constrains a certificate that can
+ * authenticate ONLY itself. A CA's own SANs place no limit on what it may
+ * issue, so a CA with `localhost` SANs sails through `validateLocalSans` and
+ * — once the host puts it in `CurrentUser\Root` / the login keychain / the
+ * OpenSSL CApath / NSS with the `C` flag — can mint a leaf for any name it
+ * likes. These tests pin the gate that closes that.
+ */
+describe("acceptContainerDevCert trust-anchor shape gate", () => {
+  it("refuses a CA certificate even when every SAN is local", async () => {
+    const { pemCertBase64, thumbprint } = await makeDevPem({ ca: true });
+    const deps = makeDeps();
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("not-a-leaf-cert");
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+    expect(deps.promptUser).not.toHaveBeenCalled();
+  });
+
+  it("refuses a CA certificate even with allowNonLocalContainerCertSans on", async () => {
+    // The override relaxes SAN *scope*. It must not be readable as "trust
+    // whatever this container sends" — a CA is a different question entirely.
+    const { pemCertBase64, thumbprint } = await makeDevPem({ ca: true });
+    const deps = makeDeps({ allowNonLocalSans: true });
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("not-a-leaf-cert");
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a certificate with no basicConstraints (cA is unanswerable)", async () => {
+    const { pemCertBase64, thumbprint } = await makeDevPem({
+      omitBasicConstraints: true,
+    });
+    const deps = makeDeps();
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("not-a-leaf-cert");
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a certificate with no extendedKeyUsage", async () => {
+    // Absent EKU reads as "any purpose"; Windows `certutil -addstore Root`
+    // applies no policy constraint of its own, so the cert would be trusted
+    // well beyond TLS.
+    const { pemCertBase64, thumbprint } = await makeDevPem({ eku: null });
+    const deps = makeDeps();
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("unsupported-eku");
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+  });
+
+  it("refuses anyExtendedKeyUsage, which re-opens 'any purpose'", async () => {
+    const { pemCertBase64, thumbprint } = await makeDevPem({
+      eku: ["2.5.29.37.0"],
+    });
+    const deps = makeDeps();
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("unsupported-eku");
+  });
+
+  it("refuses an EKU that omits serverAuth", async () => {
+    const { pemCertBase64, thumbprint } = await makeDevPem({
+      eku: ["1.3.6.1.5.5.7.3.3"], // codeSigning
+    });
+    const deps = makeDeps();
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("unsupported-eku");
+  });
+
+  it("accepts an EKU carrying serverAuth alongside other specific usages", async () => {
+    // Only anyExtendedKeyUsage is refused; extra concrete usages such as
+    // clientAuth are tolerated so the check isn't brittle.
+    const { pemCertBase64, thumbprint } = await makeDevPem({
+      eku: ["1.3.6.1.5.5.7.3.1", "1.3.6.1.5.5.7.3.2"],
+    });
+    const deps = makeDeps();
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(true);
+    expect(deps.trustCertificate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("acceptContainerDevCert structural SAN gate", () => {
+  it("refuses a certificate with no SAN extension", async () => {
+    const { pemCertBase64, thumbprint } = await makeDevPem({
+      omitSanExtension: true,
+    });
+    const deps = makeDeps();
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("malformed-sans");
+    expect(result.detail).toContain("missing");
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+  });
+
+  it("allowNonLocalContainerCertSans does NOT override a structural SAN failure", async () => {
+    // The override is a statement about scope — "yes, I mean to trust this
+    // cert for that name". It can't mean anything about a certificate whose
+    // names we were unable to read at all.
+    const { pemCertBase64, thumbprint } = await makeDevPem({
+      omitSanExtension: true,
+    });
+    const deps = makeDeps({ allowNonLocalSans: true });
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("malformed-sans");
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+  });
+});
+
+describe("acceptContainerDevCert accepts what this project actually generates", () => {
+  it("a cert straight from generateCertificate passes every gate", async () => {
+    // The gates above reject a cert that isn't a server-auth leaf with a
+    // local-only dNSName/iPAddress SAN set. That description is supposed to
+    // be exactly the certificate this project produces — and exactly what
+    // `dotnet dev-certs https` produces, which `generateCertificate` mirrors
+    // field for field. Driving the real generator (rather than the fixture
+    // factory above) means any future divergence between what we emit and
+    // what we're willing to trust fails here instead of in someone's
+    // container.
+    const now = new Date();
+    const { cert } = await generateCertificate(
+      now,
+      new Date(now.getTime() + VALIDITY_DAYS * 86400_000)
+    );
+    const payload: AcceptContainerCertPayload = {
+      pemCertBase64: Buffer.from(cert.pem, "utf-8").toString("base64"),
+      thumbprint: cert.thumbprintSha1,
+    };
+    const deps = makeDeps();
+
+    const result = await acceptContainerDevCert(payload, deps);
+
+    expect(result).toEqual({ accepted: true });
+    expect(deps.trustCertificate).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { X509Certificate } from "node:crypto";
+import { generateSerialNumber } from "@devcontainer-dev-certs/shared/src/cert/generator";
 import {
   generateCertificate,
   isValidDevCert,
@@ -95,6 +96,25 @@ describe("generateCertificate", () => {
     expect(serial).toMatch(/^[0-9a-f]+$/);
     const firstNibble = parseInt(serial[0], 16);
     expect(firstNibble).toBeLessThanOrEqual(7);
+    // Full 16 bytes: a leading 0x00 would be dropped from this readback (DER
+    // keeps it as sign padding, `cert.serialNumber` does not), which is
+    // exactly the case `generateSerialNumber` now rejects.
+    expect(serial).toHaveLength(32);
+  });
+
+  it("never emits a serial needing DER sign padding (10k samples)", async () => {
+    // This used to fail about one run in 256: `bytes[0] &= 0x7f` can leave
+    // 0x00, DER retains that byte as sign padding, and the textual readback
+    // drops it — so the serial appeared to start at or above 0x80 and the
+    // assertion above flaked. Sampled directly rather than through
+    // generateCertificate, which would mean 10k RSA keygens.
+    for (let i = 0; i < 10_000; i++) {
+      const serial = generateSerialNumber();
+      expect(serial).toHaveLength(32);
+      const leading = parseInt(serial.slice(0, 2), 16);
+      expect(leading).toBeGreaterThanOrEqual(0x01);
+      expect(leading).toBeLessThanOrEqual(0x7f);
+    }
   });
 
   it("produces an uppercase hex SHA-1 thumbprint on GeneratedCert", async () => {

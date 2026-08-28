@@ -54,11 +54,16 @@ export {
   getCertificateVersion,
   computeThumbprint,
   validateLocalSans,
-  collectSanEntries,
+  scanSanEntries,
+  validateLeafTrustShape,
 } from "./cert/validation";
 export type {
   NonLocalSanEntry,
   SanLocalValidationResult,
+  SanRejectReason,
+  SanScanResult,
+  LeafTrustShapeResult,
+  LeafTrustRejectReason,
 } from "./cert/validation";
 export {
   classifyCandidate,

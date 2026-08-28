@@ -2,6 +2,7 @@ import {
   DevCert,
   isValidDevCert,
   log,
+  validateLeafTrustShape,
   validateLocalSans,
 } from "@devcontainer-dev-certs/shared";
 import type { NonLocalSanEntry } from "@devcontainer-dev-certs/shared";
@@ -36,6 +37,22 @@ export type AcceptContainerCertRejectReason =
   | "user-declined"
   | "parse-failed"
   | "not-valid-dev-cert"
+  /**
+   * basicConstraints says cA=TRUE, or is absent so we can't tell. Trusting
+   * it would put an issuing CA in the host's root store, which the SAN-local
+   * restriction cannot constrain — a CA's own SANs say nothing about what it
+   * may issue for.
+   */
+  | "not-a-leaf-cert"
+  /** No extendedKeyUsage, anyExtendedKeyUsage, or no id-kp-serverAuth. */
+  | "unsupported-eku"
+  /**
+   * The SAN set is structurally unusable (absent, undecodable, empty, or
+   * carrying a GeneralName type other than dNSName / iPAddress) — distinct
+   * from `non-local-sans`, and NOT overridable by
+   * `allowNonLocalContainerCertSans`.
+   */
+  | "malformed-sans"
   | "non-local-sans";
 
 export interface AcceptContainerCertResult {
@@ -100,18 +117,31 @@ export interface AcceptContainerCertDeps {
  *  3. Validate it actually is an ASP.NET dev cert (CN, validity, OID,
  *     version) — independent of whatever the workspace asserted.
  *     Failure → `not-valid-dev-cert`.
- *  4. SAN-local restriction. Unless the
- *     `allowNonLocalContainerCertSans` override is on, any SAN entry
- *     outside well-known local scopes (see validateLocalSans) rejects
- *     the cert with `non-local-sans`. Defends against a malicious or
- *     misconfigured container tricking the host into trusting a cert
- *     valid for arbitrary domains.
- *  5. Modal consent prompt (one-time, gated on `containerCertProvisionConsented`
+ *  4. Trust-anchor shape (`validateLeafTrustShape`). The cert must be a
+ *     leaf (basicConstraints present, cA=FALSE) and scoped to server
+ *     auth (EKU present, includes serverAuth, not anyExtendedKeyUsage).
+ *     Failure → `not-a-leaf-cert` / `unsupported-eku`. This gates step 5
+ *     rather than sitting beside it: step 5 asks what names the cert
+ *     covers, which only constrains anything for a cert that can
+ *     authenticate ONLY itself. A CA's own SANs place no limit on what
+ *     it may issue, so without this check the SAN restriction is
+ *     bypassed by pushing a CA with `localhost` SANs and then signing a
+ *     leaf for any name at all.
+ *  5. SAN-local restriction. A structurally unusable SAN set (absent,
+ *     undecodable, empty, or carrying a GeneralName type other than
+ *     dNSName / iPAddress) rejects with `malformed-sans` and is NOT
+ *     overridable. Otherwise, unless the `allowNonLocalContainerCertSans`
+ *     override is on, any dNSName / iPAddress outside well-known local
+ *     scopes (see validateLocalSans) rejects with `non-local-sans`.
+ *     Together these defend against a malicious or misconfigured
+ *     container tricking the host into trusting a cert valid for
+ *     arbitrary domains.
+ *  6. Modal consent prompt (one-time, gated on `containerCertProvisionConsented`
  *     in extension global state — distinct from the host-generation
  *     consent because the user is approving trust of a cert that came
  *     from a container they may or may not control). Declining →
  *     `user-declined`.
- *  6. Trust the cert in the host platform store. Public-cert-only:
+ *  7. Trust the cert in the host platform store. Public-cert-only:
  *     writes the cert to the OS trust surfaces (.NET Root / OpenSSL
  *     trust dir / NSS / login keychain / CurrentUser-Root) but NEVER
  *     to a my-store location and NEVER with a private key — the host
@@ -211,7 +241,60 @@ async function acceptContainerDevCertInner(
     return { accepted: false, reason: "not-valid-dev-cert" };
   }
 
+  // Shape before scope. A CA cert can be perfectly "local" by its own SANs
+  // and still issue a leaf for any name it likes, so this has to gate the
+  // SAN check rather than sit beside it — and its rejection is the more
+  // useful one to surface when a cert fails both.
+  const shape = validateLeafTrustShape(parsed.cert);
+  if (!shape.ok) {
+    const suffix = shape.detail ? ` (${shape.detail})` : "";
+    if (
+      shape.reason === "is-certificate-authority" ||
+      shape.reason === "missing-basic-constraints"
+    ) {
+      log(
+        `acceptContainerDevCert: rejected ${parsed.thumbprint} — ${shape.reason}${suffix}. ` +
+          `Trusting it would install an issuing CA in this host's root store; the SAN-local ` +
+          `restriction cannot constrain what a CA signs.`
+      );
+      return {
+        accepted: false,
+        reason: "not-a-leaf-cert",
+        detail: shape.reason,
+      };
+    }
+    if (shape.reason === "unreadable") {
+      log(
+        `acceptContainerDevCert: rejected ${parsed.thumbprint} — could not read basicConstraints/EKU${suffix}.`
+      );
+      return { accepted: false, reason: "parse-failed", detail: shape.detail };
+    }
+    log(
+      `acceptContainerDevCert: rejected ${parsed.thumbprint} — ${shape.reason}${suffix}. ` +
+        `A dev cert this host will trust must be scoped to server authentication.`
+    );
+    return {
+      accepted: false,
+      reason: "unsupported-eku",
+      detail: shape.detail ? `${shape.reason}: ${shape.detail}` : shape.reason,
+    };
+  }
+
   const sanResult = validateLocalSans(parsed.cert);
+  // Structural SAN failures are NOT scope decisions, so
+  // `allowNonLocalContainerCertSans` deliberately does not override them.
+  // That setting exists so a user can say "yes, I really do mean to trust
+  // this cert for that name" — it can't mean anything about a cert whose
+  // names we were unable to read in the first place.
+  if (!sanResult.ok && sanResult.reason !== "non-local") {
+    const detail = sanResult.detail
+      ? `${sanResult.reason}: ${sanResult.detail}`
+      : sanResult.reason;
+    log(
+      `acceptContainerDevCert: rejected ${parsed.thumbprint} — unusable SAN set (${detail}).`
+    );
+    return { accepted: false, reason: "malformed-sans", detail };
+  }
   if (!sanResult.ok && !deps.allowNonLocalSans) {
     const detail = sanResult.nonLocalEntries
       .map((e) => `${e.type}:${e.value}`)
