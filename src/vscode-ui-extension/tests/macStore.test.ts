@@ -4,9 +4,12 @@ import * as os from "os";
 import * as path from "path";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { logMessages } from "./__mocks__/vscode";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import { buildPfx } from "../src/cert/pfx";
+import {
+  generateCertificate,
+  VALIDITY_DAYS,
+  buildPfx,
+  MacCertificateStore,
+} from "@devcontainer-dev-certs/shared";
 
 // Mock os.homedir so the macStore points at a writable temp dir.
 let testHomeDir = "";
@@ -22,7 +25,6 @@ vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn(),
 }));
 
-import { MacCertificateStore } from "../src/platform/macStore";
 import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
@@ -237,130 +239,3 @@ describe("MacCertificateStore.findExistingDevCert", () => {
   });
 });
 
-describe("MacCertificateStore.removeCertificates", () => {
-  let store: MacCertificateStore;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    logMessages.length = 0;
-    testHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-mac-rm-"));
-    fs.mkdirSync(devCertsDir(), { recursive: true });
-    store = new MacCertificateStore();
-  });
-
-  afterEach(() => {
-    fs.rmSync(testHomeDir, { recursive: true, force: true });
-  });
-
-  it("calls `security remove-trusted-cert <cert-file>` for each dev cert (no `-d`, no keychain positional)", async () => {
-    const { cert, key, thumbprint } = await makeTestCert();
-    const pfxBytes = await buildPfx({ cert, key });
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
-      pfxBytes
-    );
-
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-
-    const untrust = sec.calls.filter(
-      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
-    );
-    expect(untrust).toHaveLength(1);
-    // No `-d` (we trusted to user domain, not admin) — using -d here
-    // would look in the wrong trust-settings file and silently miss
-    // our entry.
-    expect(untrust[0].args).not.toContain("-d");
-    // The positional must be a cert file path under os.tmpdir() — NOT
-    // the keychain path. Past bug: we were passing the keychain path
-    // here, which made the command a no-op (or worse, errored).
-    const tmpDir = os.tmpdir();
-    const positional = untrust[0].args[untrust[0].args.length - 1];
-    expect(positional.startsWith(tmpDir)).toBe(true);
-    expect(positional).toMatch(/devcert-untrust-.*\.cer$/);
-  });
-
-  it("calls untrust BEFORE delete-certificate (so trust-settings entries aren't orphaned)", async () => {
-    const { cert, key, thumbprint } = await makeTestCert();
-    const pfxBytes = await buildPfx({ cert, key });
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
-      pfxBytes
-    );
-
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-
-    const untrustIdx = sec.calls.findIndex(
-      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
-    );
-    const deleteIdx = sec.calls.findIndex(
-      (c) => c.cmd === "security" && c.args[0] === "delete-certificate"
-    );
-    expect(untrustIdx).toBeGreaterThanOrEqual(0);
-    expect(deleteIdx).toBeGreaterThan(untrustIdx);
-  });
-
-  it("unlinks the PFX from disk after the keychain teardown", async () => {
-    const { cert, key, thumbprint } = await makeTestCert();
-    const pfxBytes = await buildPfx({ cert, key });
-    const pfxPath = path.join(
-      devCertsDir(),
-      `aspnetcore-localhost-${thumbprint}.pfx`
-    );
-    fs.writeFileSync(pfxPath, pfxBytes);
-
-    setupSecurityMock();
-    await store.removeCertificates();
-
-    expect(fs.existsSync(pfxPath)).toBe(false);
-  });
-
-  it("regression: never calls `security remove-trusted-cert -d <keychain-path>`", async () => {
-    const { cert, key, thumbprint } = await makeTestCert();
-    const pfxBytes = await buildPfx({ cert, key });
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
-      pfxBytes
-    );
-
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-
-    const bad = sec.calls.find(
-      (c) =>
-        c.cmd === "security" &&
-        c.args[0] === "remove-trusted-cert" &&
-        c.args.includes("-d")
-    );
-    expect(bad).toBeUndefined();
-  });
-
-  it("processes multiple dev cert PFXes independently", async () => {
-    const a = await makeTestCert();
-    const b = await makeTestCert();
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${a.thumbprint}.pfx`),
-      await buildPfx({ cert: a.cert, key: a.key })
-    );
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${b.thumbprint}.pfx`),
-      await buildPfx({ cert: b.cert, key: b.key })
-    );
-
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-
-    const untrustCount = sec.calls.filter(
-      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
-    ).length;
-    expect(untrustCount).toBe(2);
-  });
-
-  it("no-ops cleanly when the devCertsDir doesn't exist", async () => {
-    fs.rmSync(devCertsDir(), { recursive: true, force: true });
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-    expect(sec.calls).toHaveLength(0);
-  });
-});

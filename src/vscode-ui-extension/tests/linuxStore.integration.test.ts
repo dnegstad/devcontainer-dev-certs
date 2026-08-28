@@ -3,11 +3,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execFileSync } from "child_process";
-import type * as LinuxStoreModule from "../src/platform/linuxStore";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import { buildPfx } from "../src/cert/pfx";
-import { getPemFileName } from "@devcontainer-dev-certs/shared";
+import {
+  LinuxCertificateStore,
+  generateCertificate,
+  VALIDITY_DAYS,
+  buildPfx,
+  getPemFileName,
+} from "@devcontainer-dev-certs/shared";
 
 let opensslAvailable = false;
 try {
@@ -32,18 +34,15 @@ async function makeTestCert(): ReturnType<typeof generateCertificate> {
 describe.skipIf(!opensslAvailable)(
   "LinuxCertificateStore (integration)",
   () => {
-    let LinuxCertificateStore: typeof LinuxStoreModule.LinuxCertificateStore;
-
-    beforeEach(async () => {
+    beforeEach(() => {
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-integ-"));
       testStoreDir = path.join(tmpDir, "x509stores", "my");
       testTrustDir = path.join(tmpDir, "trust");
 
+      // Read at call time by `getOpenSslTrustDir`, so setting it here is
+      // enough — the store module can be imported statically.
       process.env["DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY"] =
         testTrustDir;
-
-      const mod = await import("../src/platform/linuxStore.js");
-      LinuxCertificateStore = mod.LinuxCertificateStore;
     });
 
     afterEach(() => {
@@ -51,7 +50,7 @@ describe.skipIf(!opensslAvailable)(
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it("full lifecycle: save → trust → find → checkStatus → remove", async () => {
+    it("full lifecycle: save → trust → PEM + canonical hash symlink on disk", async () => {
       const store = new LinuxCertificateStore();
       const { cert, key, thumbprint } = await makeTestCert();
 
@@ -61,7 +60,8 @@ describe.skipIf(!opensslAvailable)(
       const pfxBytes = await buildPfx({ cert, key });
       fs.writeFileSync(pfxPath, pfxBytes, { mode: 0o600 });
 
-      // Trust — calls real openssl for hash computation.
+      // Trust — the subject hash is computed in-process; the assertion
+      // below cross-checks it against the real openssl binary.
       await store.trustCertificate(cert);
 
       const pemPath = path.join(testTrustDir, getPemFileName(thumbprint));

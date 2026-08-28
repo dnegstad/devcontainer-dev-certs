@@ -1,10 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
-import {
-  Extension,
-  SubjectAlternativeNameExtension,
-  X509CertificateGenerator,
-  cryptoProvider,
-} from "@peculiar/x509";
+import { Extension, SubjectAlternativeNameExtension, X509CertificateGenerator, cryptoProvider, } from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 import {
   DevCert,
@@ -14,11 +9,7 @@ import {
   SAN_IP_ADDRESSES,
 } from "@devcontainer-dev-certs/shared";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
-import {
-  acceptContainerDevCert,
-  type AcceptContainerCertDeps,
-  type AcceptContainerCertPayload,
-} from "../src/containerCertAccept";
+import { acceptContainerDevCert, type AcceptContainerCertDeps, type AcceptContainerCertPayload, } from "../src/containerCertAccept";
 
 cryptoProvider.set(webcrypto as unknown as Crypto);
 initLogger("test");

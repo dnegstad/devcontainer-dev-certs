@@ -3,10 +3,12 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execFileSync } from "child_process";
-import { generateCertificate } from "../src/cert/generator";
-import { certToPem } from "../src/cert/exporter";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import { runProcess } from "../src/platform/processUtil";
+import {
+  generateCertificate,
+  certToPem,
+  VALIDITY_DAYS,
+  runProcess,
+} from "@devcontainer-dev-certs/shared";
 
 // Check if certutil is available — skip entire suite if not
 let certutilAvailable = false;

@@ -3,28 +3,23 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { getRenamedSetting } from "./settings";
-import { CertManager } from "./cert/manager";
-import { CertProvider } from "./certProvider";
-import type { GetAllCertMaterialArgs } from "./certProvider";
 import {
-  acceptContainerDevCert,
-  type AcceptContainerCertPayload,
-  type AcceptContainerCertResult,
-  type AcceptedContainerCert,
-} from "./containerCertAccept";
-import { trustInNss } from "./platform/nssTrust";
-import {
+  CertManager,
+  trustInNss,
   log,
   getOpenSslTrustDir,
   getPemFileName,
-  type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
-import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import type {
+  NonLocalSanEntry,
   CertBundle,
   CertBundleV3,
   LinuxNssTrustReporter,
 } from "@devcontainer-dev-certs/shared";
+import { CertProvider } from "./certProvider";
+import type { GetAllCertMaterialArgs } from "./certProvider";
+import { acceptContainerDevCert, type AcceptContainerCertPayload, type AcceptContainerCertResult, type AcceptedContainerCert, } from "./containerCertAccept";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 
 const CONTAINER_CERT_CONSENT_KEY = "containerCertProvisionConsented";
 

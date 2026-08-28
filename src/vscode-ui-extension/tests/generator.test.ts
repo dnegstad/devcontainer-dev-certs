@@ -5,9 +5,7 @@ import {
   isValidDevCert,
   getCertificateVersion,
   computeThumbprint,
-} from "../src/cert/generator";
-import { DevCert } from "../src/cert/types";
-import {
+  DevCert,
   ASPNET_HTTPS_OID,
   CURRENT_CERTIFICATE_VERSION,
   MINIMUM_CERTIFICATE_VERSION,
@@ -15,7 +13,7 @@ import {
   SAN_DNS_NAMES,
   SAN_IP_ADDRESSES,
   VALIDITY_DAYS,
-} from "../src/cert/properties";
+} from "@devcontainer-dev-certs/shared";
 import { Extension, X509CertificateGenerator } from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 

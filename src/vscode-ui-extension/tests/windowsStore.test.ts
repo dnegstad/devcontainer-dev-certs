@@ -4,10 +4,18 @@ import * as os from "os";
 import * as path from "path";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { logMessages } from "./__mocks__/vscode";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import { buildPfx } from "../src/cert/pfx";
-import { type DevCert, type DevKey } from "../src/cert/types";
+import {
+  generateCertificate,
+  VALIDITY_DAYS,
+  buildPfx,
+  WindowsCertificateStore,
+} from "@devcontainer-dev-certs/shared";
+import type {
+  DevCert,
+  DevKey,
+  PsCandidate,
+  PsSkipped,
+} from "@devcontainer-dev-certs/shared";
 
 
 // Mock runProcess at the shared internal path — WindowsCertificateStore
@@ -18,11 +26,6 @@ vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn(),
 }));
 
-import {
-  WindowsCertificateStore,
-  type PsCandidate,
-  type PsSkipped,
-} from "../src/platform/windowsStore";
 import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);

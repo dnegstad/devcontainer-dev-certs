@@ -40,6 +40,11 @@ export {
   SAN_DNS_NAMES,
   SAN_IP_ADDRESSES,
 } from "./cert/properties";
+export {
+  computeSubjectHash,
+  ensureHashSymlink,
+  rehashDirectory,
+} from "./cert/rehash";
 export { buildPfx, parsePfx } from "./cert/pfx";
 export type { BuildPfxOptions, ParsedPfx } from "./cert/pfx";
 export { loadPfx, loadPemPair } from "./cert/loader";
@@ -133,7 +138,7 @@ export type {
 // reimplementing availability detection / selection logic.
 export { NativeBackend } from "./backends/native";
 export { DotnetBackend } from "./backends/dotnet";
-export { selectBackend, describeAutoBackend } from "./backends/select";
+export { selectBackend } from "./backends/select";
 export type {
   Backend,
   BackendKind,

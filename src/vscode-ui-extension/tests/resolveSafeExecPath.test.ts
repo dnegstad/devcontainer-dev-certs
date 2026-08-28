@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { resolveSafeExecPath, runProcess } from "@devcontainer-dev-certs/shared";
+import {
+  resolveSafeExecPath,
+  runProcess,
+} from "@devcontainer-dev-certs/shared";
 
 /**
  * The resolver is Windows-specific defense against `CreateProcess`'s

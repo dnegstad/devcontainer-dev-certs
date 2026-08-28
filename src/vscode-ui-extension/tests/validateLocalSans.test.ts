@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  Extension,
-  SubjectAlternativeNameExtension,
-  X509CertificateGenerator,
-  cryptoProvider,
-} from "@peculiar/x509";
+import { Extension, SubjectAlternativeNameExtension, X509CertificateGenerator, cryptoProvider, } from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 import {
   DevCert,

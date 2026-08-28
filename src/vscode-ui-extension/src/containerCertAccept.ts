@@ -3,8 +3,8 @@ import {
   isValidDevCert,
   log,
   validateLocalSans,
-  type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
+import type { NonLocalSanEntry } from "@devcontainer-dev-certs/shared";
 
 /**
  * Wire-protocol payload sent by the workspace extension when it scans the

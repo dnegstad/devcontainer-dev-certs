@@ -1,9 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { logMessages } from "./__mocks__/vscode";
-import { classifyCandidate } from "../src/platform/baseStore";
-import { generateCertificate } from "../src/cert/generator";
-import { DevKey, DevCert } from "../src/cert/types";
+import {
+  classifyCandidate,
+} from "@devcontainer-dev-certs/shared/src/platform/baseStore";
+import {
+  generateCertificate,
+  DevKey,
+  DevCert,
+} from "@devcontainer-dev-certs/shared";
 import { X509CertificateGenerator, cryptoProvider } from "@peculiar/x509";
 import { webcrypto } from "node:crypto";
 

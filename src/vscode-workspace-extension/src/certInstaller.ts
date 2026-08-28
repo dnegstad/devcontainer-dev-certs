@@ -9,9 +9,10 @@ import {
   getPfxFileName,
   getPemFileName,
   getPemFileNameForUser,
+  ensureHashSymlink,
+  rehashDirectory,
 } from "@devcontainer-dev-certs/shared";
 import type { CertMaterialV3 } from "@devcontainer-dev-certs/shared";
-import { ensureHashSymlink, rehashDirectory } from "./util/rehash";
 import type { ExtraDestination } from "./util/destinations";
 
 export type {

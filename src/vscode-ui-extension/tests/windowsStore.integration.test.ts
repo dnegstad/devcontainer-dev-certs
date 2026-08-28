@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll, afterEach } from "vitest";
 import { execFileSync } from "child_process";
-import { WindowsCertificateStore } from "../src/platform/windowsStore";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
+import {
+  WindowsCertificateStore,
+  generateCertificate,
+  VALIDITY_DAYS,
+} from "@devcontainer-dev-certs/shared";
 
 const enabled =
   process.platform === "win32" &&

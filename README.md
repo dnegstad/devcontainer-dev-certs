@@ -520,11 +520,11 @@ src/
                                    primitives) and dotnet (dev-certs pass-through)
       paths.ts                     .NET store and OpenSSL trust directory paths
       certName.ts                  userCertificates[].name pattern and guard
+      cert/rehash.ts               Pure TypeScript c_rehash (OpenSSL canonical subject hash)
       logger.ts                    Pluggable logging (loggerVscode.ts binds the output channel)
 
   vscode-ui-extension/             VS Code host extension (extensionKind: ui)
     src/
-      cert/, platform/             Re-export shims over the canonical copies in shared/
       certProvider.ts              Serves cert material to the workspace extension
       containerCertAccept.ts       Validates and trusts container-pushed certs
 
@@ -535,7 +535,6 @@ src/
       containerCertPush.ts         Reverse sync: scans for and pushes the container's cert
       defaultKestrelDebugProvider.ts  Injects the Kestrel default-cert env vars into
                                       resolved coreclr debug configurations
-      util/rehash.ts               Pure TypeScript c_rehash (OpenSSL subject hash computation)
       util/destinations.ts         extraCertDestinations parsing
       util/upmap.ts                V2 -> V3 cert material wire-contract upmap
 

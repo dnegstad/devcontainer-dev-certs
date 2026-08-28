@@ -7,7 +7,7 @@ import {
   computeSubjectHash,
   ensureHashSymlink,
   rehashDirectory,
-} from "../src/util/rehash";
+} from "@devcontainer-dev-certs/shared";
 
 // Self-signed test cert; only used to give computeSubjectHash something real
 // to chew on. The actual hash value doesn't matter — only the symlink shape.

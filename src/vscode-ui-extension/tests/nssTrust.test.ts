@@ -21,8 +21,7 @@ vi.mock("os", async (importOriginal) => {
   };
 });
 
-import { trustInNss } from "../src/platform/nssTrust";
-import { DevCert } from "@devcontainer-dev-certs/shared";
+import { trustInNss, DevCert } from "@devcontainer-dev-certs/shared";
 import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);

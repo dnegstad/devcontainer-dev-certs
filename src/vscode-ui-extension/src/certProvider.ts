@@ -2,17 +2,19 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { type CertManager } from "./cert/manager";
-import { exportLoadedCert } from "./cert/exporter";
-import { loadPemPair, loadPfx } from "./cert/loader";
-import type { LoadedCert } from "./cert/loader";
-import { buildPfx } from "./cert/pfx";
 import {
+  exportLoadedCert,
+  loadPemPair,
+  loadPfx,
+  buildPfx,
   assertValidCertName,
   log,
   selectBackend,
+  DOTNET_DEV_CERT_NAME,
 } from "@devcontainer-dev-certs/shared";
 import type {
+  CertManager,
+  LoadedCert,
   BackendMode,
   CertBundle,
   CertBundleV3,
@@ -22,7 +24,6 @@ import type {
   DefaultKestrelCertSelection,
   LinuxNssTrustReporter,
 } from "@devcontainer-dev-certs/shared";
-import { DOTNET_DEV_CERT_NAME } from "@devcontainer-dev-certs/shared";
 
 export interface UserCertificateConfig {
   name: string;
