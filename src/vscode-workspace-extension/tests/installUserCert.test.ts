@@ -290,6 +290,29 @@ describe.skipIf(process.platform === "win32")("isCertInstalled", () => {
     );
   });
 
+  it("returns false when a trusted user cert's .NET Root PFX is missing", () => {
+    // `installUserCert` writes the Root-store PFX alongside the OpenSSL PEM.
+    // Checking only the OpenSSL side would call the cert installed after that
+    // file was deleted, so activation would skip the reinstall and .NET
+    // clients in the container would keep distrusting it.
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+
+    fs.rmSync(path.join(rootStoreDir, "AABBCCDDEEFF.pfx"));
+    expect(isCertInstalled(userMaterial())).toBe(false);
+
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+  });
+
+  it("does not require a Root PFX the bundle never supplied", () => {
+    // Gated on `rootPfxBase64`: a bundle without one would never have had the
+    // file written, so demanding it would loop the install forever.
+    const noRoot = userMaterial({ rootPfxBase64: undefined });
+    installUserCert(noRoot);
+    expect(isCertInstalled(noRoot)).toBe(true);
+  });
+
   it("does not demand a symlink for a PEM whose subject cannot be hashed", () => {
     // `ensureHashSymlink` is a no-op for an unparseable PEM, so reporting "not
     // installed" would re-run the install every activation and never converge.

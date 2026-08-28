@@ -266,6 +266,15 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
  * space).
  */
 describe("computeSubjectHash", () => {
+  const hasOpenssl = (() => {
+    try {
+      execFileSync("openssl", ["version"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
   // subject=CN = localhost
   const PEM_LOCALHOST =
     "-----BEGIN CERTIFICATE-----\n" +
@@ -334,20 +343,54 @@ describe("computeSubjectHash", () => {
     return Buffer.concat([Buffer.from([tag]), lenBytes, content]);
   }
 
-  /** A certificate whose subject is a single CN with the given encoding. */
+  /**
+   * A certificate whose subject is a single CN with the given encoding.
+   *
+   * Deliberately a COMPLETE Certificate — signatureAlgorithm, a dummy
+   * signatureValue and a placeholder subjectPublicKeyInfo included — even
+   * though `computeSubjectHash` stops reading at the subject. Being parseable
+   * by `openssl x509` is what lets the expected hashes below be derived from
+   * OpenSSL rather than from this implementation, which would be circular.
+   */
   function certWithCn(valueTag: number, value: Buffer): string {
     const oidCommonName = Buffer.from("0603550403", "hex");
     const oidSha256Rsa = Buffer.from("06092a864886f70d01010b", "hex");
+    const oidRsaEncryption = Buffer.from("06092a864886f70d010101", "hex");
+    const algorithmId = der(
+      0x30,
+      Buffer.concat([oidSha256Rsa, der(0x05, Buffer.alloc(0))])
+    );
     const name = der(
       0x30,
       der(0x31, der(0x30, Buffer.concat([oidCommonName, der(valueTag, value)])))
+    );
+    // Placeholder SPKI: d2i decodes it as AlgorithmIdentifier + BIT STRING and
+    // only parses the key material lazily, so a stand-in modulus is fine.
+    const spki = der(
+      0x30,
+      Buffer.concat([
+        der(0x30, Buffer.concat([oidRsaEncryption, der(0x05, Buffer.alloc(0))])),
+        der(
+          0x03,
+          Buffer.concat([
+            Buffer.from([0x00]),
+            der(
+              0x30,
+              Buffer.concat([
+                der(0x02, Buffer.from([0x01, 0x00])),
+                der(0x02, Buffer.from([0x01, 0x01])),
+              ])
+            ),
+          ])
+        ),
+      ])
     );
     const tbs = der(
       0x30,
       Buffer.concat([
         der(0xa0, der(0x02, Buffer.from([0x02]))), // version v3
         der(0x02, Buffer.from([0x01])), // serial
-        der(0x30, Buffer.concat([oidSha256Rsa, der(0x05, Buffer.alloc(0))])),
+        algorithmId,
         name, // issuer
         der(
           0x30,
@@ -357,12 +400,27 @@ describe("computeSubjectHash", () => {
           ])
         ),
         name, // subject
+        spki,
       ])
     );
-    const body = der(0x30, tbs)
+    const body = der(
+      0x30,
+      Buffer.concat([
+        tbs,
+        algorithmId,
+        der(0x03, Buffer.concat([Buffer.from([0x00]), Buffer.alloc(8)])),
+      ])
+    )
       .toString("base64")
       .replace(/(.{64})/g, "$1\n");
     return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+  }
+
+  /** UTF-32BE bytes for a run of code points, i.e. an ASN.1 UniversalString. */
+  function utf32be(...codePoints: number[]): Buffer {
+    const buf = Buffer.alloc(codePoints.length * 4);
+    codePoints.forEach((cp, i) => buf.writeUInt32BE(cp, i * 4));
+    return buf;
   }
 
   const certWithUtf8Cn = (cn: string): string =>
@@ -448,6 +506,67 @@ describe("computeSubjectHash", () => {
     expect(hasHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A)).toBe(false);
   });
 
+  it("transcodes UniversalString (UTF-32BE) to UTF-8 before folding", () => {
+    // "Tëst". Expected value from `openssl x509 -hash` on this exact cert.
+    const universal = utf32be(0x54, 0xeb, 0x73, 0x74);
+    expect(computeSubjectHash(certWithCn(0x1c, universal))).toBe("ba8aa3f2");
+  });
+
+  it("gives UniversalString and UTF8String of the same text the same hash", () => {
+    // The point of transcoding: encoding must not change identity. Without it
+    // the UTF-32BE bytes would be hashed raw and these would diverge.
+    const universal = certWithCn(0x1c, utf32be(0x54, 0xeb, 0x73, 0x74));
+    const utf8 = certWithCn(0x0c, Buffer.from("Tëst", "utf8"));
+    expect(computeSubjectHash(universal)).toBe(computeSubjectHash(utf8));
+  });
+
+  it.runIf(hasOpenssl)(
+    "agrees with openssl on every hand-built encoding fixture",
+    () => {
+      // The recorded values above are only trustworthy if OpenSSL still agrees
+      // with them, so re-derive rather than trusting the constants.
+      const dir = tmp();
+      const cases: [string, string][] = [
+        ["utf8", certWithCn(0x0c, Buffer.from("Tëst", "utf8"))],
+        ["universal", certWithCn(0x1c, utf32be(0x54, 0xeb, 0x73, 0x74))],
+        [
+          "bmp",
+          certWithCn(
+            0x1e,
+            Buffer.from(
+              "0054006500730074002000c3009c006e00c300af0063006f00640065",
+              "hex"
+            )
+          ),
+        ],
+        [
+          "t61",
+          certWithCn(
+            0x14,
+            Buffer.from(Buffer.from("日本語", "utf8").toString("latin1"), "latin1")
+          ),
+        ],
+        ["printable-ws", certWithCn(0x13, Buffer.from("A   B", "ascii"))],
+      ];
+      for (const [label, pem] of cases) {
+        const file = path.join(dir, `${label}.pem`);
+        fs.writeFileSync(file, pem);
+        const expected = execFileSync("openssl", [
+          "x509",
+          "-hash",
+          "-noout",
+          "-in",
+          file,
+        ])
+          .toString()
+          .trim();
+        expect(`${label}=${computeSubjectHash(pem)}`).toBe(
+          `${label}=${expected}`
+        );
+      }
+    }
+  );
+
   it("returns null for input that isn't a certificate", () => {
     expect(computeSubjectHash("not a pem")).toBeNull();
   });
@@ -486,14 +605,6 @@ describe("computeSubjectHash", () => {
   // Belt-and-braces: when the machine running the suite has openssl, verify
   // the pinned values above still reflect what OpenSSL computes today rather
   // than what it computed when they were recorded.
-  const hasOpenssl = (() => {
-    try {
-      execFileSync("openssl", ["version"], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
 
   it.runIf(hasOpenssl)(
     "agrees with the local openssl binary",

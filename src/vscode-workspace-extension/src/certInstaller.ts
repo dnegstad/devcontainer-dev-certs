@@ -202,6 +202,20 @@ export function isCertInstalled(material: CertMaterialV3): boolean {
     return false;
   }
   if (material.trustInContainer) {
+    // `installUserCert` writes the .NET Root-store PFX too whenever the bundle
+    // carries one, so checking only the OpenSSL side would report a user cert
+    // fully installed after its Root PFX was deleted (or a previous install
+    // stopped between the two writes) — activation would skip the reinstall
+    // and .NET clients in the container would go on distrusting it. Gated on
+    // `rootPfxBase64` so a bundle that never supplied one isn't held to a file
+    // the install would not have written.
+    if (material.rootPfxBase64) {
+      const rootPfxPath = path.join(
+        getDotNetRootStorePath(),
+        getPfxFileName(material.thumbprint)
+      );
+      if (!fs.existsSync(rootPfxPath)) return false;
+    }
     return pemInstalledAndLinked(
       trustDir,
       getPemFileNameForUser(material.name),
