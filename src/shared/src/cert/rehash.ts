@@ -204,12 +204,40 @@ export function ensureHashSymlink(
 
 // --- Internal helpers ---
 
+const PEM_BEGIN = "-----BEGIN CERTIFICATE-----";
+const PEM_END = "-----END CERTIFICATE-----";
+
+/**
+ * Extract the DER bytes of the first certificate in a PEM string.
+ *
+ * Deliberately `indexOf` + `slice` rather than one regex. The previous form,
+ * `/-----BEGIN CERTIFICATE-----\s*([\s\S]*?)\s*-----END CERTIFICATE-----/`,
+ * put two `\s*` quantifiers around a lazy `[\s\S]*?` — all three match
+ * whitespace, so the engine has an ambiguous split to backtrack over. On input
+ * that opens with the BEGIN marker and continues with many spaces but never
+ * reaches an END marker, matching degrades to quadratic (CodeQL
+ * `js/polynomial-redos`, flagged high).
+ *
+ * That input is reachable: `rehashDirectory` feeds this every `*.pem` file it
+ * finds in the OpenSSL trust directory, and nothing guarantees those files are
+ * well-formed. `indexOf` scans linearly and cannot backtrack, and the
+ * whitespace strip below uses `/\s/g` — a single character class with no
+ * quantifier — so it stays linear too.
+ *
+ * Behaviour is otherwise unchanged: the first BEGIN paired with the first
+ * following END, surrounding whitespace discarded, `null` when either marker
+ * is absent.
+ */
 function pemToDer(pem: string): Buffer | null {
-  const match = pem.match(
-    /-----BEGIN CERTIFICATE-----\s*([\s\S]*?)\s*-----END CERTIFICATE-----/
-  );
-  if (!match) return null;
-  const base64 = match[1].replace(/\s/g, "");
+  const begin = pem.indexOf(PEM_BEGIN);
+  if (begin < 0) return null;
+  const bodyStart = begin + PEM_BEGIN.length;
+
+  const end = pem.indexOf(PEM_END, bodyStart);
+  if (end < 0) return null;
+
+  const base64 = pem.slice(bodyStart, end).replace(/\s/g, "");
+  if (base64.length === 0) return null;
   return Buffer.from(base64, "base64");
 }
 

@@ -304,6 +304,37 @@ describe("computeSubjectHash", () => {
     expect(computeSubjectHash("not a pem")).toBeNull();
   });
 
+  it("stays linear on a BEGIN marker followed by whitespace and no END", () => {
+    // CodeQL js/polynomial-redos, high: the old
+    // `/-----BEGIN CERTIFICATE-----\s*([\s\S]*?)\s*-----END CERTIFICATE-----/`
+    // wrapped a lazy `[\s\S]*?` in two `\s*` quantifiers. All three match
+    // whitespace, so this exact shape — BEGIN, a long run of spaces, no END —
+    // gave the engine an ambiguous split to backtrack over and matching went
+    // quadratic. `rehashDirectory` hands this function every *.pem file in the
+    // OpenSSL trust directory, none of which is guaranteed well-formed.
+    //
+    // 100k spaces is ~10^10 backtracking steps under the old regex, so a
+    // regression hangs this test rather than merely slowing it; the assertion
+    // is that we finish at all.
+    const pathological = `-----BEGIN CERTIFICATE-----${" ".repeat(100_000)}`;
+    const started = Date.now();
+    expect(computeSubjectHash(pathological)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1000);
+  }, 10_000);
+
+  it("still reads a normal PEM, and takes the first cert when several are present", () => {
+    expect(computeSubjectHash(PEM_LOCALHOST)).toBe("ce275665");
+    // Concatenated PEMs: the first BEGIN pairs with the first following END,
+    // matching the old lazy-quantifier behaviour.
+    expect(computeSubjectHash(PEM_LOCALHOST + PEM_MULTI_RDN)).toBe("ce275665");
+    expect(computeSubjectHash(PEM_MULTI_RDN + PEM_LOCALHOST)).toBe("90c9c9f3");
+  });
+
+  it("returns null when a marker is missing or the body is empty", () => {
+    expect(computeSubjectHash(PEM_LOCALHOST.replace("-----END CERTIFICATE-----", ""))).toBeNull();
+    expect(computeSubjectHash("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")).toBeNull();
+  });
+
   // Belt-and-braces: when the machine running the suite has openssl, verify
   // the pinned values above still reflect what OpenSSL computes today rather
   // than what it computed when they were recorded.
