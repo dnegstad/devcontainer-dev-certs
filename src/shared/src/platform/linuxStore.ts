@@ -5,7 +5,7 @@ import { trustInNss, type NssTrustResult } from "./nssTrust";
 import { type LinuxNssTrustReporter, type BaseStoreOptions } from "./types";
 import { type DevCert, type DevKey } from "../cert/types";
 import { buildPfx } from "../cert/pfx";
-import { ensureHashSymlink } from "../cert/rehash";
+import { ensureHashSymlink, hasHashSymlink } from "../cert/rehash";
 import {
   getDotNetStorePath,
   getDotNetRootStorePath,
@@ -113,7 +113,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
   }
 
   protected isTrusted(
-    _cert: DevCert,
+    cert: DevCert,
     thumbprint: string
   ): Promise<boolean> {
     // Both authoritative trust surfaces `trustCertificate` writes must be
@@ -129,13 +129,24 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     // reporter toast with manual guidance, and requiring it here would
     // flap `checkStatus().isTrusted` to permanently-false on hosts
     // without NSS tooling.
-    const pemPath = path.join(getOpenSslTrustDir(), getPemFileName(thumbprint));
+    //
+    // The hash symlink is part of the OpenSSL surface, not an extra: without a
+    // link OpenSSL resolves, the PEM sitting in the directory establishes
+    // nothing. Checking it also repairs hosts trusted before the subject hash
+    // was computed canonically — their link is under the WRONG hash, so a
+    // PEM-and-PFX-only check would report "trusted", skip `trustCertificate`,
+    // and leave the broken link in place forever.
+    const trustDir = getOpenSslTrustDir();
+    const pemFileName = getPemFileName(thumbprint);
+    const pemPath = path.join(trustDir, pemFileName);
     const rootPfxPath = path.join(
       this.dotNetRootStorePath,
       `${thumbprint}.pfx`
     );
     return Promise.resolve(
-      fs.existsSync(pemPath) && fs.existsSync(rootPfxPath)
+      fs.existsSync(pemPath) &&
+        fs.existsSync(rootPfxPath) &&
+        hasHashSymlink(trustDir, pemFileName, cert.pem)
     );
   }
 

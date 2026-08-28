@@ -161,6 +161,37 @@ describe("LinuxCertificateStore", () => {
       expect(spawned).not.toContain("openssl");
     });
 
+    it("reports NOT trusted when the hash symlink is under the wrong hash", async () => {
+      // A host trusted before the subject hash was computed canonically has a
+      // link under the wrong name. If `isTrusted` only checked the PEM and root
+      // PFX, it would answer "trusted", CertManager.trust() would skip
+      // trustCertificate, and the broken link would survive every upgrade —
+      // leaving local OpenSSL trust dead for exactly the hosts this fixes.
+      const { cert, thumbprint } = await makeTestCert();
+      await store.trustCertificate(cert);
+      expect(await store.isCertTrusted(cert)).toBe(true);
+
+      const links = fs
+        .readdirSync(testTrustDir)
+        .filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+      expect(links).toHaveLength(1);
+      const target = fs.readlinkSync(path.join(testTrustDir, links[0]));
+      fs.unlinkSync(path.join(testTrustDir, links[0]));
+      fs.symlinkSync(target, path.join(testTrustDir, "deadbeef.0"));
+
+      // PEM and root PFX are both still present...
+      expect(
+        fs.existsSync(path.join(testTrustDir, `aspnetcore-localhost-${thumbprint}.pem`))
+      ).toBe(true);
+      expect(fs.existsSync(path.join(testRootStoreDir, `${thumbprint}.pfx`))).toBe(true);
+      // ...but trust is not actually established.
+      expect(await store.isCertTrusted(cert)).toBe(false);
+
+      // Re-trusting repairs it.
+      await store.trustCertificate(cert);
+      expect(await store.isCertTrusted(cert)).toBe(true);
+    });
+
     it("is purely additive — does NOT remove other aspnetcore-localhost-*.pem files in the trust dir", async () => {
       // Pin the post-fix contract: trustCertificate must never remove or
       // modify other dev cert PEMs that happen to share the

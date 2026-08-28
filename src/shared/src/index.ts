@@ -43,6 +43,7 @@ export {
 export {
   computeSubjectHash,
   ensureHashSymlink,
+  hasHashSymlink,
   rehashDirectory,
 } from "./cert/rehash";
 export { buildPfx, parsePfx } from "./cert/pfx";

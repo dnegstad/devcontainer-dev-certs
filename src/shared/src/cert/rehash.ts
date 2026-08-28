@@ -113,10 +113,15 @@ export function rehashDirectory(directory: string): void {
  * `directory`. No-op when a valid slot already points at the same PEM —
  * the caller can re-invoke this safely on every install without producing
  * duplicate `{hash}.0`/`{hash}.1` pairs. Allocates the next free slot
- * (`{hash}.0` … `{hash}.9`) on a real collision with a different target.
+ * (`{hash}.0` … `{hash}.255`, see `MAX_HASH_SLOTS`) when an occupied slot
+ * points at a different, still-present target.
  *
  * Unlike `rehashDirectory`, this only touches the slot for our PEM —
  * other PEMs' hash symlinks are left alone.
+ *
+ * Throws when no slot is reachable. Returning quietly would let an install
+ * report success for a certificate OpenSSL cannot find, which at the point of
+ * use is indistinguishable from it not being trusted at all.
  */
 export function ensureHashSymlink(
   directory: string,
@@ -193,13 +198,49 @@ export function ensureHashSymlink(
     }
   }
 
-  // Never silently: a cert with no reachable slot is a cert OpenSSL will not
-  // find, which is indistinguishable from "not trusted" at the point of use.
-  log(
-    `[warn] Could not allocate an OpenSSL hash symlink for ${pemFileName} in ${directory}: ` +
-      `all ${MAX_HASH_SLOTS} slots for subject hash ${hash} are taken. This certificate will NOT be ` +
-      `found via SSL_CERT_DIR. Remove superseded certificates from that directory and re-run the sync.`
+  // Never silently. A certificate with no reachable slot is one OpenSSL will
+  // not find, which at the point of use is indistinguishable from it not being
+  // trusted — so reporting a successful install would be a lie. Raising it here
+  // also surfaces the unbounded-accumulation problem loudly instead of letting
+  // the bound be reached and quietly ignored, which is exactly how the previous
+  // ten-slot limit went unnoticed.
+  throw new Error(
+    `Could not allocate an OpenSSL hash symlink for ${pemFileName} in ${directory}: ` +
+      `all ${MAX_HASH_SLOTS} slots for subject hash ${hash} are taken. This certificate would ` +
+      `not be found via SSL_CERT_DIR. Remove superseded certificates from that directory.`
   );
+}
+
+/**
+ * Whether `pemFileName` already has a hash symlink OpenSSL would resolve to it.
+ *
+ * Exists so callers can treat "installed" as including a reachable link rather
+ * than just the files being on disk. An installation made before the subject
+ * hash was computed canonically has a symlink under the WRONG hash, so a check
+ * that only looks for the PEM and PFX sees a healthy install and skips the
+ * repair — leaving trust broken exactly for the users the fix is meant to
+ * reach.
+ */
+export function hasHashSymlink(
+  directory: string,
+  pemFileName: string,
+  pemContent: string
+): boolean {
+  const hash = computeSubjectHash(pemContent);
+  if (!hash) return false;
+  for (let i = 0; i < MAX_HASH_SLOTS; i++) {
+    const linkPath = path.join(directory, `${hash}.${i}`);
+    let target: string;
+    try {
+      target = fs.readlinkSync(linkPath);
+    } catch {
+      // ENOENT (no more slots) or not a symlink — OpenSSL stops at the first
+      // gap too, so there is nothing further to find.
+      return false;
+    }
+    if (target === pemFileName) return true;
+  }
+  return false;
 }
 
 // --- Internal helpers ---
@@ -373,27 +414,48 @@ function canonicalizeName(nameDer: Buffer): Buffer | null {
 }
 
 /**
- * OpenSSL's `asn1_string_canon`: string types in ASN1_MASK_CANON are re-tagged
- * as UTF8String and normalized (ASCII-lowercased, leading/trailing spaces
- * dropped, internal space runs collapsed to one). Everything else is copied
- * through untouched. Note that OpenSSL does not transcode BMPString /
- * UniversalString bytes to UTF-8 here — it only relabels the tag — so we
- * mirror that byte-for-byte rather than "fixing" it.
+ * OpenSSL's `asn1_string_canon`, verified against `openssl x509 -hash` rather
+ * than reconstructed from the source, because the source reads as if it folds
+ * bytes in place and it does not.
+ *
+ * Two things a byte-level reading gets wrong, both confirmed with real certs
+ * on OpenSSL 3.0.13:
+ *
+ * - **Non-UTF-8 string types are transcoded first.** A T61String holding the
+ *   UTF-8 bytes of `日本語` hashes to `02c4fa54`; re-tagging those bytes as
+ *   UTF8String and hashing gives `e2c402e4`. Only interpreting them as
+ *   Latin-1 and re-encoding as UTF-8 reproduces OpenSSL. The same applies to
+ *   BMPString (UTF-16BE) and UniversalString (UTF-32BE).
+ * - **Folding covers every ASCII whitespace byte, not just `0x20`.** With
+ *   `CN` stored as `"a\tb"`, `"a\nb"`, `"a   b"` and `"A   B"`, OpenSSL
+ *   returns `49cdc5e0` for all four — so runs of any ASCII whitespace collapse
+ *   to one space, and ASCII letters lowercase. Leading whitespace is trimmed
+ *   the same way: `"a"`, `" a"` and `"\ta"` all hash to `20b69a40`.
+ *
+ * Getting either wrong yields a plausible-looking `{hash}.N` link that OpenSSL
+ * never opens, which is indistinguishable from an untrusted certificate.
+ *
+ * Bytes outside ASCII pass through untouched, matching the `!ossl_isascii`
+ * branch — safe after transcoding, since every byte of a multi-byte UTF-8
+ * sequence has the high bit set and so can't be mistaken for a letter.
  */
 function canonicalizeAttributeValue(tag: number, content: Buffer): Buffer {
   if (!CANONICALIZED_STRING_TAGS.has(tag)) return derTlv(tag, content);
 
+  const utf8 = transcodeToUtf8(tag, content);
+  if (!utf8) return derTlv(tag, content);
+
   let start = 0;
-  let end = content.length;
-  while (start < end && content[start] === 0x20) start++;
-  while (end > start && content[end - 1] === 0x20) end--;
+  let end = utf8.length;
+  while (start < end && isAsciiSpace(utf8[start])) start++;
+  while (end > start && isAsciiSpace(utf8[end - 1])) end--;
 
   const out: number[] = [];
   for (let i = start; i < end; i++) {
-    const byte = content[i];
-    if (byte === 0x20) {
+    const byte = utf8[i];
+    if (isAsciiSpace(byte)) {
       out.push(0x20);
-      while (i + 1 < end && content[i + 1] === 0x20) i++;
+      while (i + 1 < end && isAsciiSpace(utf8[i + 1])) i++;
       continue;
     }
     // ossl_tolower is ASCII-only; bytes with the MSB set pass through.
@@ -401,6 +463,53 @@ function canonicalizeAttributeValue(tag: number, content: Buffer): Buffer {
   }
 
   return derTlv(UTF8_STRING_TAG, Buffer.from(out));
+}
+
+/** `ossl_isspace`: space, tab, newline, vertical tab, form feed, carriage return. */
+function isAsciiSpace(byte: number): boolean {
+  return (
+    byte === 0x20 || (byte >= 0x09 && byte <= 0x0d)
+  );
+}
+
+/**
+ * Reinterpret an ASN.1 string's bytes as UTF-8, per its declared type.
+ * Returns null for a value whose length can't belong to its type (an odd-length
+ * BMPString, say) — the caller then passes the attribute through unchanged
+ * rather than inventing an encoding for malformed input.
+ */
+function transcodeToUtf8(tag: number, content: Buffer): Buffer | null {
+  switch (tag) {
+    case 0x0c: // UTF8String — already UTF-8.
+      return content;
+    case 0x13: // PrintableString
+    case 0x16: // IA5String
+    case 0x1a: // VisibleString
+      // Defined as ASCII subsets, so their bytes are already valid UTF-8.
+      return content;
+    case 0x14: // T61String — OpenSSL decodes these as Latin-1.
+      return Buffer.from(content.toString("latin1"), "utf8");
+    case 0x1e: {
+      // BMPString — UTF-16BE. Node decodes UTF-16LE only, so swap pairs first.
+      if (content.length % 2 !== 0) return null;
+      const swapped = Buffer.from(content);
+      swapped.swap16();
+      return Buffer.from(swapped.toString("utf16le"), "utf8");
+    }
+    case 0x1c: {
+      // UniversalString — UTF-32BE, decoded a code point at a time.
+      if (content.length % 4 !== 0) return null;
+      let text = "";
+      for (let i = 0; i < content.length; i += 4) {
+        const codePoint = content.readUInt32BE(i);
+        if (codePoint > 0x10ffff) return null;
+        text += String.fromCodePoint(codePoint);
+      }
+      return Buffer.from(text, "utf8");
+    }
+    default:
+      return content;
+  }
 }
 
 /**

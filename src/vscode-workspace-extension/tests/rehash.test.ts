@@ -185,6 +185,25 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
     expect(mine).toHaveLength(1);
   });
 
+  it("throws rather than silently skipping when every slot is taken", () => {
+    // Returning quietly would let an install report success for a certificate
+    // OpenSSL cannot find — the same failure the ten-slot bound produced, just
+    // later. Under the documented rebuild-rotation model with no pruning, the
+    // bound IS reachable, so it has to be loud.
+    const dir = tmp();
+    for (let i = 0; i < 256; i++) {
+      const name = `full${i}.pem`;
+      fs.writeFileSync(path.join(dir, name), SAMPLE_PEM_A);
+      ensureHashSymlink(dir, name, SAMPLE_PEM_A);
+    }
+    expect(listHashSymlinks(dir)).toHaveLength(256);
+
+    fs.writeFileSync(path.join(dir, "overflow.pem"), SAMPLE_PEM_A);
+    expect(() => ensureHashSymlink(dir, "overflow.pem", SAMPLE_PEM_A)).toThrow(
+      /all 256 slots/
+    );
+  }, 30_000);
+
   it("allocates slots contiguously from 0, which is what OpenSSL requires", () => {
     // `by_dir` stops at the first missing `{hash}.{n}`, so a gap makes every
     // later slot unreachable. Anything that prunes entries must re-densify
@@ -292,12 +311,111 @@ describe("computeSubjectHash", () => {
     "9l5Y\n" +
     "-----END CERTIFICATE-----\n";
 
+  // --- Minimal hand-built certs, so a subject can use any ASN.1 string type ---
+  // `computeSubjectHash` only walks as far as the subject, so nothing past it
+  // (or a valid signature) is needed. `openssl req` can't be coaxed into every
+  // encoding, and splicing real certs would obscure what is under test.
+
+  function der(tag: number, content: Buffer): Buffer {
+    const len = content.length;
+    let lenBytes: Buffer;
+    if (len < 0x80) {
+      lenBytes = Buffer.from([len]);
+    } else {
+      const bytes: number[] = [];
+      let remaining = len;
+      while (remaining > 0) {
+        bytes.unshift(remaining & 0xff);
+        remaining >>>= 8;
+      }
+      lenBytes = Buffer.from([0x80 | bytes.length, ...bytes]);
+    }
+    return Buffer.concat([Buffer.from([tag]), lenBytes, content]);
+  }
+
+  /** A certificate whose subject is a single CN with the given encoding. */
+  function certWithCn(valueTag: number, value: Buffer): string {
+    const oidCommonName = Buffer.from("0603550403", "hex");
+    const oidSha256Rsa = Buffer.from("06092a864886f70d01010b", "hex");
+    const name = der(
+      0x30,
+      der(0x31, der(0x30, Buffer.concat([oidCommonName, der(valueTag, value)])))
+    );
+    const tbs = der(
+      0x30,
+      Buffer.concat([
+        der(0xa0, der(0x02, Buffer.from([0x02]))), // version v3
+        der(0x02, Buffer.from([0x01])), // serial
+        der(0x30, Buffer.concat([oidSha256Rsa, der(0x05, Buffer.alloc(0))])),
+        name, // issuer
+        der(
+          0x30,
+          Buffer.concat([
+            der(0x17, Buffer.from("260101000000Z", "ascii")),
+            der(0x17, Buffer.from("360101000000Z", "ascii")),
+          ])
+        ),
+        name, // subject
+      ])
+    );
+    const body = der(0x30, tbs)
+      .toString("base64")
+      .replace(/(.{64})/g, "$1\n");
+    return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+  }
+
+  const certWithUtf8Cn = (cn: string): string =>
+    certWithCn(0x0c, Buffer.from(cn, "utf8"));
+
   it("matches OpenSSL's subject hash for a CN=localhost dev cert", () => {
     expect(computeSubjectHash(PEM_LOCALHOST)).toBe("ce275665");
   });
 
   it("matches OpenSSL's subject hash for a multi-RDN subject needing canonicalization", () => {
     expect(computeSubjectHash(PEM_MULTI_RDN)).toBe("90c9c9f3");
+  });
+
+  /**
+   * Canonicalization cases that a byte-level reading of `asn1_string_canon`
+   * gets wrong. Values are the raw ASN.1 attribute bytes as stored, and every
+   * expected hash came from `openssl x509 -hash` on a real certificate.
+   */
+  it("folds every ASCII whitespace byte, not just 0x20", () => {
+    // CN stored as "a\tb", "a\nb", "a   b" and "A   B" all canonicalize to
+    // "a b", so OpenSSL returns one hash for the lot. Handling only 0x20 gave
+    // the tab and newline forms distinct — and unusable — hashes.
+    for (const cn of ["a\tb", "a\nb", "a   b", "A   B"]) {
+      expect(computeSubjectHash(certWithUtf8Cn(cn))).toBe("49cdc5e0");
+    }
+  });
+
+  it("trims leading and trailing whitespace of any ASCII kind", () => {
+    for (const cn of ["a", " a", "\ta", "a ", "a\n"]) {
+      expect(computeSubjectHash(certWithUtf8Cn(cn))).toBe("20b69a40");
+    }
+  });
+
+  it("transcodes T61String to UTF-8 before folding", () => {
+    // A T61String holding the UTF-8 bytes of 日本語. Re-tagging those bytes as
+    // UTF8String and hashing yields e2c402e4; OpenSSL says 02c4fa54, which is
+    // reached only by reading them as Latin-1 and re-encoding as UTF-8.
+    const cn = Buffer.from("日本語", "utf8").toString("latin1");
+    expect(computeSubjectHash(certWithCn(0x14, Buffer.from(cn, "latin1")))).toBe(
+      "02c4fa54"
+    );
+  });
+
+  it("transcodes BMPString (UTF-16BE) to UTF-8 before folding", () => {
+    // Bytes lifted verbatim from a cert built with `string_mask = MASK:2048`,
+    // whose hash `openssl x509 -hash` reports as b02e8735. (openssl stored each
+    // byte of the UTF-8 input as its own UTF-16 code unit, so this is mojibake
+    // rather than the text that went in — which makes it a better fixture: the
+    // bytes are what matter, and they exercise the non-ASCII path.)
+    const utf16be = Buffer.from(
+      "0054006500730074002000c3009c006e00c300af0063006f00640065",
+      "hex"
+    );
+    expect(computeSubjectHash(certWithCn(0x1e, utf16be))).toBe("b02e8735");
   });
 
   it("returns null for input that isn't a certificate", () => {

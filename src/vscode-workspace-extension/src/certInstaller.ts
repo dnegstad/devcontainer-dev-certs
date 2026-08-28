@@ -9,7 +9,9 @@ import {
   getPfxFileName,
   getPemFileName,
   getPemFileNameForUser,
+  computeSubjectHash,
   ensureHashSymlink,
+  hasHashSymlink,
   rehashDirectory,
 } from "@devcontainer-dev-certs/shared";
 import type { CertMaterialV3 } from "@devcontainer-dev-certs/shared";
@@ -156,8 +158,17 @@ export function installUserCert(material: CertMaterialV3): void {
  * dotnet-dev we check the three historic paths; for user certs we check that
  * the thumbprint-keyed PFX (when applicable) and, when trust is requested,
  * the named PEM exist.
+ *
+ * "Installed" includes a hash symlink OpenSSL would actually resolve, not just
+ * the PEM being present. Without that, a container installed before the subject
+ * hash was computed canonically has its symlink under the WRONG hash: the files
+ * all exist, this returns true, the install is skipped, and the symlink is never
+ * repaired — so upgrading would leave trust broken precisely for the users the
+ * fix exists for. Re-running the install is cheap and rewrites identical bytes.
  */
 export function isCertInstalled(material: CertMaterialV3): boolean {
+  const trustDir = getOpenSslTrustDir();
+
   if (material.kind === "dotnet-dev") {
     const pfxPath = path.join(
       getDotNetStorePath(),
@@ -167,15 +178,16 @@ export function isCertInstalled(material: CertMaterialV3): boolean {
       getDotNetRootStorePath(),
       getPfxFileName(material.thumbprint)
     );
-    const pemPath = path.join(
-      getOpenSslTrustDir(),
-      getPemFileName(material.thumbprint)
-    );
-    return (
-      fs.existsSync(pfxPath) &&
-      fs.existsSync(rootPfxPath) &&
-      fs.existsSync(pemPath)
-    );
+    const pemFileName = getPemFileName(material.thumbprint);
+    const pemPath = path.join(trustDir, pemFileName);
+    if (
+      !fs.existsSync(pfxPath) ||
+      !fs.existsSync(rootPfxPath) ||
+      !fs.existsSync(pemPath)
+    ) {
+      return false;
+    }
+    return hashSymlinkSettled(trustDir, pemFileName, pemPath);
   }
 
   const storePfxPath = path.join(
@@ -194,13 +206,36 @@ export function isCertInstalled(material: CertMaterialV3): boolean {
     return false;
   }
   if (material.trustInContainer) {
-    const pemPath = path.join(
-      getOpenSslTrustDir(),
-      getPemFileNameForUser(material.name)
-    );
+    const pemFileName = getPemFileNameForUser(material.name);
+    const pemPath = path.join(trustDir, pemFileName);
     if (!fs.existsSync(pemPath)) return false;
+    if (!hashSymlinkSettled(trustDir, pemFileName, pemPath)) return false;
   }
   return true;
+}
+
+/**
+ * True when the installed PEM's hash symlink is in its final state — either it
+ * resolves, or no hash can be derived from the file at all.
+ *
+ * The second case matters: `ensureHashSymlink` is a no-op for a PEM whose
+ * subject won't parse, so reporting "not installed" for one would re-run the
+ * install on every activation without ever changing anything. Only a PEM we
+ * CAN hash, yet have no link for, indicates a repair worth making.
+ */
+function hashSymlinkSettled(
+  trustDir: string,
+  pemFileName: string,
+  pemPath: string
+): boolean {
+  let pem: string;
+  try {
+    pem = fs.readFileSync(pemPath, "utf-8");
+  } catch {
+    return false;
+  }
+  if (computeSubjectHash(pem) === null) return true;
+  return hasHashSymlink(trustDir, pemFileName, pem);
 }
 
 /**

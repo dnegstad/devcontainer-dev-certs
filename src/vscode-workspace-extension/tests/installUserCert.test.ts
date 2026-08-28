@@ -43,14 +43,25 @@ afterEach(() => {
   cleanupDirs.length = 0;
 });
 
+const REAL_PEM =
+  "-----BEGIN CERTIFICATE-----\n" +
+  "MIIBkTCB+wIJANSsAUOhwHK7MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNVBAMMCWxv\n" +
+  "Y2FsaG9zdDAeFw0yNDAxMDEwMDAwMDBaFw0zNDAxMDEwMDAwMDBaMBQxEjAQBgNV\n" +
+  "BAMMCWxvY2FsaG9zdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAyx0qMlYa\n" +
+  "PEzL0c9XBYNcQ6KAjMjbDLp6FrW+lWZHCKf8/aSJW7CnH2tQHrPiU8r6QYBSWQ7c\n" +
+  "VTrA8h8wYy7eRdQk31uLR7tGzZ5JxBz2DYxcuxR1RJ/+QbR1m6Z5w9p5UqxQ4l3+\n" +
+  "AbsmPwy3J7t4cqo3PVPmF6mPiK7M+M0CAwEAATANBgkqhkiG9w0BAQsFAAOBgQAt\n" +
+  "-----END CERTIFICATE-----\n";
+
 function userMaterial(overrides: Partial<CertMaterialV3> = {}): CertMaterialV3 {
   return {
     kind: "user",
     name: "corp-ca",
     thumbprint: "AABBCCDDEEFF",
-    pemCertBase64: Buffer.from(
-      "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n"
-    ).toString("base64"),
+    // A real certificate, not a placeholder: `isCertInstalled` now requires a
+    // resolvable OpenSSL hash symlink, which can only be derived from a PEM
+    // whose subject actually parses.
+    pemCertBase64: Buffer.from(REAL_PEM).toString("base64"),
     pemKeyBase64: Buffer.from(
       "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
     ).toString("base64"),
@@ -208,6 +219,41 @@ describe.skipIf(process.platform === "win32")("isCertInstalled", () => {
     expect(isCertInstalled(userMaterial({ installToDotNetStore: false }))).toBe(
       true
     );
+  });
+
+  it("returns false when the PEM has no resolvable hash symlink (upgrade repair)", () => {
+    // An install made before the subject hash was computed canonically has its
+    // symlink under the WRONG hash. Every file is present, so a files-only
+    // check reports "installed", activation skips the install, and the bad link
+    // is never repaired — leaving trust broken for exactly the users this fix
+    // exists for. Reproduced by installing, then renaming the link to a
+    // wrong-hash name: the state such a container is actually in.
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+
+    const links = fs
+      .readdirSync(trustDir)
+      .filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+    expect(links).toHaveLength(1);
+    const target = fs.readlinkSync(path.join(trustDir, links[0]));
+    fs.unlinkSync(path.join(trustDir, links[0]));
+    fs.symlinkSync(target, path.join(trustDir, "deadbeef.0"));
+
+    expect(isCertInstalled(userMaterial())).toBe(false);
+
+    // Re-running the install repairs it, which is what activation will now do.
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+  });
+
+  it("does not demand a symlink for a PEM whose subject cannot be hashed", () => {
+    // `ensureHashSymlink` is a no-op for an unparseable PEM, so reporting "not
+    // installed" would re-run the install every activation and never converge.
+    const unhashable = userMaterial({
+      pemCertBase64: Buffer.from("-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n").toString("base64"),
+    });
+    installUserCert(unhashable);
+    expect(isCertInstalled(unhashable)).toBe(true);
   });
 
   it("returns false when opted out but a stale store PFX is still on disk", () => {
