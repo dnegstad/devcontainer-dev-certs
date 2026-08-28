@@ -62,6 +62,7 @@ function whichOk(): void {
     exitCode: 0,
     stdout: "/usr/bin/certutil\n",
     stderr: "",
+    truncated: false,
   });
 }
 
@@ -71,6 +72,7 @@ function certutilOk(times: number): void {
       exitCode: 0,
       stdout: "",
       stderr: "",
+      truncated: false,
     });
   }
 }
@@ -99,6 +101,7 @@ describe("trustInNss", () => {
       exitCode: 1,
       stdout: "",
       stderr: "which: no certutil in PATH",
+      truncated: false,
     });
 
     const result = await trustInNss(pemPath);
@@ -113,6 +116,7 @@ describe("trustInNss", () => {
       exitCode: 0,
       stdout: "/usr/bin/certutil\n",
       stderr: "",
+      truncated: false,
     });
 
     const result = await trustInNss(pemPath);
@@ -225,11 +229,12 @@ describe("trustInNss", () => {
     makeNssDb(".mozilla", "firefox", "test.profile");
     whichOk();
     mockedRunProcess
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // -D
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "", truncated: false }) // -D
       .mockResolvedValueOnce({
         exitCode: 1,
         stdout: "",
         stderr: "SEC_ERROR_BAD_DATABASE",
+        truncated: false,
       }); // -A fails
 
     const result = await trustInNss(pemPath);

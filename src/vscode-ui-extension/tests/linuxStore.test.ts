@@ -26,6 +26,7 @@ vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
     exitCode: 0,
     stdout: "abcd1234\n",
     stderr: "",
+    truncated: false,
   }),
 }));
 

@@ -254,3 +254,47 @@ describe("runProcess safe-exec guard", () => {
     }
   );
 });
+
+/**
+ * Output-cap behavior. Driven against real child processes rather than a mock
+ * because the whole point is Node's own semantics: on overflow it kills the
+ * child and rejects with a *string* `error.code`
+ * (ERR_CHILD_PROCESS_STDIO_MAXBUFFER), which `runProcess` folds into
+ * `exitCode: 1` with an empty stderr — the same shape as a genuine failure.
+ * `truncated` is the only thing that tells them apart.
+ */
+describe.skipIf(process.platform === "win32")("runProcess output cap", () => {
+  it("reports truncated: false for output under the cap", async () => {
+    const result = await runProcess("head", ["-c", "500000", "/dev/zero"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.truncated).toBe(false);
+    expect(result.stdout).toHaveLength(500_000);
+  }, 30_000);
+
+  it("carries 2 MiB of output that Node's 1 MiB default would have cut", async () => {
+    // The regression this guards: `security find-certificate -a` on a large
+    // macOS login keychain exceeds 1 MiB, and losing that output made
+    // isCertInKeychain answer "no" and trigger a regenerate loop.
+    const result = await runProcess("head", ["-c", "2000000", "/dev/zero"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.truncated).toBe(false);
+    expect(result.stdout).toHaveLength(2_000_000);
+  }, 30_000);
+
+  it("flags truncated: true when a command exceeds even the raised cap", async () => {
+    // `yes` never terminates, so it always overruns. Confirms the flag is
+    // actually wired to Node's string error code and not just defaulted.
+    const result = await runProcess("yes", ["truncation-probe"], 20_000);
+    expect(result.truncated).toBe(true);
+    // The failure is indistinguishable from a real one without the flag:
+    // non-zero exit, and nothing in stderr to explain it.
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toBe("");
+  }, 60_000);
+
+  it("reports truncated: false for an ordinary non-zero exit", async () => {
+    const result = await runProcess("ls", ["/definitely/not/here"]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.truncated).toBe(false);
+  }, 30_000);
+});

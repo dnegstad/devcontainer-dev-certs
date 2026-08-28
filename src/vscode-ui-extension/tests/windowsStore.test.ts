@@ -47,7 +47,7 @@ function setupPsMock(opts: {
   mockedRunProcess.mockImplementation(async (cmd: string, args: readonly string[]) => {
     if (cmd === "pwsh" && args.includes("echo ok") && !psProbed) {
       psProbed = true;
-      return { exitCode: 0, stdout: "ok", stderr: "" };
+      return { exitCode: 0, stdout: "ok", stderr: "", truncated: false };
     }
     // Enumeration call — script is the last arg.
     const payload = {
@@ -58,6 +58,7 @@ function setupPsMock(opts: {
       exitCode: 0,
       stdout: JSON.stringify(payload),
       stderr: "",
+      truncated: false,
     };
   });
 }

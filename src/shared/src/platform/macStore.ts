@@ -12,6 +12,7 @@ import { getCertificateVersion, isValidDevCert } from "../cert/validation";
 import { certToDer } from "../cert/exporter";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { DevCert, type DevKey } from "../cert/types";
+import { log } from "../logger";
 
 /**
  * macOS certificate store implementation.
@@ -141,6 +142,28 @@ export class MacCertificateStore extends BaseCertificateStore {
       "-Z",
       this.keychainPath,
     ]);
+    // Truncated output means we scanned a prefix of the keychain and simply
+    // don't know. Answer YES — deliberately failing open, which inverts the
+    // usual instinct because here the closed direction is the destructive one.
+    //
+    // A `false` gets the on-disk PFX force-skipped as an orphaned cache file,
+    // which empties `findExistingDevCert`, which makes `checkStatus()` report
+    // `exists: false`, which sends `CertManager.trust()` down the `generate()`
+    // branch: a brand-new cert plus an `add-trusted-cert` keychain password
+    // prompt. That new cert then lands in the same keychain, so the next call
+    // truncates even sooner — a self-feeding loop with no way out.
+    //
+    // The open direction costs at most one redundant re-trust: `checkStatus`
+    // establishes trust separately via `security verify-cert` in `isTrusted`,
+    // so a cert that genuinely isn't in the keychain is caught there.
+    if (result.truncated) {
+      log(
+        `macOS keychain enumeration exceeded the output cap while looking for ${thumbprint}; ` +
+          `assuming the certificate IS present rather than regenerating it. ` +
+          `A login keychain this large may want pruning.`
+      );
+      return true;
+    }
     if (result.exitCode !== 0) return false;
     const needle = thumbprint.toUpperCase();
     // Modern macOS prints both `SHA-256 hash:` and `SHA-1 hash:` lines
@@ -167,7 +190,18 @@ export class MacCertificateStore extends BaseCertificateStore {
       "-Z",
       this.keychainPath,
     ]);
-    if (result.exitCode !== 0) return [];
+    // Unlike `isCertInKeychain`, an incomplete answer here is harmless: this
+    // pass only emits a "in the keychain but no cache PFX" warning, so a short
+    // list costs a log line rather than a decision. Say why, then carry on
+    // with whatever prefix we got.
+    if (result.truncated) {
+      log(
+        "macOS keychain enumeration exceeded the output cap; the keychain-resident " +
+          "dev cert warnings below cover only part of the keychain."
+      );
+    } else if (result.exitCode !== 0) {
+      return [];
+    }
 
     const out: Array<{ cert: DevCert; thumbprint: string }> = [];
     const pemBlocks = extractPemBlocks(result.stdout);

@@ -57,12 +57,20 @@ function devCertsDir(): string {
 function setupSecurityMock(opts: {
   keychainThumbs?: Set<string>;
   extraKeychainPems?: string[];
+  /**
+   * Simulate `runProcess` killing `security` for exceeding the output cap:
+   * exitCode 1, empty stderr, a truncated stdout prefix. That is exactly the
+   * shape Node produces (`error.code` is the string
+   * ERR_CHILD_PROCESS_STDIO_MAXBUFFER, so it lands in the same exitCode 1
+   * bucket as a real failure).
+   */
+  truncateHashEnumeration?: boolean;
 } = {}) {
   const calls: Array<{ cmd: string; args: readonly string[] }> = [];
   mockedRunProcess.mockImplementation(async (cmd: string, args: readonly string[]) => {
     calls.push({ cmd, args: [...args] });
     if (cmd !== "security") {
-      return { exitCode: 0, stdout: "", stderr: "" };
+      return { exitCode: 0, stdout: "", stderr: "", truncated: false };
     }
     const sub = args[0];
     if (sub === "find-certificate") {
@@ -75,7 +83,15 @@ function setupSecurityMock(opts: {
               `SHA-256 hash: ${"AB".repeat(32)}\nSHA-1 hash: ${t}\nkeychain: "/Users/test/Library/Keychains/login.keychain-db"\n`
           )
           .join("");
-        return { exitCode: 0, stdout, stderr: "" };
+        if (opts.truncateHashEnumeration) {
+          return {
+            exitCode: 1,
+            stdout: stdout.slice(0, 32),
+            stderr: "",
+            truncated: true,
+          };
+        }
+        return { exitCode: 0, stdout, stderr: "", truncated: false };
       }
       // enumerate all as PEM
       if (args.includes("-a") && args.includes("-p")) {
@@ -84,10 +100,11 @@ function setupSecurityMock(opts: {
           exitCode: 0,
           stdout: pems.join("\n"),
           stderr: "",
+          truncated: false,
         };
       }
     }
-    return { exitCode: 0, stdout: "", stderr: "" };
+    return { exitCode: 0, stdout: "", stderr: "", truncated: false };
   });
   return {
     calls,
@@ -127,6 +144,64 @@ describe("MacCertificateStore.findExistingDevCert", () => {
     const found = await store.findExistingDevCert();
     expect(found?.thumbprint).toBe(thumbprint);
     expect(sec.securityExportCalled()).toBe(false);
+  });
+
+  it("keeps the cert when keychain enumeration is truncated, instead of regenerating", async () => {
+    // `security find-certificate -a` dumps the whole login keychain, which on
+    // a large one blows past the output cap. Node reports that with a STRING
+    // error.code, so it arrives as exitCode 1 with empty stderr —
+    // indistinguishable from a real failure without the `truncated` flag.
+    //
+    // Reading it as "not in the keychain" is the destructive answer: the PFX
+    // gets force-skipped as an orphan, findExistingDevCert comes back empty,
+    // checkStatus reports exists:false, and CertManager.trust() generates a
+    // fresh cert plus an add-trusted-cert password prompt. That cert then
+    // lands in the same keychain, so the next call truncates sooner — a loop
+    // that feeds itself. So we deliberately fail OPEN here.
+    const { cert, key, thumbprint } = await makeTestCert();
+    const pfxBytes = await buildPfx({ cert, key });
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
+      pfxBytes
+    );
+
+    setupSecurityMock({
+      keychainThumbs: new Set([thumbprint]),
+      truncateHashEnumeration: true,
+    });
+
+    const found = await store.findExistingDevCert();
+    expect(found?.thumbprint).toBe(thumbprint);
+    // Specifically NOT classified as an orphaned cache file.
+    expect(
+      logMessages.find((m) => m.includes("orphaned cache file"))
+    ).toBeUndefined();
+    expect(
+      logMessages.find((m) => m.includes("exceeded the output cap"))
+    ).toBeDefined();
+  });
+
+  it("still reports a genuinely absent cert as an orphan when output is complete", async () => {
+    // The fail-open above must be scoped to truncation only — an untruncated
+    // enumeration that simply doesn't list the thumbprint still means the PFX
+    // is orphaned, and that classification has to survive.
+    const { cert, key, thumbprint } = await makeTestCert();
+    const pfxBytes = await buildPfx({ cert, key });
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
+      pfxBytes
+    );
+
+    setupSecurityMock({
+      keychainThumbs: new Set(),
+      truncateHashEnumeration: false,
+    });
+
+    const found = await store.findExistingDevCert();
+    expect(found).toBeNull();
+    expect(
+      logMessages.find((m) => m.includes("orphaned cache file"))
+    ).toBeDefined();
   });
 
   it("excludes a PFX whose cert is NOT in the keychain and logs the orphan warning", async () => {
