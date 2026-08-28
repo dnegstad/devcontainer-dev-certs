@@ -5,13 +5,40 @@ import * as path from "path";
 /**
  * Pure TypeScript implementation of OpenSSL's c_rehash for certificate directories.
  *
- * OpenSSL uses the "subject name hash" to look up certificates by filename.
- * The hash is computed as: SHA-1 of the DER-encoded canonical subject name,
- * then the first 4 bytes interpreted as a little-endian 32-bit unsigned integer,
- * formatted as 8-character lowercase hex.
+ * OpenSSL's `X509_NAME_hash` — the value `by_dir` (i.e. `SSL_CERT_DIR` /
+ * `-CApath`) uses to find a certificate by subject — is NOT a hash of the
+ * subject's on-the-wire DER. It hashes the *canonical* encoding produced by
+ * `X509_NAME_canon`, which differs in two ways that both matter here:
  *
- * This matches the simplified c_rehash in .NET's UnixCertificateManager.
+ *   1. Each attribute value is normalized: string types in `ASN1_MASK_CANON`
+ *      are re-tagged as UTF8String, ASCII-lowercased, and have leading /
+ *      trailing spaces trimmed with internal runs collapsed to one space.
+ *   2. The result is the bare concatenation of the DER `SET OF` encodings of
+ *      the RDNs — the outer `SEQUENCE` header of the Name is NOT included.
+ *
+ * SHA-1 over that byte string, first 4 bytes read as a little-endian uint32,
+ * formatted as 8-character lowercase hex, is the `{hash}.N` filename OpenSSL
+ * looks for. Hashing the raw subject DER instead produces a name nothing ever
+ * looks up, which silently disables `SSL_CERT_DIR` trust.
  */
+
+/**
+ * ASN.1 string tags OpenSSL's `asn1_string_canon` normalizes (ASN1_MASK_CANON).
+ * Anything outside this set — NumericString included — is copied through with
+ * its original tag and bytes.
+ */
+const CANONICALIZED_STRING_TAGS = new Set<number>([
+  0x0c, // UTF8String
+  0x13, // PrintableString
+  0x14, // T61String / TeletexString
+  0x16, // IA5String
+  0x1a, // VisibleString
+  0x1c, // UniversalString
+  0x1e, // BMPString
+]);
+
+/** Tag OpenSSL re-labels every canonicalized string with. */
+const UTF8_STRING_TAG = 0x0c;
 
 /**
  * Compute the OpenSSL subject hash from a PEM certificate string.
@@ -27,8 +54,11 @@ export function computeSubjectHash(pemCert: string): string | null {
     const subjectDer = extractSubjectDer(derBytes);
     if (!subjectDer) return null;
 
-    // Compute SHA-1 hash of the DER-encoded subject
-    const hash = crypto.createHash("sha1").update(subjectDer).digest();
+    // Reduce it to OpenSSL's canonical form before hashing.
+    const canonical = canonicalizeName(subjectDer);
+    if (!canonical) return null;
+
+    const hash = crypto.createHash("sha1").update(canonical).digest();
 
     // Take first 4 bytes as little-endian uint32, format as 8-char hex
     const value = hash.readUInt32LE(0);
@@ -203,6 +233,127 @@ function extractSubjectDer(certDer: Buffer): Buffer | null {
 
   // Return the full TLV (tag + length + content) of the subject
   return certDer.subarray(pos, subject.contentOffset + subject.contentLength);
+}
+
+/**
+ * Reduce a DER-encoded X.509 `Name` to the byte string OpenSSL hashes in
+ * `X509_NAME_hash`: each RDN re-encoded as a DER `SET OF` over canonicalized
+ * attributes, concatenated, with NO outer `SEQUENCE` header.
+ */
+function canonicalizeName(nameDer: Buffer): Buffer | null {
+  const name = readTag(nameDer, 0);
+  if (!name || name.tag !== 0x30) return null;
+
+  const nameEnd = name.contentOffset + name.contentLength;
+  if (nameEnd > nameDer.length) return null;
+
+  const rdnEncodings: Buffer[] = [];
+  let pos = name.contentOffset;
+  while (pos < nameEnd) {
+    const rdn = readTag(nameDer, pos);
+    if (!rdn || rdn.tag !== 0x31) return null;
+    const rdnEnd = rdn.contentOffset + rdn.contentLength;
+    if (rdnEnd > nameEnd) return null;
+
+    const attributes: Buffer[] = [];
+    let attrPos = rdn.contentOffset;
+    while (attrPos < rdnEnd) {
+      const attr = readTag(nameDer, attrPos);
+      if (!attr || attr.tag !== 0x30) return null;
+      const attrEnd = attr.contentOffset + attr.contentLength;
+      if (attrEnd > rdnEnd) return null;
+
+      const type = readTag(nameDer, attr.contentOffset);
+      if (!type || type.tag !== 0x06) return null;
+      const typeEnd = type.contentOffset + type.contentLength;
+      if (typeEnd > attrEnd) return null;
+
+      const value = readTag(nameDer, typeEnd);
+      if (!value) return null;
+      if (value.contentOffset + value.contentLength > attrEnd) return null;
+
+      const canonValue = canonicalizeAttributeValue(
+        value.tag,
+        nameDer.subarray(
+          value.contentOffset,
+          value.contentOffset + value.contentLength
+        )
+      );
+      attributes.push(
+        derTlv(
+          0x30,
+          Buffer.concat([nameDer.subarray(attr.contentOffset, typeEnd), canonValue])
+        )
+      );
+
+      attrPos = attrEnd;
+    }
+
+    // DER requires SET OF members to be sorted by their encodings.
+    attributes.sort(compareDerSetMembers);
+    rdnEncodings.push(derTlv(0x31, Buffer.concat(attributes)));
+
+    pos = rdnEnd;
+  }
+
+  return Buffer.concat(rdnEncodings);
+}
+
+/**
+ * OpenSSL's `asn1_string_canon`: string types in ASN1_MASK_CANON are re-tagged
+ * as UTF8String and normalized (ASCII-lowercased, leading/trailing spaces
+ * dropped, internal space runs collapsed to one). Everything else is copied
+ * through untouched. Note that OpenSSL does not transcode BMPString /
+ * UniversalString bytes to UTF-8 here — it only relabels the tag — so we
+ * mirror that byte-for-byte rather than "fixing" it.
+ */
+function canonicalizeAttributeValue(tag: number, content: Buffer): Buffer {
+  if (!CANONICALIZED_STRING_TAGS.has(tag)) return derTlv(tag, content);
+
+  let start = 0;
+  let end = content.length;
+  while (start < end && content[start] === 0x20) start++;
+  while (end > start && content[end - 1] === 0x20) end--;
+
+  const out: number[] = [];
+  for (let i = start; i < end; i++) {
+    const byte = content[i];
+    if (byte === 0x20) {
+      out.push(0x20);
+      while (i + 1 < end && content[i + 1] === 0x20) i++;
+      continue;
+    }
+    // ossl_tolower is ASCII-only; bytes with the MSB set pass through.
+    out.push(byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte);
+  }
+
+  return derTlv(UTF8_STRING_TAG, Buffer.from(out));
+}
+
+/**
+ * DER `SET OF` ordering, matching OpenSSL's `der_cmp`: compare the shared
+ * prefix, then let the shorter encoding sort first.
+ */
+function compareDerSetMembers(a: Buffer, b: Buffer): number {
+  const shared = Math.min(a.length, b.length);
+  const diff = Buffer.compare(a.subarray(0, shared), b.subarray(0, shared));
+  return diff !== 0 ? diff : a.length - b.length;
+}
+
+/** Encode a single DER TLV with a minimal definite-form length. */
+function derTlv(tag: number, content: Buffer): Buffer {
+  return Buffer.concat([Buffer.from([tag]), derLength(content.length), content]);
+}
+
+function derLength(length: number): Buffer {
+  if (length < 0x80) return Buffer.from([length]);
+  const bytes: number[] = [];
+  let remaining = length;
+  while (remaining > 0) {
+    bytes.unshift(remaining & 0xff);
+    remaining >>>= 8;
+  }
+  return Buffer.from([0x80 | bytes.length, ...bytes]);
 }
 
 interface TlvResult {

@@ -99,12 +99,12 @@ export type {
   BaseStoreOptions,
   LinuxNssTrustReporter,
 } from "./platform/types";
-export {
-  BaseCertificateStore,
-  classifyCandidate as classifyPlatformCandidate,
-  selectBestDevCert as selectBestPlatformDevCert,
-} from "./platform/baseStore";
-export type { ClassifyOptions as PlatformClassifyOptions } from "./platform/baseStore";
+// Only the base class is re-exported here. The platform-flavored (localized,
+// logging) `classifyCandidate` / `selectBestDevCert` wrappers live in
+// `./platform/baseStore`; consumers that want those import the submodule
+// directly, so the barrel doesn't need aliases that shadow the pure
+// classifier exported above.
+export { BaseCertificateStore } from "./platform/baseStore";
 export { LinuxCertificateStore } from "./platform/linuxStore";
 export type { LinuxCertificateStoreOptions } from "./platform/linuxStore";
 export { MacCertificateStore } from "./platform/macStore";

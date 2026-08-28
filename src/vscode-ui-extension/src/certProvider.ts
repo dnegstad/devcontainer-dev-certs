@@ -148,12 +148,6 @@ export class CertProvider {
       : { certs: v3Certs };
   }
 
-  clearCache(): void {
-    this.cachedDotNet = null;
-    this.cachedUser.clear();
-    this.warnedExpiredCerts.clear();
-  }
-
   private async collect(
     args: GetAllCertMaterialArgs
   ): Promise<CachedCert[]> {

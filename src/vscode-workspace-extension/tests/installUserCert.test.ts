@@ -210,6 +210,25 @@ describe.skipIf(process.platform === "win32")("isCertInstalled", () => {
     );
   });
 
+  it("returns false when opted out but a stale store PFX is still on disk", () => {
+    // The opt-out sweep lives in `installUserCert`'s else-branch, and the
+    // activation path only calls that when `isCertInstalled` says false. If
+    // this reported "installed" the sweep would be unreachable and the
+    // passwordless (plain-text-key) copy would survive the user flipping
+    // `installUserCertsToDotNetStore` off, forever.
+    installUserCert(
+      userMaterial({
+        installToDotNetStore: true,
+        dotNetStorePfxBase64: Buffer.from("OLD").toString("base64"),
+      })
+    );
+    expect(fs.existsSync(path.join(storeDir, "AABBCCDDEEFF.pfx"))).toBe(true);
+
+    expect(isCertInstalled(userMaterial({ installToDotNetStore: false }))).toBe(
+      false
+    );
+  });
+
   it("returns false for an opted-in user cert when the store file is missing", () => {
     // Only the trust-dir copy was installed (simulate a half-completed install
     // or a manual deletion). The check should reflect that the store file is

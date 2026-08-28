@@ -22,9 +22,34 @@ vi.mock("os", async (importOriginal) => {
 });
 
 import { trustInNss } from "../src/platform/nssTrust";
+import { DevCert } from "@devcontainer-dev-certs/shared";
 import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
+
+/** A real self-signed CN=localhost certificate — `nicknameFor` has to parse
+ *  it to derive the per-cert NSS nickname. */
+const REAL_PEM =
+  "-----BEGIN CERTIFICATE-----\n" +
+  "MIIDCTCCAfGgAwIBAgIUKqotkm31fbIEbOVcgrem0favrgQwDQYJKoZIhvcNAQEL\n" +
+  "BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDgyODAwMDM1OFoXDTM2MDgy\n" +
+  "NTAwMDM1OFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF\n" +
+  "AAOCAQ8AMIIBCgKCAQEAjgGYX2B2v2F5mSgDK2skLTZ7WtkYEJXZ/dD3i4Io5ZuQ\n" +
+  "5z4nt6VPSnCZFe8jBcDqcgdnCWUOG8yo7BP0pMQHMNRcqmyfMssIKWenPSPWU3U1\n" +
+  "qMkah8hJbzQkuPlL88yBRDGlHI5ioE6YJKkvwaXBEpaj7xwL0IeOg7ODBz/C6lev\n" +
+  "KGqfh8180tJ2/SJc6Hpgi0aaWFmkaYyB2/xZnxGTOaXlYtaU1WLVHSG0pJUdYEAm\n" +
+  "m8S/oaofwPNEG/GStb+X5NVQKxQS2ZhsPcrv55EoZ43ukRwvUCeE1jN0xAVx9KO6\n" +
+  "1PzYWxGwrneCv45VV+698LstLLn9tWL0FAe0MWxfcwIDAQABo1MwUTAdBgNVHQ4E\n" +
+  "FgQUszuVse2bqDyPBDxDgwodnoWFiSowHwYDVR0jBBgwFoAUszuVse2bqDyPBDxD\n" +
+  "gwodnoWFiSowDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAd8fg\n" +
+  "cVxi0bb27kpCjCBBkWGJkfu2SpY8D345PPvsQfxEoaBmvmPSo+V0uO5vPM6VQkMb\n" +
+  "nwOyGytTYM+uVWADA3YJ+gYpToRfWE+06hKh2ziCDves8rObymLHApFosU0ulT35\n" +
+  "HWw7S1Sv68k4Wqh7Q7neaYdKGjXWIpMbQ/aDUkUSRYYdmCyidmxAJFi71ROmkl0N\n" +
+  "SutU65eZyiU8Rh6GSn1u3iPn+DHtcI/3npplew/kXUSliw4gpI7lipD31uBHVJc+\n" +
+  "k8ge6yTGRi5QppCpiSYcpv0MJ1+DdaadFkYjOV4DPXid9xeJ7ZwQX2rK6Zbkj36Z\n" +
+  "dW1E/BkFPJeKGPofjA==\n" +
+  "-----END CERTIFICATE-----\n";
+
 
 function makeNssDb(...segs: string[]): string {
   const dir = path.join(mockHomeDir, ...segs);
@@ -276,5 +301,37 @@ describe("trustInNss", () => {
     expect(result.message).toBe(
       "Trusted in: Chromium, Firefox (Snap) (p.default)"
     );
+  });
+
+  it("names each certificate by thumbprint so two dev certs can coexist", async () => {
+    // NSS nicknames are unique per database. A shared nickname made every
+    // `trustInNss` call evict the previously-trusted cert — so the host's
+    // generated cert and a container-pushed one could never both be trusted
+    // in browsers, even though the OpenSSL trust dir is deliberately
+    // additive for exactly that reason.
+    const realPemPath = path.join(tmpDir, "real-cert.pem");
+    fs.writeFileSync(realPemPath, REAL_PEM);
+    const expectedNickname = `Dev Container Dev Cert (${new DevCert(REAL_PEM).thumbprintSha1})`;
+
+    makeNssDb(".mozilla", "firefox", "thumbprint.profile");
+    whichOk();
+    certutilOk(3);
+
+    await trustInNss(realPemPath);
+
+    // 1: delete the pre-thumbprint nickname (upgrade cleanup), 2: delete our
+    // own nickname (idempotency), 3: add under our own nickname.
+    const legacyDelete = mockedRunProcess.mock.calls[1];
+    expect(legacyDelete[1]).toContain("-D");
+    expect(legacyDelete[1]).toContain("Dev Container Dev Cert");
+
+    const selfDelete = mockedRunProcess.mock.calls[2];
+    expect(selfDelete[1]).toContain("-D");
+    expect(selfDelete[1]).toContain(expectedNickname);
+
+    const addCall = mockedRunProcess.mock.calls[3];
+    expect(addCall[1]).toContain("-A");
+    expect(addCall[1]).toContain(expectedNickname);
+    expect(addCall[1]).toContain(realPemPath);
   });
 });

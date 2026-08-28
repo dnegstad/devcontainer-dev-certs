@@ -3,13 +3,42 @@ import * as os from "os";
 import * as path from "path";
 import { runProcess } from "./processUtil";
 import { log } from "../logger";
+import { DevCert } from "../cert/types";
 
 export interface NssTrustResult {
   success: boolean;
   message: string;
 }
 
+/**
+ * Nickname stem. NSS nicknames are unique per database, so the thumbprint is
+ * appended (see `nicknameFor`) — without it, trusting a second dev cert would
+ * evict the first from every browser DB, which is exactly the ping-ponging
+ * `LinuxCertificateStore.trustViaOpenSsl` was deliberately made additive to
+ * avoid. Host-generated and container-pushed certs have to coexist here too.
+ */
 const CERT_NAME = "Dev Container Dev Cert";
+
+/**
+ * Nickname used by versions before per-cert nicknames existed. Removed
+ * alongside the per-cert entry on every add so an upgrade doesn't strand a
+ * permanently-trusted cert under a name we no longer write.
+ */
+const LEGACY_CERT_NAME = CERT_NAME;
+
+/**
+ * Per-certificate NSS nickname. Falls back to the bare stem when the PEM
+ * can't be parsed — `certutil -A` would fail on that input anyway, so the
+ * nickname is moot at that point.
+ */
+function nicknameFor(pemPath: string): string {
+  try {
+    const cert = new DevCert(fs.readFileSync(pemPath, "utf-8"));
+    return `${CERT_NAME} (${cert.thumbprintSha1})`;
+  } catch {
+    return CERT_NAME;
+  }
+}
 
 type NssTargetKind = "chromium-shared" | "firefox-profiles";
 
@@ -143,12 +172,13 @@ export async function trustInNss(pemPath: string): Promise<NssTrustResult> {
 
   const outcomes: DbOutcome[] = [];
   const targets = getNssTargets(os.homedir());
+  const nickname = nicknameFor(pemPath);
 
   for (const target of targets) {
     if (target.kind === "chromium-shared") {
-      await scanChromiumShared(target, pemPath, outcomes);
+      await scanChromiumShared(target, pemPath, nickname, outcomes);
     } else {
-      await scanFirefoxProfiles(target, pemPath, outcomes);
+      await scanFirefoxProfiles(target, pemPath, nickname, outcomes);
     }
   }
 
@@ -178,13 +208,14 @@ export async function trustInNss(pemPath: string): Promise<NssTrustResult> {
 async function scanChromiumShared(
   target: NssTarget,
   pemPath: string,
+  nickname: string,
   outcomes: DbOutcome[]
 ): Promise<void> {
   if (!fs.existsSync(path.join(target.root, "cert9.db"))) {
     log(`NSS scan: ${target.label} not present at ${target.root}, skipping.`);
     return;
   }
-  const r = await trustInNssDb(`sql:${target.root}`, pemPath);
+  const r = await trustInNssDb(`sql:${target.root}`, pemPath, nickname);
   outcomes.push({
     label: target.label,
     ok: r.exitCode === 0,
@@ -195,6 +226,7 @@ async function scanChromiumShared(
 async function scanFirefoxProfiles(
   target: NssTarget,
   pemPath: string,
+  nickname: string,
   outcomes: DbOutcome[]
 ): Promise<void> {
   if (!fs.existsSync(target.root)) {
@@ -226,7 +258,7 @@ async function scanFirefoxProfiles(
 
   for (const profile of profiles) {
     const dbPath = path.join(target.root, profile);
-    const r = await trustInNssDb(`sql:${dbPath}`, pemPath);
+    const r = await trustInNssDb(`sql:${dbPath}`, pemPath, nickname);
     outcomes.push({
       label: `${target.label} (${profile})`,
       ok: r.exitCode === 0,
@@ -237,10 +269,20 @@ async function scanFirefoxProfiles(
 
 async function trustInNssDb(
   dbArg: string,
-  pemPath: string
+  pemPath: string,
+  nickname: string
 ): Promise<{ exitCode: number; stderr: string }> {
-  // Remove any existing cert with this name first to make the operation idempotent
-  await runProcess("certutil", ["-D", "-d", dbArg, "-n", CERT_NAME]);
+  // Drop the shared nickname older versions used, so upgrading doesn't leave
+  // a cert permanently trusted under a name we no longer manage. Skipped when
+  // this cert IS the legacy-named one (unparseable PEM fallback) — the
+  // per-nickname delete below covers that case.
+  if (nickname !== LEGACY_CERT_NAME) {
+    await runProcess("certutil", ["-D", "-d", dbArg, "-n", LEGACY_CERT_NAME]);
+  }
+  // Remove any existing cert with this name first to make the operation
+  // idempotent. Both deletes exit non-zero when there's nothing to remove;
+  // that's the common case and not an error.
+  await runProcess("certutil", ["-D", "-d", dbArg, "-n", nickname]);
 
   const result = await runProcess("certutil", [
     "-A",
@@ -249,7 +291,7 @@ async function trustInNssDb(
     "-t",
     "CT,,",
     "-n",
-    CERT_NAME,
+    nickname,
     "-i",
     pemPath,
   ]);

@@ -277,7 +277,11 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     for (const file of files) {
       const pfxPath = path.join(dir, file);
       try {
-        const result = await this.loadPfx(pfxPath);
+        // Lenient, not strict: the Root store holds public-cert-only PFXes
+        // (see `trustInDotNetRootStore`), which the key-requiring `loadPfx`
+        // rejects outright. Using it here made root-store dev certs
+        // permanently unremovable.
+        const result = await this.loadPfxLenient(pfxPath);
         if (result && result.cert.hasExtension(ASPNET_HTTPS_OID)) {
           fs.unlinkSync(pfxPath);
         }

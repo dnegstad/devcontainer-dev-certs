@@ -177,12 +177,20 @@ export function isCertInstalled(material: CertMaterialV3): boolean {
     );
   }
 
+  const storePfxPath = path.join(
+    getDotNetStorePath(),
+    getPfxFileName(material.thumbprint)
+  );
   if (material.installToDotNetStore) {
-    const pfxPath = path.join(
-      getDotNetStorePath(),
-      getPfxFileName(material.thumbprint)
-    );
-    if (!fs.existsSync(pfxPath)) return false;
+    if (!fs.existsSync(storePfxPath)) return false;
+  } else if (fs.existsSync(storePfxPath)) {
+    // Opted out, but a passwordless copy from a previous opt-in is still
+    // sitting in the .NET store. Report "not installed" so the caller runs
+    // `installUserCert`, whose else-branch sweeps that file — otherwise the
+    // sweep is unreachable and the plain-text key copy lives on forever
+    // after the user flips `installUserCertsToDotNetStore` off (or adds
+    // `excludeFromDotNetStore`).
+    return false;
   }
   if (material.trustInContainer) {
     const pemPath = path.join(
