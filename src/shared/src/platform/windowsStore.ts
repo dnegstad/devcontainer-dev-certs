@@ -319,28 +319,6 @@ export class WindowsCertificateStore extends BaseCertificateStore {
     }
   }
 
-  async removeCertificates(): Promise<void> {
-    const script = `
-      $ErrorActionPreference = 'SilentlyContinue'
-      $oid = '${ASPNET_HTTPS_OID}'
-      foreach ($storePath in @('Cert:\\${this.storeLocation}\\My', 'Cert:\\${this.storeLocation}\\Root')) {
-        Get-ChildItem $storePath | Where-Object {
-          $_.Extensions | Where-Object { $_.Oid.Value -eq $oid }
-        } | ForEach-Object {
-          Remove-Item -LiteralPath $_.PSPath -Force
-        }
-      }
-    `;
-
-    const pwsh = await getPowerShell();
-    await runProcess(pwsh, [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      script,
-    ]);
-  }
-
   protected async isTrusted(
     _cert: DevCert,
     thumbprint: string

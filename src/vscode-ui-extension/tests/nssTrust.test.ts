@@ -21,10 +21,34 @@ vi.mock("os", async (importOriginal) => {
   };
 });
 
-import { trustInNss } from "../src/platform/nssTrust";
+import { trustInNss, DevCert } from "@devcontainer-dev-certs/shared";
 import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
+
+/** A real self-signed CN=localhost certificate — `nicknameFor` has to parse
+ *  it to derive the per-cert NSS nickname. */
+const REAL_PEM =
+  "-----BEGIN CERTIFICATE-----\n" +
+  "MIIDCTCCAfGgAwIBAgIUKqotkm31fbIEbOVcgrem0favrgQwDQYJKoZIhvcNAQEL\n" +
+  "BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDgyODAwMDM1OFoXDTM2MDgy\n" +
+  "NTAwMDM1OFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF\n" +
+  "AAOCAQ8AMIIBCgKCAQEAjgGYX2B2v2F5mSgDK2skLTZ7WtkYEJXZ/dD3i4Io5ZuQ\n" +
+  "5z4nt6VPSnCZFe8jBcDqcgdnCWUOG8yo7BP0pMQHMNRcqmyfMssIKWenPSPWU3U1\n" +
+  "qMkah8hJbzQkuPlL88yBRDGlHI5ioE6YJKkvwaXBEpaj7xwL0IeOg7ODBz/C6lev\n" +
+  "KGqfh8180tJ2/SJc6Hpgi0aaWFmkaYyB2/xZnxGTOaXlYtaU1WLVHSG0pJUdYEAm\n" +
+  "m8S/oaofwPNEG/GStb+X5NVQKxQS2ZhsPcrv55EoZ43ukRwvUCeE1jN0xAVx9KO6\n" +
+  "1PzYWxGwrneCv45VV+698LstLLn9tWL0FAe0MWxfcwIDAQABo1MwUTAdBgNVHQ4E\n" +
+  "FgQUszuVse2bqDyPBDxDgwodnoWFiSowHwYDVR0jBBgwFoAUszuVse2bqDyPBDxD\n" +
+  "gwodnoWFiSowDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAd8fg\n" +
+  "cVxi0bb27kpCjCBBkWGJkfu2SpY8D345PPvsQfxEoaBmvmPSo+V0uO5vPM6VQkMb\n" +
+  "nwOyGytTYM+uVWADA3YJ+gYpToRfWE+06hKh2ziCDves8rObymLHApFosU0ulT35\n" +
+  "HWw7S1Sv68k4Wqh7Q7neaYdKGjXWIpMbQ/aDUkUSRYYdmCyidmxAJFi71ROmkl0N\n" +
+  "SutU65eZyiU8Rh6GSn1u3iPn+DHtcI/3npplew/kXUSliw4gpI7lipD31uBHVJc+\n" +
+  "k8ge6yTGRi5QppCpiSYcpv0MJ1+DdaadFkYjOV4DPXid9xeJ7ZwQX2rK6Zbkj36Z\n" +
+  "dW1E/BkFPJeKGPofjA==\n" +
+  "-----END CERTIFICATE-----\n";
+
 
 function makeNssDb(...segs: string[]): string {
   const dir = path.join(mockHomeDir, ...segs);
@@ -38,6 +62,7 @@ function whichOk(): void {
     exitCode: 0,
     stdout: "/usr/bin/certutil\n",
     stderr: "",
+    truncated: false,
   });
 }
 
@@ -47,6 +72,7 @@ function certutilOk(times: number): void {
       exitCode: 0,
       stdout: "",
       stderr: "",
+      truncated: false,
     });
   }
 }
@@ -75,6 +101,7 @@ describe("trustInNss", () => {
       exitCode: 1,
       stdout: "",
       stderr: "which: no certutil in PATH",
+      truncated: false,
     });
 
     const result = await trustInNss(pemPath);
@@ -89,6 +116,7 @@ describe("trustInNss", () => {
       exitCode: 0,
       stdout: "/usr/bin/certutil\n",
       stderr: "",
+      truncated: false,
     });
 
     const result = await trustInNss(pemPath);
@@ -111,7 +139,7 @@ describe("trustInNss", () => {
       (call) => call[0] === "certutil" && call[1].includes("-A")
     );
     expect(addCall).toBeDefined();
-    expect(addCall![1]).toContain("CT,,");
+    expect(addCall![1]).toContain("P,,");
     expect(addCall![1]).toContain(pemPath);
     expect(addCall![1]).toContain(`sql:${nssDir}`);
   });
@@ -201,11 +229,12 @@ describe("trustInNss", () => {
     makeNssDb(".mozilla", "firefox", "test.profile");
     whichOk();
     mockedRunProcess
-      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "" }) // -D
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "", stderr: "", truncated: false }) // -D
       .mockResolvedValueOnce({
         exitCode: 1,
         stdout: "",
         stderr: "SEC_ERROR_BAD_DATABASE",
+        truncated: false,
       }); // -A fails
 
     const result = await trustInNss(pemPath);
@@ -230,6 +259,51 @@ describe("trustInNss", () => {
     const addCall = mockedRunProcess.mock.calls[2];
     expect(addCall[0]).toBe("certutil");
     expect(addCall[1]).toContain("-A");
+  });
+
+  // The cert is a self-signed end entity (cA=FALSE), so `P` (CERTDB_TRUSTED,
+  // "trusted peer") is the correct NSS encoding — except in Firefox, which
+  // empirically ignores `P` for server certs. `dotnet dev-certs https
+  // --trust` makes exactly this split, and Microsoft validated it against
+  // real browsers. A blanket flag is wrong for one family either way.
+  it("uses trusted-peer (P,,) for Chromium databases", async () => {
+    makeNssDb(".pki", "nssdb");
+    whichOk();
+    certutilOk(2);
+
+    await trustInNss(pemPath);
+
+    const addCall = mockedRunProcess.mock.calls[2];
+    expect(addCall[1]).toContain("-A");
+    expect(addCall[1][addCall[1].indexOf("-t") + 1]).toBe("P,,");
+  });
+
+  it("uses trusted-CA (C,,) for Firefox profiles", async () => {
+    makeNssDb(".mozilla", "firefox", "flags.profile");
+    whichOk();
+    certutilOk(2);
+
+    await trustInNss(pemPath);
+
+    const addCall = mockedRunProcess.mock.calls[2];
+    expect(addCall[1]).toContain("-A");
+    expect(addCall[1][addCall[1].indexOf("-t") + 1]).toBe("C,,");
+  });
+
+  it("picks the flag per database when both families are present", async () => {
+    makeNssDb(".pki", "nssdb");
+    makeNssDb(".mozilla", "firefox", "both.default");
+    whichOk();
+    certutilOk(4);
+
+    await trustInNss(pemPath);
+
+    // getNssTargets is ordered Chromium-family first, so calls 2 and 4 are
+    // the two `-A` invocations (each preceded by its idempotency delete).
+    const chromiumAdd = mockedRunProcess.mock.calls[2];
+    const firefoxAdd = mockedRunProcess.mock.calls[4];
+    expect(chromiumAdd[1][chromiumAdd[1].indexOf("-t") + 1]).toBe("P,,");
+    expect(firefoxAdd[1][firefoxAdd[1].indexOf("-t") + 1]).toBe("C,,");
   });
 
   it("handles native Chromium and Firefox in a single call", async () => {
@@ -276,5 +350,37 @@ describe("trustInNss", () => {
     expect(result.message).toBe(
       "Trusted in: Chromium, Firefox (Snap) (p.default)"
     );
+  });
+
+  it("names each certificate by thumbprint so two dev certs can coexist", async () => {
+    // NSS nicknames are unique per database. A shared nickname made every
+    // `trustInNss` call evict the previously-trusted cert — so the host's
+    // generated cert and a container-pushed one could never both be trusted
+    // in browsers, even though the OpenSSL trust dir is deliberately
+    // additive for exactly that reason.
+    const realPemPath = path.join(tmpDir, "real-cert.pem");
+    fs.writeFileSync(realPemPath, REAL_PEM);
+    const expectedNickname = `Dev Container Dev Cert (${new DevCert(REAL_PEM).thumbprintSha1})`;
+
+    makeNssDb(".mozilla", "firefox", "thumbprint.profile");
+    whichOk();
+    certutilOk(3);
+
+    await trustInNss(realPemPath);
+
+    // 1: delete the pre-thumbprint nickname (upgrade cleanup), 2: delete our
+    // own nickname (idempotency), 3: add under our own nickname.
+    const legacyDelete = mockedRunProcess.mock.calls[1];
+    expect(legacyDelete[1]).toContain("-D");
+    expect(legacyDelete[1]).toContain("Dev Container Dev Cert");
+
+    const selfDelete = mockedRunProcess.mock.calls[2];
+    expect(selfDelete[1]).toContain("-D");
+    expect(selfDelete[1]).toContain(expectedNickname);
+
+    const addCall = mockedRunProcess.mock.calls[3];
+    expect(addCall[1]).toContain("-A");
+    expect(addCall[1]).toContain(expectedNickname);
+    expect(addCall[1]).toContain(realPemPath);
   });
 });

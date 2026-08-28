@@ -4,9 +4,13 @@ import * as path from "path";
 import * as os from "os";
 import type * as SharedPaths from "@devcontainer-dev-certs/shared/src/paths";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import { buildPfx, parsePfx } from "../src/cert/pfx";
+import {
+  generateCertificate,
+  VALIDITY_DAYS,
+  buildPfx,
+  parsePfx,
+  LinuxCertificateStore,
+} from "@devcontainer-dev-certs/shared";
 import { logMessages } from "./__mocks__/vscode";
 
 initLogger("test");
@@ -22,6 +26,7 @@ vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
     exitCode: 0,
     stdout: "abcd1234\n",
     stderr: "",
+    truncated: false,
   }),
 }));
 
@@ -50,7 +55,6 @@ vi.mock("@devcontainer-dev-certs/shared/src/paths", async (importOriginal) => {
   };
 });
 
-import { LinuxCertificateStore } from "../src/platform/linuxStore";
 import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 import { trustInNss } from "@devcontainer-dev-certs/shared/src/platform/nssTrust";
 
@@ -128,29 +132,97 @@ describe("LinuxCertificateStore", () => {
       expect(content).toContain("-----BEGIN CERTIFICATE-----");
     });
 
-    it("creates hash symlinks via openssl", async () => {
-      mockedRunProcess.mockResolvedValue({
-        exitCode: 0,
-        stdout: "a1b2c3d4\n",
-        stderr: "",
-      });
-
-      const { cert } = await makeTestCert();
+    it("names the hash symlink with OpenSSL's canonical subject hash", async () => {
+      // Every cert we manage is CN=localhost, so the subject hash is the
+      // fixed value `openssl x509 -hash` reports for that name. Asserting
+      // the literal is the point: a symlink under any other name is one
+      // OpenSSL's `by_dir` lookup will never open, which silently disables
+      // SSL_CERT_DIR trust while looking perfectly healthy on disk.
+      const { cert, thumbprint } = await makeTestCert();
       await store.trustCertificate(cert);
 
-      const symlinkPath = path.join(testTrustDir, "a1b2c3d4.0");
+      const symlinkPath = path.join(testTrustDir, "ce275665.0");
       expect(fs.existsSync(symlinkPath)).toBe(true);
       expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
+      expect(fs.readlinkSync(symlinkPath)).toBe(
+        `aspnetcore-localhost-${thumbprint}.pem`
+      );
     });
 
-    it("calls openssl x509 -hash to compute the subject hash", async () => {
+    it("computes the subject hash in-process, never shelling out to openssl", async () => {
+      // The host is a developer machine we don't control; requiring an
+      // `openssl` binary there would make OpenSSL trust silently no-op on
+      // any host without it (the old code returned null and skipped the
+      // symlink). Trust must not depend on host tooling.
       const { cert } = await makeTestCert();
       await store.trustCertificate(cert);
 
-      expect(mockedRunProcess).toHaveBeenCalledWith(
-        "openssl",
-        expect.arrayContaining(["x509", "-hash", "-noout", "-in"])
+      const spawned = mockedRunProcess.mock.calls.map((c) => c[0]);
+      expect(spawned).not.toContain("openssl");
+    });
+
+    it("reports NOT trusted when the hash symlink is under the wrong hash", async () => {
+      // A host trusted before the subject hash was computed canonically has a
+      // link under the wrong name. If `isTrusted` only checked the PEM and root
+      // PFX, it would answer "trusted", CertManager.trust() would skip
+      // trustCertificate, and the broken link would survive every upgrade —
+      // leaving local OpenSSL trust dead for exactly the hosts this fixes.
+      const { cert, thumbprint } = await makeTestCert();
+      await store.trustCertificate(cert);
+      expect(await store.isCertTrusted(cert)).toBe(true);
+
+      const links = fs
+        .readdirSync(testTrustDir)
+        .filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+      expect(links).toHaveLength(1);
+      const target = fs.readlinkSync(path.join(testTrustDir, links[0]));
+      fs.unlinkSync(path.join(testTrustDir, links[0]));
+      fs.symlinkSync(target, path.join(testTrustDir, "deadbeef.0"));
+
+      // PEM and root PFX are both still present...
+      expect(
+        fs.existsSync(path.join(testTrustDir, `aspnetcore-localhost-${thumbprint}.pem`))
+      ).toBe(true);
+      expect(fs.existsSync(path.join(testRootStoreDir, `${thumbprint}.pfx`))).toBe(true);
+      // ...but trust is not actually established.
+      expect(await store.isCertTrusted(cert)).toBe(false);
+
+      // Re-trusting repairs it.
+      await store.trustCertificate(cert);
+      expect(await store.isCertTrusted(cert)).toBe(true);
+    });
+
+    it("reports NOT trusted when the PEM on disk no longer matches the cert", async () => {
+      // The filename is thumbprint-derived, so a *different* cert can't land
+      // here — but the file can still be truncated or rewritten in place
+      // while the hash link and root PFX survive. Checking only the name
+      // would report trust for bytes OpenSSL cannot load, and
+      // trustExternalCertificate's short-circuit would skip the repair.
+      const { cert, thumbprint } = await makeTestCert();
+      await store.trustCertificate(cert);
+      expect(await store.isCertTrusted(cert)).toBe(true);
+
+      const pemPath = path.join(
+        testTrustDir,
+        `aspnetcore-localhost-${thumbprint}.pem`
       );
+      fs.writeFileSync(
+        pemPath,
+        "-----BEGIN CERTIFICATE-----\ntruncated\n"
+      );
+
+      // Link and root PFX are untouched — only the content changed.
+      const links = fs
+        .readdirSync(testTrustDir)
+        .filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+      expect(links).toHaveLength(1);
+      expect(fs.existsSync(path.join(testRootStoreDir, `${thumbprint}.pfx`))).toBe(true);
+
+      expect(await store.isCertTrusted(cert)).toBe(false);
+
+      // Re-trusting rewrites the PEM and restores trust.
+      await store.trustCertificate(cert);
+      expect(await store.isCertTrusted(cert)).toBe(true);
     });
 
     it("is purely additive — does NOT remove other aspnetcore-localhost-*.pem files in the trust dir", async () => {
@@ -393,47 +465,6 @@ describe("LinuxCertificateStore", () => {
       );
       expect(warn).toBeDefined();
       expect(warn).toContain(thumbprint);
-    });
-  });
-
-  describe("removeCertificates", () => {
-    it("removes PFX from .NET store", async () => {
-      const { cert, key, thumbprint } = await makeTestCert();
-      await store.saveCertificate(cert, key, thumbprint);
-
-      const pfxPath = path.join(testStoreDir, `${thumbprint}.pfx`);
-      expect(fs.existsSync(pfxPath)).toBe(true);
-
-      await store.removeCertificates();
-      expect(fs.existsSync(pfxPath)).toBe(false);
-    });
-
-    it("removes PEM and hash symlinks from trust directory", async () => {
-      mockedRunProcess.mockResolvedValue({
-        exitCode: 0,
-        stdout: "a1b2c3d4\n",
-        stderr: "",
-      });
-
-      const { cert, key, thumbprint } = await makeTestCert();
-      await store.saveCertificate(cert, key, thumbprint);
-      await store.trustCertificate(cert);
-
-      const pemPath = path.join(
-        testTrustDir,
-        `aspnetcore-localhost-${thumbprint}.pem`
-      );
-      const symlinkPath = path.join(testTrustDir, "a1b2c3d4.0");
-      expect(fs.existsSync(pemPath)).toBe(true);
-      expect(fs.existsSync(symlinkPath)).toBe(true);
-
-      await store.removeCertificates();
-      expect(fs.existsSync(pemPath)).toBe(false);
-      expect(fs.existsSync(symlinkPath)).toBe(false);
-    });
-
-    it("handles non-existent directories gracefully", async () => {
-      await expect(store.removeCertificates()).resolves.toBeUndefined();
     });
   });
 

@@ -88,11 +88,6 @@ export interface PlatformCertificateStore {
   isCertTrusted(cert: DevCert): Promise<boolean>;
 
   /**
-   * Remove dev certificates from all stores.
-   */
-  removeCertificates(): Promise<void>;
-
-  /**
    * Check the status of the dev certificate.
    */
   checkStatus(): Promise<CertificateStatus>;

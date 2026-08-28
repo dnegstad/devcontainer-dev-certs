@@ -1,8 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { ensureHashSymlink, rehashDirectory } from "../src/util/rehash";
+import {
+  computeSubjectHash,
+  ensureHashSymlink,
+  hasHashSymlink,
+  rehashDirectory,
+} from "@devcontainer-dev-certs/shared";
 
 // Self-signed test cert; only used to give computeSubjectHash something real
 // to chew on. The actual hash value doesn't matter — only the symlink shape.
@@ -149,27 +155,70 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
     );
   });
 
-  it("returns silently when all 10 hash slots are taken by different PEMs", () => {
-    // Defensive bound check: 11th install must not throw and must not
-    // allocate slot 10+ (there's no slot 10 in c_rehash).
+  it("keeps allocating slots past 10 — every dev cert shares one subject hash", () => {
+    // This used to assert the opposite: that an 11th same-subject PEM was
+    // silently refused a slot. That bound was reachable in ordinary use rather
+    // than pathological, because every ASP.NET dev cert is CN=localhost, so
+    // slots are consumed by cert COUNT, not by real hash collisions. A
+    // container minting a fresh cert per rebuild — the default for most dotnet
+    // devcontainer base images, and not something this extension can enforce
+    // otherwise — exhausted all ten in ten rebuilds, after which the LIVE cert
+    // got no symlink while ten dead ones kept theirs, and `openssl verify
+    // -CApath` failed for the only cert that mattered. OpenSSL's `by_dir` has
+    // no such limit; it walks `{hash}.{n}` until a file is missing.
     const dir = tmp();
-    // Same content under 10 distinct filenames → same subject hash.
     for (let i = 0; i < 10; i++) {
       const name = `collide${i}.pem`;
       fs.writeFileSync(path.join(dir, name), SAMPLE_PEM_A);
       ensureHashSymlink(dir, name, SAMPLE_PEM_A);
     }
-    const before = listHashSymlinks(dir);
-    expect(before).toHaveLength(10);
+    expect(listHashSymlinks(dir)).toHaveLength(10);
 
-    // 11th attempt — must NOT throw and must NOT create an 11th symlink.
+    fs.writeFileSync(path.join(dir, "eleventh.pem"), SAMPLE_PEM_A);
+    ensureHashSymlink(dir, "eleventh.pem", SAMPLE_PEM_A);
+
+    const links = listHashSymlinks(dir);
+    expect(links).toHaveLength(11);
+    // The newcomer is the one that has to be reachable.
+    const mine = links.filter(
+      (l) => fs.readlinkSync(path.join(dir, l)) === "eleventh.pem"
+    );
+    expect(mine).toHaveLength(1);
+  });
+
+  it("throws rather than silently skipping when every slot is taken", () => {
+    // Returning quietly would let an install report success for a certificate
+    // OpenSSL cannot find — the same failure the ten-slot bound produced, just
+    // later. Under the documented rebuild-rotation model with no pruning, the
+    // bound IS reachable, so it has to be loud.
+    const dir = tmp();
+    for (let i = 0; i < 256; i++) {
+      const name = `full${i}.pem`;
+      fs.writeFileSync(path.join(dir, name), SAMPLE_PEM_A);
+      ensureHashSymlink(dir, name, SAMPLE_PEM_A);
+    }
+    expect(listHashSymlinks(dir)).toHaveLength(256);
+
     fs.writeFileSync(path.join(dir, "overflow.pem"), SAMPLE_PEM_A);
-    expect(() =>
-      ensureHashSymlink(dir, "overflow.pem", SAMPLE_PEM_A)
-    ).not.toThrow();
+    expect(() => ensureHashSymlink(dir, "overflow.pem", SAMPLE_PEM_A)).toThrow(
+      /all 256 slots/
+    );
+  }, 30_000);
 
-    const after = listHashSymlinks(dir);
-    expect(after).toEqual(before);
+  it("allocates slots contiguously from 0, which is what OpenSSL requires", () => {
+    // `by_dir` stops at the first missing `{hash}.{n}`, so a gap makes every
+    // later slot unreachable. Anything that prunes entries must re-densify
+    // via rehashDirectory rather than unlink in place.
+    const dir = tmp();
+    for (let i = 0; i < 12; i++) {
+      const name = `c${i}.pem`;
+      fs.writeFileSync(path.join(dir, name), SAMPLE_PEM_A);
+      ensureHashSymlink(dir, name, SAMPLE_PEM_A);
+    }
+    const suffixes = listHashSymlinks(dir)
+      .map((l) => Number(l.split(".")[1]))
+      .sort((a, b) => a - b);
+    expect(suffixes).toEqual([...Array(12).keys()]);
   });
 
   it("leaves pre-existing hash symlinks for OTHER PEMs untouched", () => {
@@ -199,4 +248,382 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
       "stranger.pem"
     );
   });
+});
+
+/**
+ * The symlink names only do anything if they match what OpenSSL's `by_dir`
+ * lookup (SSL_CERT_DIR / -CApath) actually searches for. That value is
+ * `X509_NAME_hash`: SHA-1 over the *canonical* name encoding — attribute
+ * values re-tagged UTF8String, ASCII-lowercased, space runs collapsed, and
+ * the RDN `SET OF` encodings concatenated WITHOUT the Name's outer
+ * `SEQUENCE`. Hashing the raw subject DER instead yields a plausible-looking
+ * `{hash}.0` that nothing ever opens, silently disabling container trust.
+ *
+ * The expected values below were produced by `openssl x509 -hash -noout`
+ * (OpenSSL 3.0.13). `CN=localhost` is the shape every dev cert we install
+ * has; the multi-RDN fixture pins the normalization rules (PrintableString
+ * plus UTF8String, uppercase letters, a doubled internal space, a trailing
+ * space).
+ */
+describe("computeSubjectHash", () => {
+  const hasOpenssl = (() => {
+    try {
+      execFileSync("openssl", ["version"], { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  // subject=CN = localhost
+  const PEM_LOCALHOST =
+    "-----BEGIN CERTIFICATE-----\n" +
+    "MIIDCTCCAfGgAwIBAgIUKqotkm31fbIEbOVcgrem0favrgQwDQYJKoZIhvcNAQEL\n" +
+    "BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDgyODAwMDM1OFoXDTM2MDgy\n" +
+    "NTAwMDM1OFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF\n" +
+    "AAOCAQ8AMIIBCgKCAQEAjgGYX2B2v2F5mSgDK2skLTZ7WtkYEJXZ/dD3i4Io5ZuQ\n" +
+    "5z4nt6VPSnCZFe8jBcDqcgdnCWUOG8yo7BP0pMQHMNRcqmyfMssIKWenPSPWU3U1\n" +
+    "qMkah8hJbzQkuPlL88yBRDGlHI5ioE6YJKkvwaXBEpaj7xwL0IeOg7ODBz/C6lev\n" +
+    "KGqfh8180tJ2/SJc6Hpgi0aaWFmkaYyB2/xZnxGTOaXlYtaU1WLVHSG0pJUdYEAm\n" +
+    "m8S/oaofwPNEG/GStb+X5NVQKxQS2ZhsPcrv55EoZ43ukRwvUCeE1jN0xAVx9KO6\n" +
+    "1PzYWxGwrneCv45VV+698LstLLn9tWL0FAe0MWxfcwIDAQABo1MwUTAdBgNVHQ4E\n" +
+    "FgQUszuVse2bqDyPBDxDgwodnoWFiSowHwYDVR0jBBgwFoAUszuVse2bqDyPBDxD\n" +
+    "gwodnoWFiSowDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAd8fg\n" +
+    "cVxi0bb27kpCjCBBkWGJkfu2SpY8D345PPvsQfxEoaBmvmPSo+V0uO5vPM6VQkMb\n" +
+    "nwOyGytTYM+uVWADA3YJ+gYpToRfWE+06hKh2ziCDves8rObymLHApFosU0ulT35\n" +
+    "HWw7S1Sv68k4Wqh7Q7neaYdKGjXWIpMbQ/aDUkUSRYYdmCyidmxAJFi71ROmkl0N\n" +
+    "SutU65eZyiU8Rh6GSn1u3iPn+DHtcI/3npplew/kXUSliw4gpI7lipD31uBHVJc+\n" +
+    "k8ge6yTGRi5QppCpiSYcpv0MJ1+DdaadFkYjOV4DPXid9xeJ7ZwQX2rK6Zbkj36Z\n" +
+    "dW1E/BkFPJeKGPofjA==\n" +
+    "-----END CERTIFICATE-----\n";
+
+  // subject=C = US, O = "Example  Org ", CN = Mixed Case Name
+  const PEM_MULTI_RDN =
+    "-----BEGIN CERTIFICATE-----\n" +
+    "MIIDXzCCAkegAwIBAgIUbKzt8uWkwdhKI7QVANKvuaAuga4wDQYJKoZIhvcNAQEL\n" +
+    "BQAwPzELMAkGA1UEBhMCVVMxFjAUBgNVBAoMDUV4YW1wbGUgIE9yZyAxGDAWBgNV\n" +
+    "BAMMD01peGVkIENhc2UgTmFtZTAeFw0yNjA4MjgwMDAzNThaFw0zNjA4MjUwMDAz\n" +
+    "NThaMD8xCzAJBgNVBAYTAlVTMRYwFAYDVQQKDA1FeGFtcGxlICBPcmcgMRgwFgYD\n" +
+    "VQQDDA9NaXhlZCBDYXNlIE5hbWUwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK\n" +
+    "AoIBAQDLuNsJ2dI5mBGcGeK5lfzKA/8dY5Dunjl10gZybeKcLCUuBwIecUg4rHFR\n" +
+    "5OoH9s5UIIvOLA+aGR1gNxx4Jai3IUJtcGS67oh9Gz7F1w6hswO2y0rzXPVq0W+N\n" +
+    "mAXmEqDpRjqmS6sGHFqtQkKNtc3WRhxc42RD4FiuMuWDkq5//fEEPClg/16i16uF\n" +
+    "u/17fwq3rnJPQQbxMpxlJp/wJgJdfTNN0eypuvqRMc+4HYELcagtjOX0rBkIO3SG\n" +
+    "xXqm2uJOCyPMoxWCVZax3+tuZY4onqajxtaz1ztURlbLejxXw4DfEH2CI6VPIc7X\n" +
+    "bK/Ec5UBnyo1OVOaEcGNLIoQNjxFAgMBAAGjUzBRMB0GA1UdDgQWBBTLRAf/8wQx\n" +
+    "YLYQMDUW/g+HiamzSDAfBgNVHSMEGDAWgBTLRAf/8wQxYLYQMDUW/g+HiamzSDAP\n" +
+    "BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAbc3i28qmW6cbOwpIR\n" +
+    "OzSgg0BlyK9dOyGrfwRI44i1NEyZGM9Y8ced4AS7DgnZpuKfy54QiibCKxMzENOX\n" +
+    "kogGgoDriLdDdGfdz2zrFQvHfYa2ccieJ6NV5Bi8Mgnnx+s/DGxZN6Yz76n5/Qic\n" +
+    "eqmw7pgOMeeqGB5spiOw28INsZK5bxZEcpTyhgPUbhC3EjFp0UMNd7SFstfY7zGo\n" +
+    "H6t+jC75hgl0PivQC97LrBpzNn0EZCdzoyCUomilR5XEk+L5WIC5H8Z+LxU1hBOS\n" +
+    "ziEyIosRJFOAv0D4KYNITnCe6km2AzD+AAC5juMXFwaaDYtzmfKUsTFzGGIvC3C8\n" +
+    "9l5Y\n" +
+    "-----END CERTIFICATE-----\n";
+
+  // --- Minimal hand-built certs, so a subject can use any ASN.1 string type ---
+  // `computeSubjectHash` only walks as far as the subject, so nothing past it
+  // (or a valid signature) is needed. `openssl req` can't be coaxed into every
+  // encoding, and splicing real certs would obscure what is under test.
+
+  function der(tag: number, content: Buffer): Buffer {
+    const len = content.length;
+    let lenBytes: Buffer;
+    if (len < 0x80) {
+      lenBytes = Buffer.from([len]);
+    } else {
+      const bytes: number[] = [];
+      let remaining = len;
+      while (remaining > 0) {
+        bytes.unshift(remaining & 0xff);
+        remaining >>>= 8;
+      }
+      lenBytes = Buffer.from([0x80 | bytes.length, ...bytes]);
+    }
+    return Buffer.concat([Buffer.from([tag]), lenBytes, content]);
+  }
+
+  /**
+   * A certificate whose subject is a single CN with the given encoding.
+   *
+   * Deliberately a COMPLETE Certificate — signatureAlgorithm, a dummy
+   * signatureValue and a placeholder subjectPublicKeyInfo included — even
+   * though `computeSubjectHash` stops reading at the subject. Being parseable
+   * by `openssl x509` is what lets the expected hashes below be derived from
+   * OpenSSL rather than from this implementation, which would be circular.
+   */
+  function certWithCn(valueTag: number, value: Buffer): string {
+    const oidCommonName = Buffer.from("0603550403", "hex");
+    const oidSha256Rsa = Buffer.from("06092a864886f70d01010b", "hex");
+    const oidRsaEncryption = Buffer.from("06092a864886f70d010101", "hex");
+    const algorithmId = der(
+      0x30,
+      Buffer.concat([oidSha256Rsa, der(0x05, Buffer.alloc(0))])
+    );
+    const name = der(
+      0x30,
+      der(0x31, der(0x30, Buffer.concat([oidCommonName, der(valueTag, value)])))
+    );
+    // Placeholder SPKI: d2i decodes it as AlgorithmIdentifier + BIT STRING and
+    // only parses the key material lazily, so a stand-in modulus is fine.
+    const spki = der(
+      0x30,
+      Buffer.concat([
+        der(0x30, Buffer.concat([oidRsaEncryption, der(0x05, Buffer.alloc(0))])),
+        der(
+          0x03,
+          Buffer.concat([
+            Buffer.from([0x00]),
+            der(
+              0x30,
+              Buffer.concat([
+                der(0x02, Buffer.from([0x01, 0x00])),
+                der(0x02, Buffer.from([0x01, 0x01])),
+              ])
+            ),
+          ])
+        ),
+      ])
+    );
+    const tbs = der(
+      0x30,
+      Buffer.concat([
+        der(0xa0, der(0x02, Buffer.from([0x02]))), // version v3
+        der(0x02, Buffer.from([0x01])), // serial
+        algorithmId,
+        name, // issuer
+        der(
+          0x30,
+          Buffer.concat([
+            der(0x17, Buffer.from("260101000000Z", "ascii")),
+            der(0x17, Buffer.from("360101000000Z", "ascii")),
+          ])
+        ),
+        name, // subject
+        spki,
+      ])
+    );
+    const body = der(
+      0x30,
+      Buffer.concat([
+        tbs,
+        algorithmId,
+        der(0x03, Buffer.concat([Buffer.from([0x00]), Buffer.alloc(8)])),
+      ])
+    )
+      .toString("base64")
+      .replace(/(.{64})/g, "$1\n");
+    return `-----BEGIN CERTIFICATE-----\n${body}\n-----END CERTIFICATE-----\n`;
+  }
+
+  /** UTF-32BE bytes for a run of code points, i.e. an ASN.1 UniversalString. */
+  function utf32be(...codePoints: number[]): Buffer {
+    const buf = Buffer.alloc(codePoints.length * 4);
+    codePoints.forEach((cp, i) => buf.writeUInt32BE(cp, i * 4));
+    return buf;
+  }
+
+  const certWithUtf8Cn = (cn: string): string =>
+    certWithCn(0x0c, Buffer.from(cn, "utf8"));
+
+  it("matches OpenSSL's subject hash for a CN=localhost dev cert", () => {
+    expect(computeSubjectHash(PEM_LOCALHOST)).toBe("ce275665");
+  });
+
+  it("matches OpenSSL's subject hash for a multi-RDN subject needing canonicalization", () => {
+    expect(computeSubjectHash(PEM_MULTI_RDN)).toBe("90c9c9f3");
+  });
+
+  /**
+   * Canonicalization cases that a byte-level reading of `asn1_string_canon`
+   * gets wrong. Values are the raw ASN.1 attribute bytes as stored, and every
+   * expected hash came from `openssl x509 -hash` on a real certificate.
+   */
+  it("folds every ASCII whitespace byte, not just 0x20", () => {
+    // CN stored as "a\tb", "a\nb", "a   b" and "A   B" all canonicalize to
+    // "a b", so OpenSSL returns one hash for the lot. Handling only 0x20 gave
+    // the tab and newline forms distinct — and unusable — hashes.
+    for (const cn of ["a\tb", "a\nb", "a   b", "A   B"]) {
+      expect(computeSubjectHash(certWithUtf8Cn(cn))).toBe("49cdc5e0");
+    }
+  });
+
+  it("trims leading and trailing whitespace of any ASCII kind", () => {
+    for (const cn of ["a", " a", "\ta", "a ", "a\n"]) {
+      expect(computeSubjectHash(certWithUtf8Cn(cn))).toBe("20b69a40");
+    }
+  });
+
+  it("transcodes T61String to UTF-8 before folding", () => {
+    // A T61String holding the UTF-8 bytes of 日本語. Re-tagging those bytes as
+    // UTF8String and hashing yields e2c402e4; OpenSSL says 02c4fa54, which is
+    // reached only by reading them as Latin-1 and re-encoding as UTF-8.
+    const cn = Buffer.from("日本語", "utf8").toString("latin1");
+    expect(computeSubjectHash(certWithCn(0x14, Buffer.from(cn, "latin1")))).toBe(
+      "02c4fa54"
+    );
+  });
+
+  it("transcodes BMPString (UTF-16BE) to UTF-8 before folding", () => {
+    // Bytes lifted verbatim from a cert built with `string_mask = MASK:2048`,
+    // whose hash `openssl x509 -hash` reports as b02e8735. (openssl stored each
+    // byte of the UTF-8 input as its own UTF-16 code unit, so this is mojibake
+    // rather than the text that went in — which makes it a better fixture: the
+    // bytes are what matter, and they exercise the non-ASCII path.)
+    const utf16be = Buffer.from(
+      "0054006500730074002000c3009c006e00c300af0063006f00640065",
+      "hex"
+    );
+    expect(computeSubjectHash(certWithCn(0x1e, utf16be))).toBe("b02e8735");
+  });
+
+  it("hasHashSymlink steps over a regular file occupying a slot", () => {
+    // `ensureHashSymlink` treats a non-symlink `{hash}.N` as OCCUPIED and puts
+    // our link in a later slot; OpenSSL's `by_dir` likewise processes whatever
+    // it finds and keeps walking. Reading a regular file with readlink raises
+    // EINVAL, so treating any error as end-of-search would stop short of our
+    // link and wrongly report the certificate as unlinked — which, now that
+    // "installed" and "trusted" both consult this, means a perpetual reinstall.
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, "mycert.pem"), SAMPLE_PEM_A);
+    ensureHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A);
+    const slot0 = listHashSymlinks(dir)[0];
+
+    // Replace slot 0 with a squatting regular file and re-link into slot 1.
+    fs.unlinkSync(path.join(dir, slot0));
+    fs.writeFileSync(path.join(dir, slot0), "not-a-symlink");
+    ensureHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A);
+    expect(fs.lstatSync(path.join(dir, slot0)).isSymbolicLink()).toBe(false);
+
+    expect(hasHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A)).toBe(true);
+  });
+
+  it("hasHashSymlink stops at a genuinely missing slot", () => {
+    // A real gap is where OpenSSL stops, so we must too — otherwise the scan
+    // would keep probing past the point `by_dir` gives up.
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, "mycert.pem"), SAMPLE_PEM_A);
+    expect(hasHashSymlink(dir, "mycert.pem", SAMPLE_PEM_A)).toBe(false);
+  });
+
+  it("transcodes UniversalString (UTF-32BE) to UTF-8 before folding", () => {
+    // "Tëst". Expected value from `openssl x509 -hash` on this exact cert.
+    const universal = utf32be(0x54, 0xeb, 0x73, 0x74);
+    expect(computeSubjectHash(certWithCn(0x1c, universal))).toBe("ba8aa3f2");
+  });
+
+  it("gives UniversalString and UTF8String of the same text the same hash", () => {
+    // The point of transcoding: encoding must not change identity. Without it
+    // the UTF-32BE bytes would be hashed raw and these would diverge.
+    const universal = certWithCn(0x1c, utf32be(0x54, 0xeb, 0x73, 0x74));
+    const utf8 = certWithCn(0x0c, Buffer.from("Tëst", "utf8"));
+    expect(computeSubjectHash(universal)).toBe(computeSubjectHash(utf8));
+  });
+
+  it.runIf(hasOpenssl)(
+    "agrees with openssl on every hand-built encoding fixture",
+    () => {
+      // The recorded values above are only trustworthy if OpenSSL still agrees
+      // with them, so re-derive rather than trusting the constants.
+      const dir = tmp();
+      const cases: [string, string][] = [
+        ["utf8", certWithCn(0x0c, Buffer.from("Tëst", "utf8"))],
+        ["universal", certWithCn(0x1c, utf32be(0x54, 0xeb, 0x73, 0x74))],
+        [
+          "bmp",
+          certWithCn(
+            0x1e,
+            Buffer.from(
+              "0054006500730074002000c3009c006e00c300af0063006f00640065",
+              "hex"
+            )
+          ),
+        ],
+        [
+          "t61",
+          certWithCn(
+            0x14,
+            Buffer.from(Buffer.from("日本語", "utf8").toString("latin1"), "latin1")
+          ),
+        ],
+        ["printable-ws", certWithCn(0x13, Buffer.from("A   B", "ascii"))],
+      ];
+      for (const [label, pem] of cases) {
+        const file = path.join(dir, `${label}.pem`);
+        fs.writeFileSync(file, pem);
+        const expected = execFileSync("openssl", [
+          "x509",
+          "-hash",
+          "-noout",
+          "-in",
+          file,
+        ])
+          .toString()
+          .trim();
+        expect(`${label}=${computeSubjectHash(pem)}`).toBe(
+          `${label}=${expected}`
+        );
+      }
+    }
+  );
+
+  it("returns null for input that isn't a certificate", () => {
+    expect(computeSubjectHash("not a pem")).toBeNull();
+  });
+
+  it("stays linear on a BEGIN marker followed by whitespace and no END", () => {
+    // CodeQL js/polynomial-redos, high: the old
+    // `/-----BEGIN CERTIFICATE-----\s*([\s\S]*?)\s*-----END CERTIFICATE-----/`
+    // wrapped a lazy `[\s\S]*?` in two `\s*` quantifiers. All three match
+    // whitespace, so this exact shape — BEGIN, a long run of spaces, no END —
+    // gave the engine an ambiguous split to backtrack over and matching went
+    // quadratic. `rehashDirectory` hands this function every *.pem file in the
+    // OpenSSL trust directory, none of which is guaranteed well-formed.
+    //
+    // 100k spaces is ~10^10 backtracking steps under the old regex, so a
+    // regression hangs this test rather than merely slowing it; the assertion
+    // is that we finish at all.
+    const pathological = `-----BEGIN CERTIFICATE-----${" ".repeat(100_000)}`;
+    const started = Date.now();
+    expect(computeSubjectHash(pathological)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(1000);
+  }, 10_000);
+
+  it("still reads a normal PEM, and takes the first cert when several are present", () => {
+    expect(computeSubjectHash(PEM_LOCALHOST)).toBe("ce275665");
+    // Concatenated PEMs: the first BEGIN pairs with the first following END,
+    // matching the old lazy-quantifier behaviour.
+    expect(computeSubjectHash(PEM_LOCALHOST + PEM_MULTI_RDN)).toBe("ce275665");
+    expect(computeSubjectHash(PEM_MULTI_RDN + PEM_LOCALHOST)).toBe("90c9c9f3");
+  });
+
+  it("returns null when a marker is missing or the body is empty", () => {
+    expect(computeSubjectHash(PEM_LOCALHOST.replace("-----END CERTIFICATE-----", ""))).toBeNull();
+    expect(computeSubjectHash("-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n")).toBeNull();
+  });
+
+  // Belt-and-braces: when the machine running the suite has openssl, verify
+  // the pinned values above still reflect what OpenSSL computes today rather
+  // than what it computed when they were recorded.
+
+  it.runIf(hasOpenssl)(
+    "agrees with the local openssl binary",
+    () => {
+      const dir = tmp();
+      for (const pem of [PEM_LOCALHOST, PEM_MULTI_RDN]) {
+        const p = path.join(dir, "cert.pem");
+        fs.writeFileSync(p, pem);
+        const expected = execFileSync("openssl", [
+          "x509",
+          "-hash",
+          "-noout",
+          "-in",
+          p,
+        ])
+          .toString()
+          .trim();
+        expect(computeSubjectHash(pem)).toBe(expected);
+      }
+    }
+  );
 });

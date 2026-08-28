@@ -1,6 +1,6 @@
 import { DotnetBackend } from "./dotnet";
 import { NativeBackend } from "./native";
-import type { Backend, BackendKind, BackendMode } from "./types";
+import type { Backend, BackendMode } from "./types";
 
 /**
  * Resolve a `hostCertGenerator` choice (possibly `auto`) into a concrete
@@ -29,20 +29,4 @@ async function autoSelect(): Promise<Backend> {
     if (await dotnet.isAvailable()) return dotnet;
   }
   return new NativeBackend();
-}
-
-/**
- * Report which backend `auto` would pick on this host without actually
- * constructing it. Useful for status surfaces in the VS Code host extension.
- *
- * Callers that have already probed dotnet can pass the result via
- * `dotnetAvailable` to avoid a second `dotnet --version` spawn.
- */
-export async function describeAutoBackend(
-  dotnetAvailable?: boolean
-): Promise<BackendKind> {
-  if (process.platform !== "darwin") return "native";
-  const available =
-    dotnetAvailable ?? (await new DotnetBackend().isAvailable());
-  return available ? "dotnet" : "native";
 }

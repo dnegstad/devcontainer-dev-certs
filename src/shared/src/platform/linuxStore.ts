@@ -2,11 +2,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { BaseCertificateStore } from "./baseStore";
 import { trustInNss, type NssTrustResult } from "./nssTrust";
-import { runProcess } from "./processUtil";
 import { type LinuxNssTrustReporter, type BaseStoreOptions } from "./types";
 import { type DevCert, type DevKey } from "../cert/types";
-import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { buildPfx } from "../cert/pfx";
+import {
+  computeSubjectHash,
+  ensureHashSymlink,
+  hasHashSymlink,
+} from "../cert/rehash";
 import {
   getDotNetStorePath,
   getDotNetRootStorePath,
@@ -76,7 +79,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
 
   async trustCertificate(cert: DevCert): Promise<void> {
     await this.trustInDotNetRootStore(cert);
-    await this.trustViaOpenSsl(cert);
+    this.trustViaOpenSsl(cert);
     await this.trustInNssBrowsers(cert);
   }
 
@@ -113,32 +116,8 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     this.nssTrustReporter(result, pemPath);
   }
 
-  async removeCertificates(): Promise<void> {
-    await this.removeDevCertsFromDir(getDotNetStorePath());
-    await this.removeDevCertsFromDir(this.dotNetRootStorePath);
-
-    const trustDir = getOpenSslTrustDir();
-    if (fs.existsSync(trustDir)) {
-      const entries = fs.readdirSync(trustDir);
-      for (const entry of entries) {
-        const fullPath = path.join(trustDir, entry);
-        if (entry.startsWith("aspnetcore-localhost-")) {
-          fs.unlinkSync(fullPath);
-        } else if (isHashSymlink(entry)) {
-          try {
-            if (fs.lstatSync(fullPath).isSymbolicLink()) {
-              fs.unlinkSync(fullPath);
-            }
-          } catch {
-            // ignore
-          }
-        }
-      }
-    }
-  }
-
   protected isTrusted(
-    _cert: DevCert,
+    cert: DevCert,
     thumbprint: string
   ): Promise<boolean> {
     // Both authoritative trust surfaces `trustCertificate` writes must be
@@ -154,14 +133,45 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     // reporter toast with manual guidance, and requiring it here would
     // flap `checkStatus().isTrusted` to permanently-false on hosts
     // without NSS tooling.
-    const pemPath = path.join(getOpenSslTrustDir(), getPemFileName(thumbprint));
+    //
+    // The hash symlink is part of the OpenSSL surface, not an extra: without a
+    // link OpenSSL resolves, the PEM sitting in the directory establishes
+    // nothing. Checking it also repairs hosts trusted before the subject hash
+    // was computed canonically — their link is under the WRONG hash, so a
+    // PEM-and-PFX-only check would report "trusted", skip `trustCertificate`,
+    // and leave the broken link in place forever.
+    const trustDir = getOpenSslTrustDir();
+    const pemFileName = getPemFileName(thumbprint);
+    const pemPath = path.join(trustDir, pemFileName);
     const rootPfxPath = path.join(
       this.dotNetRootStorePath,
       `${thumbprint}.pfx`
     );
-    return Promise.resolve(
-      fs.existsSync(pemPath) && fs.existsSync(rootPfxPath)
-    );
+    // The PEM's *contents* are checked, not just its existence. The filename
+    // is thumbprint-derived, so a different cert lands elsewhere — but a
+    // truncated or externally-rewritten file keeps the name, and a name-only
+    // check would report trust for bytes OpenSSL cannot load. The link is
+    // then resolved against what is actually on disk rather than against
+    // `cert.pem`, so a stale link can't vouch for replaced content. This
+    // mirrors `pemInstalledAndLinked` in the workspace extension's
+    // `certInstaller.ts`; the two sides of the same trust dir should not
+    // disagree about what "installed" means.
+    if (!fs.existsSync(rootPfxPath)) return Promise.resolve(false);
+
+    let onDisk: string;
+    try {
+      onDisk = fs.readFileSync(pemPath, "utf-8");
+    } catch {
+      return Promise.resolve(false);
+    }
+    if (onDisk !== cert.pem) return Promise.resolve(false);
+
+    // A subject we can't hash gets no symlink from `ensureHashSymlink`
+    // either, so demanding one would re-trust on every activation and never
+    // converge. Same carve-out, same reason, as the workspace side.
+    if (computeSubjectHash(onDisk) === null) return Promise.resolve(true);
+
+    return Promise.resolve(hasHashSymlink(trustDir, pemFileName, onDisk));
   }
 
   // --- Linux-specific trust helpers ---
@@ -178,7 +188,7 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     fs.writeFileSync(certPath, pfxBytes, { mode: 0o644 });
   }
 
-  private async trustViaOpenSsl(cert: DevCert): Promise<void> {
+  private trustViaOpenSsl(cert: DevCert): void {
     const trustDir = getOpenSslTrustDir();
     fs.mkdirSync(trustDir, { recursive: true });
 
@@ -204,90 +214,13 @@ export class LinuxCertificateStore extends BaseCertificateStore {
     // is idempotent (overwrites identical content); rehashing afterward
     // is a no-op when nothing changed.
     fs.writeFileSync(pemPath, cert.pem, { mode: 0o644 });
-    await this.rehashDirectory(trustDir);
+
+    // Targeted symlink for our PEM only — the same call the workspace
+    // extension makes on its side of the sync, so both ends of the trust
+    // dir are maintained by one implementation. `ensureHashSymlink` is
+    // pure TypeScript: the host needs no `openssl` binary to establish
+    // OpenSSL trust, which matters because the host is a developer laptop
+    // we don't control, not a container image we build.
+    ensureHashSymlink(trustDir, pemFileName, cert.pem);
   }
-
-  private async rehashDirectory(directory: string): Promise<void> {
-    const entries = fs.readdirSync(directory);
-
-    // Remove existing hash symlinks
-    for (const entry of entries) {
-      if (isHashSymlink(entry)) {
-        const fullPath = path.join(directory, entry);
-        try {
-          if (fs.lstatSync(fullPath).isSymbolicLink()) {
-            fs.unlinkSync(fullPath);
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-
-    // Create new hash symlinks for all PEM/CRT files
-    const certFiles = fs
-      .readdirSync(directory)
-      .filter((f) => /\.(pem|crt|cer)$/i.test(f));
-
-    for (const certFile of certFiles) {
-      const fullPath = path.join(directory, certFile);
-      try {
-        if (fs.lstatSync(fullPath).isSymbolicLink()) continue;
-      } catch {
-        continue;
-      }
-
-      const hash = await this.getOpenSslSubjectHash(fullPath);
-      if (!hash) continue;
-
-      // Slot 0-9 covers any realistic collision count. Catch EEXIST so a
-      // concurrent rehash can't crash this one mid-loop.
-      for (let i = 0; i < 10; i++) {
-        const linkPath = path.join(directory, `${hash}.${i}`);
-        if (fs.existsSync(linkPath)) continue;
-        try {
-          fs.symlinkSync(certFile, linkPath);
-          break;
-        } catch (err: unknown) {
-          if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
-          throw err;
-        }
-      }
-    }
-  }
-
-  private async getOpenSslSubjectHash(
-    certPath: string
-  ): Promise<string | null> {
-    const result = await runProcess("openssl", [
-      "x509",
-      "-hash",
-      "-noout",
-      "-in",
-      certPath,
-    ]);
-    if (result.exitCode !== 0) return null;
-    return result.stdout.trim() || null;
-  }
-
-  private async removeDevCertsFromDir(dir: string): Promise<void> {
-    if (!fs.existsSync(dir)) return;
-
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".pfx"));
-    for (const file of files) {
-      const pfxPath = path.join(dir, file);
-      try {
-        const result = await this.loadPfx(pfxPath);
-        if (result && result.cert.hasExtension(ASPNET_HTTPS_OID)) {
-          fs.unlinkSync(pfxPath);
-        }
-      } catch {
-        // Skip files that can't be parsed
-      }
-    }
-  }
-}
-
-function isHashSymlink(filename: string): boolean {
-  return /^[0-9a-f]{8}\.\d+$/.test(filename);
 }

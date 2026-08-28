@@ -210,12 +210,29 @@ function defaultEcHash(curve: string): string {
   }
 }
 
-function generateSerialNumber(): string {
+/**
+ * 16-byte positive serial number, hex-encoded.
+ *
+ * Exported for testing: the guarantee below is probabilistic (a bad leading
+ * byte turns up about once in 128), so pinning it needs thousands of samples,
+ * and routing those through `generateCertificate` would mean thousands of RSA
+ * keygens. The production caller is `generateCertificate`, just below.
+ */
+export function generateSerialNumber(): string {
   const maxAttempts = 5;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const bytes = randomBytes(16);
     bytes[0] &= 0x7f; // ensure non-negative
-    if (bytes.some((value) => value !== 0)) {
+    // Reject a zero leading byte, not just an all-zero serial. Clearing the
+    // high bit keeps the DER INTEGER positive, but a resulting 0x00 leading
+    // byte is retained on the wire as sign padding (`02 10 00 b5 ...`) —
+    // correct, yet every textual readback drops it, so the serial then looks
+    // like a 15-byte value starting at or above 0x80. Requiring 0x01..0x7f
+    // yields a serial that is positive, non-zero, and minimally encoded, with
+    // no padding byte for downstream code to reason about. Rejection (rather
+    // than masking a 1 in) keeps the remaining bits uniform; five attempts
+    // leaves a (1/128)^5 failure chance.
+    if (bytes[0] !== 0) {
       return bytes.toString("hex");
     }
   }

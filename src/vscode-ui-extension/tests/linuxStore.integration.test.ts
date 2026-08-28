@@ -3,11 +3,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { execFileSync } from "child_process";
-import type * as LinuxStoreModule from "../src/platform/linuxStore";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import { buildPfx } from "../src/cert/pfx";
-import { getPemFileName } from "@devcontainer-dev-certs/shared";
+import {
+  LinuxCertificateStore,
+  generateCertificate,
+  VALIDITY_DAYS,
+  buildPfx,
+  getPemFileName,
+} from "@devcontainer-dev-certs/shared";
 
 let opensslAvailable = false;
 try {
@@ -32,18 +34,15 @@ async function makeTestCert(): ReturnType<typeof generateCertificate> {
 describe.skipIf(!opensslAvailable)(
   "LinuxCertificateStore (integration)",
   () => {
-    let LinuxCertificateStore: typeof LinuxStoreModule.LinuxCertificateStore;
-
-    beforeEach(async () => {
+    beforeEach(() => {
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-integ-"));
       testStoreDir = path.join(tmpDir, "x509stores", "my");
       testTrustDir = path.join(tmpDir, "trust");
 
+      // Read at call time by `getOpenSslTrustDir`, so setting it here is
+      // enough — the store module can be imported statically.
       process.env["DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY"] =
         testTrustDir;
-
-      const mod = await import("../src/platform/linuxStore.js");
-      LinuxCertificateStore = mod.LinuxCertificateStore;
     });
 
     afterEach(() => {
@@ -51,7 +50,7 @@ describe.skipIf(!opensslAvailable)(
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it("full lifecycle: save → trust → find → checkStatus → remove", async () => {
+    it("full lifecycle: save → trust → PEM + canonical hash symlink on disk", async () => {
       const store = new LinuxCertificateStore();
       const { cert, key, thumbprint } = await makeTestCert();
 
@@ -61,7 +60,8 @@ describe.skipIf(!opensslAvailable)(
       const pfxBytes = await buildPfx({ cert, key });
       fs.writeFileSync(pfxPath, pfxBytes, { mode: 0o600 });
 
-      // Trust — calls real openssl for hash computation.
+      // Trust — the subject hash is computed in-process; the assertion
+      // below cross-checks it against the real openssl binary.
       await store.trustCertificate(cert);
 
       const pemPath = path.join(testTrustDir, getPemFileName(thumbprint));
@@ -109,6 +109,45 @@ describe.skipIf(!opensslAvailable)(
 
       expect(result).toContain("OK");
     });
+
+    it("keeps the newest cert reachable after 12 rebuild-style rotations", async () => {
+      // The worst case the design has to survive: most dotnet devcontainer
+      // base images mint a fresh dev cert on every rebuild, and nothing lets
+      // this extension verify that a container opting into syncContainerCert
+      // has persisted its store. So assume rotation, and assume the host's
+      // trust dir accumulates.
+      //
+      // Every dev cert is CN=localhost, so all of them land on ONE subject
+      // hash. With the old ten-slot bound the eleventh rotation got no symlink
+      // at all: the host went on trusting ten dead certs while the live one
+      // failed `openssl verify -CApath`, silently and with the feature exactly
+      // inverted. openssl is the oracle here rather than the symlink count,
+      // because being reachable by `by_dir` is the only property that matters.
+      const store = new LinuxCertificateStore();
+      let newestPem = "";
+
+      for (let rotation = 0; rotation < 12; rotation++) {
+        const { cert, thumbprint } = await makeTestCert();
+        await store.trustCertificate(cert);
+        newestPem = path.join(testTrustDir, getPemFileName(thumbprint));
+      }
+
+      const pems = fs
+        .readdirSync(testTrustDir)
+        .filter((f) => f.endsWith(".pem"));
+      expect(pems).toHaveLength(12);
+
+      const verified = execFileSync("openssl", [
+        "verify",
+        "-CApath",
+        testTrustDir,
+        "-partial_chain",
+        newestPem,
+      ])
+        .toString()
+        .trim();
+      expect(verified).toContain("OK");
+    }, 120_000);
 
     it("trustCertificate is idempotent — re-trust replaces symlinks cleanly", async () => {
       const store = new LinuxCertificateStore();

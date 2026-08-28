@@ -24,15 +24,24 @@ export interface AcceptContainerCertResult {
   /**
    * Failure code. `host-setting-disabled` means the user hasn't opted in
    * on the host; `user-declined` means the consent prompt was rejected;
-   * `non-local-sans` / `parse-failed` / `not-valid-dev-cert` describe
-   * server-side validation outcomes.
+   * `non-local-sans` / `malformed-sans` / `parse-failed` /
+   * `not-valid-dev-cert` / `not-a-leaf-cert` / `unsupported-eku` describe
+   * server-side validation outcomes; `trust-failed` means the cert passed
+   * every check and the host's trust step itself failed. An older host
+   * extension can only ever send the original five; a newer one can send
+   * codes this build doesn't know, which `reportAcceptOutcome`'s `default`
+   * branch handles.
    */
   reason?:
     | "host-setting-disabled"
     | "user-declined"
     | "parse-failed"
     | "not-valid-dev-cert"
-    | "non-local-sans";
+    | "not-a-leaf-cert"
+    | "unsupported-eku"
+    | "malformed-sans"
+    | "non-local-sans"
+    | "trust-failed";
   /** Free-form supplemental detail (e.g. the offending SAN entries). */
   detail?: string;
 }
@@ -349,6 +358,53 @@ function reportAcceptOutcome(
       void vscode.window.showWarningMessage(
         vscode.l10n.t(
           "Dev Certs: The container's certificate does not look like a valid ASP.NET HTTPS dev cert and was not trusted on the host."
+        )
+      );
+      return;
+    case "not-a-leaf-cert":
+      log(
+        `Container cert sync: host rejected ${thumbprint} — the certificate is a CA (or omits basicConstraints)${detail}. ` +
+          `The host only trusts leaf server certificates; a CA would be able to issue certificates for any name.`
+      );
+      void vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          "Dev Certs: The container's certificate is a certificate authority, or does not declare itself a leaf (no basicConstraints), so the host refused to trust it. Only leaf server certificates are accepted — regenerate with 'dotnet dev-certs https' rather than using a CA."
+        )
+      );
+      return;
+    case "trust-failed":
+      // Not a rejection: the host accepted the certificate and then failed
+      // to install it. Distinct from `parse-failed` because the remedy is
+      // completely different — retry the trust prompt, free a hash slot,
+      // fix directory permissions — and none of it involves the cert we
+      // sent, which was fine.
+      log(
+        `Container cert sync: host validated ${thumbprint} but could not establish trust${detail}.`
+      );
+      void vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          "Dev Certs: The host accepted the container's dev certificate but could not add it to its trust stores. The certificate itself is fine — check the host's Dev Container Dev Certs output for the underlying error."
+        )
+      );
+      return;
+    case "unsupported-eku":
+      log(
+        `Container cert sync: host rejected ${thumbprint} — extended key usage is missing or not scoped to server authentication${detail}.`
+      );
+      void vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          "Dev Certs: The container's certificate is not scoped to server authentication (extended key usage), so the host refused to trust it."
+        )
+      );
+      return;
+    case "malformed-sans":
+      log(
+        `Container cert sync: host rejected ${thumbprint} — its subject alternative names could not be read as a dev cert's${detail}. ` +
+          `This is not overridable via devcontainerDevCerts.allowNonLocalContainerCertSans, which only relaxes the local-scope rule.`
+      );
+      void vscode.window.showWarningMessage(
+        vscode.l10n.t(
+          "Dev Certs: The container's certificate has a subject alternative name extension the host could not use — missing, unreadable, empty, or carrying entry types other than DNS names and IP addresses — so it was not trusted."
         )
       );
       return;

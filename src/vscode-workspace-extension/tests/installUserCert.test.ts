@@ -43,14 +43,48 @@ afterEach(() => {
   cleanupDirs.length = 0;
 });
 
+const REAL_PEM =
+  "-----BEGIN CERTIFICATE-----\n" +
+  "MIIBkTCB+wIJANSsAUOhwHK7MA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNVBAMMCWxv\n" +
+  "Y2FsaG9zdDAeFw0yNDAxMDEwMDAwMDBaFw0zNDAxMDEwMDAwMDBaMBQxEjAQBgNV\n" +
+  "BAMMCWxvY2FsaG9zdDCBnzANBgkqhkiG9w0BAQEFAAOBjQAwgYkCgYEAyx0qMlYa\n" +
+  "PEzL0c9XBYNcQ6KAjMjbDLp6FrW+lWZHCKf8/aSJW7CnH2tQHrPiU8r6QYBSWQ7c\n" +
+  "VTrA8h8wYy7eRdQk31uLR7tGzZ5JxBz2DYxcuxR1RJ/+QbR1m6Z5w9p5UqxQ4l3+\n" +
+  "AbsmPwy3J7t4cqo3PVPmF6mPiK7M+M0CAwEAATANBgkqhkiG9w0BAQsFAAOBgQAt\n" +
+  "-----END CERTIFICATE-----\n";
+
+const ROTATED_PEM =
+  "-----BEGIN CERTIFICATE-----\n" +
+  "MIIDXzCCAkegAwIBAgIUbKzt8uWkwdhKI7QVANKvuaAuga4wDQYJKoZIhvcNAQEL\n" +
+  "BQAwPzELMAkGA1UEBhMCVVMxFjAUBgNVBAoMDUV4YW1wbGUgIE9yZyAxGDAWBgNV\n" +
+  "BAMMD01peGVkIENhc2UgTmFtZTAeFw0yNjA4MjgwMDAzNThaFw0zNjA4MjUwMDAz\n" +
+  "NThaMD8xCzAJBgNVBAYTAlVTMRYwFAYDVQQKDA1FeGFtcGxlICBPcmcgMRgwFgYD\n" +
+  "VQQDDA9NaXhlZCBDYXNlIE5hbWUwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEK\n" +
+  "AoIBAQDLuNsJ2dI5mBGcGeK5lfzKA/8dY5Dunjl10gZybeKcLCUuBwIecUg4rHFR\n" +
+  "5OoH9s5UIIvOLA+aGR1gNxx4Jai3IUJtcGS67oh9Gz7F1w6hswO2y0rzXPVq0W+N\n" +
+  "mAXmEqDpRjqmS6sGHFqtQkKNtc3WRhxc42RD4FiuMuWDkq5//fEEPClg/16i16uF\n" +
+  "u/17fwq3rnJPQQbxMpxlJp/wJgJdfTNN0eypuvqRMc+4HYELcagtjOX0rBkIO3SG\n" +
+  "xXqm2uJOCyPMoxWCVZax3+tuZY4onqajxtaz1ztURlbLejxXw4DfEH2CI6VPIc7X\n" +
+  "bK/Ec5UBnyo1OVOaEcGNLIoQNjxFAgMBAAGjUzBRMB0GA1UdDgQWBBTLRAf/8wQx\n" +
+  "YLYQMDUW/g+HiamzSDAfBgNVHSMEGDAWgBTLRAf/8wQxYLYQMDUW/g+HiamzSDAP\n" +
+  "BgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQAbc3i28qmW6cbOwpIR\n" +
+  "OzSgg0BlyK9dOyGrfwRI44i1NEyZGM9Y8ced4AS7DgnZpuKfy54QiibCKxMzENOX\n" +
+  "kogGgoDriLdDdGfdz2zrFQvHfYa2ccieJ6NV5Bi8Mgnnx+s/DGxZN6Yz76n5/Qic\n" +
+  "eqmw7pgOMeeqGB5spiOw28INsZK5bxZEcpTyhgPUbhC3EjFp0UMNd7SFstfY7zGo\n" +
+  "H6t+jC75hgl0PivQC97LrBpzNn0EZCdzoyCUomilR5XEk+L5WIC5H8Z+LxU1hBOS\n" +
+  "ziEyIosRJFOAv0D4KYNITnCe6km2AzD+AAC5juMXFwaaDYtzmfKUsTFzGGIvC3C8\n" +
+  "9l5Y\n" +
+  "-----END CERTIFICATE-----\n";
+
 function userMaterial(overrides: Partial<CertMaterialV3> = {}): CertMaterialV3 {
   return {
     kind: "user",
     name: "corp-ca",
     thumbprint: "AABBCCDDEEFF",
-    pemCertBase64: Buffer.from(
-      "-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n"
-    ).toString("base64"),
+    // A real certificate, not a placeholder: `isCertInstalled` now requires a
+    // resolvable OpenSSL hash symlink, which can only be derived from a PEM
+    // whose subject actually parses.
+    pemCertBase64: Buffer.from(REAL_PEM).toString("base64"),
     pemKeyBase64: Buffer.from(
       "-----BEGIN PRIVATE KEY-----\nFAKE\n-----END PRIVATE KEY-----\n"
     ).toString("base64"),
@@ -207,6 +241,104 @@ describe.skipIf(process.platform === "win32")("isCertInstalled", () => {
     installUserCert(userMaterial({ installToDotNetStore: false }));
     expect(isCertInstalled(userMaterial({ installToDotNetStore: false }))).toBe(
       true
+    );
+  });
+
+  it("returns false when the PEM has no resolvable hash symlink (upgrade repair)", () => {
+    // An install made before the subject hash was computed canonically has its
+    // symlink under the WRONG hash. Every file is present, so a files-only
+    // check reports "installed", activation skips the install, and the bad link
+    // is never repaired — leaving trust broken for exactly the users this fix
+    // exists for. Reproduced by installing, then renaming the link to a
+    // wrong-hash name: the state such a container is actually in.
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+
+    const links = fs
+      .readdirSync(trustDir)
+      .filter((f) => /^[0-9a-f]{8}\.\d+$/.test(f));
+    expect(links).toHaveLength(1);
+    const target = fs.readlinkSync(path.join(trustDir, links[0]));
+    fs.unlinkSync(path.join(trustDir, links[0]));
+    fs.symlinkSync(target, path.join(trustDir, "deadbeef.0"));
+
+    expect(isCertInstalled(userMaterial())).toBe(false);
+
+    // Re-running the install repairs it, which is what activation will now do.
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+  });
+
+  it("returns false when a user cert rotated under the same name", () => {
+    // User certs are keyed by the user-chosen `name`, not by thumbprint, so a
+    // rotated certificate lands on the same `{name}.pem`. The stale file's own
+    // hash link resolves perfectly well, so an existence check would report
+    // "installed" and the container would keep serving the superseded cert
+    // indefinitely. Content comparison is what catches it.
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+
+    const rotated = userMaterial({
+      pemCertBase64: Buffer.from(ROTATED_PEM).toString("base64"),
+    });
+    expect(isCertInstalled(rotated)).toBe(false);
+
+    installUserCert(rotated);
+    expect(isCertInstalled(rotated)).toBe(true);
+    expect(fs.readFileSync(path.join(trustDir, "corp-ca.pem"), "utf-8")).toBe(
+      ROTATED_PEM
+    );
+  });
+
+  it("returns false when a trusted user cert's .NET Root PFX is missing", () => {
+    // `installUserCert` writes the Root-store PFX alongside the OpenSSL PEM.
+    // Checking only the OpenSSL side would call the cert installed after that
+    // file was deleted, so activation would skip the reinstall and .NET
+    // clients in the container would keep distrusting it.
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+
+    fs.rmSync(path.join(rootStoreDir, "AABBCCDDEEFF.pfx"));
+    expect(isCertInstalled(userMaterial())).toBe(false);
+
+    installUserCert(userMaterial());
+    expect(isCertInstalled(userMaterial())).toBe(true);
+  });
+
+  it("does not require a Root PFX the bundle never supplied", () => {
+    // Gated on `rootPfxBase64`: a bundle without one would never have had the
+    // file written, so demanding it would loop the install forever.
+    const noRoot = userMaterial({ rootPfxBase64: undefined });
+    installUserCert(noRoot);
+    expect(isCertInstalled(noRoot)).toBe(true);
+  });
+
+  it("does not demand a symlink for a PEM whose subject cannot be hashed", () => {
+    // `ensureHashSymlink` is a no-op for an unparseable PEM, so reporting "not
+    // installed" would re-run the install every activation and never converge.
+    const unhashable = userMaterial({
+      pemCertBase64: Buffer.from("-----BEGIN CERTIFICATE-----\nFAKE\n-----END CERTIFICATE-----\n").toString("base64"),
+    });
+    installUserCert(unhashable);
+    expect(isCertInstalled(unhashable)).toBe(true);
+  });
+
+  it("returns false when opted out but a stale store PFX is still on disk", () => {
+    // The opt-out sweep lives in `installUserCert`'s else-branch, and the
+    // activation path only calls that when `isCertInstalled` says false. If
+    // this reported "installed" the sweep would be unreachable and the
+    // passwordless (plain-text-key) copy would survive the user flipping
+    // `installUserCertsToDotNetStore` off, forever.
+    installUserCert(
+      userMaterial({
+        installToDotNetStore: true,
+        dotNetStorePfxBase64: Buffer.from("OLD").toString("base64"),
+      })
+    );
+    expect(fs.existsSync(path.join(storeDir, "AABBCCDDEEFF.pfx"))).toBe(true);
+
+    expect(isCertInstalled(userMaterial({ installToDotNetStore: false }))).toBe(
+      false
     );
   });
 

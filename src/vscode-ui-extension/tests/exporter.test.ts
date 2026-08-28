@@ -9,10 +9,10 @@ import {
   certToPem,
   keyToPem,
   certToDer,
-} from "../src/cert/exporter";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import { parsePfx } from "../src/cert/pfx";
+  generateCertificate,
+  VALIDITY_DAYS,
+  parsePfx,
+} from "@devcontainer-dev-certs/shared";
 
 async function makeTestCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();

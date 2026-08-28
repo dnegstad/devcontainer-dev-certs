@@ -146,7 +146,7 @@ function emitSkipLog(report: SkipReport, localize: Localizer): void {
  *   `this.localize` so subclasses don't repeat the plumbing.
  *
  * Subclasses implement the platform-specific methods: findExistingDevCert,
- * saveCertificate, trustCertificate, removeCertificates, and isTrusted.
+ * saveCertificate, trustCertificate, and isTrusted.
  */
 export abstract class BaseCertificateStore implements PlatformCertificateStore {
   protected readonly localize: Localizer;
@@ -191,8 +191,6 @@ export abstract class BaseCertificateStore implements PlatformCertificateStore {
   ): Promise<void>;
 
   abstract trustCertificate(cert: DevCert): Promise<void>;
-
-  abstract removeCertificates(): Promise<void>;
 
   /**
    * Public wrapper around `isTrusted` that satisfies the

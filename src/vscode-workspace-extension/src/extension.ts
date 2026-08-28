@@ -185,6 +185,14 @@ async function injectCertificate(
 
   if (bundle.certs.length === 0) {
     log("No certs returned from host extension.");
+    // Still run the Kestrel-default pass: with no certs the bundle carries
+    // no `defaultKestrelCert` pointer, so this sweeps the well-known PFX and
+    // clears the env vars. `environmentVariableCollection` is persisted by
+    // VS Code across window reloads, so returning early here would leave a
+    // previous selection's `__Path`/`__Password` applying indefinitely after
+    // the user cleared `defaultKestrelCertificate` or removed their user
+    // certs.
+    applyDefaultKestrelCert(context, bundle);
     return;
   }
 

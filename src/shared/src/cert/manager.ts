@@ -47,15 +47,15 @@ export class CertManager {
 
   /**
    * Generate a new dev cert and save it to the platform store.
-   * If force is true, removes existing certs first.
+   *
+   * Additive by design: a pre-existing dev cert in the store is left alone.
+   * `findExistingDevCert` / `selectBestDevCert` pick the winner by version
+   * then expiry, so a superseded cert stops being selected without anyone
+   * having to delete it — and nothing here can revoke a cert some other
+   * flow (or the user) deliberately trusted.
    */
-  async generate(force: boolean = false): Promise<void> {
+  async generate(): Promise<void> {
     const store = await this.getStore();
-
-    if (force) {
-      log("Removing existing certificates...");
-      await store.removeCertificates();
-    }
 
     log("Generating new dev certificate...");
     const now = new Date();
@@ -225,16 +225,6 @@ export class CertManager {
    */
   invalidateLoadedCert(): void {
     this.currentCert = null;
-  }
-
-  /**
-   * Remove all dev certificates from the platform store.
-   */
-  async clean(): Promise<void> {
-    const store = await this.getStore();
-    await store.removeCertificates();
-    this.currentCert = null;
-    log("All dev certificates removed.");
   }
 
   /**

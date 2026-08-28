@@ -4,7 +4,7 @@ import * as os from "os";
 import * as path from "path";
 import { execFileSync } from "child_process";
 import * as pkijs from "pkijs";
-import { loadPfx } from "../src/cert/loader";
+import { loadPfx } from "@devcontainer-dev-certs/shared";
 
 /**
  * macOS-only integration test guarding the read-side compatibility

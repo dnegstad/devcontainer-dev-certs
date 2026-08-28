@@ -4,9 +4,12 @@ import * as os from "os";
 import * as path from "path";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { logMessages } from "./__mocks__/vscode";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import { buildPfx } from "../src/cert/pfx";
+import {
+  generateCertificate,
+  VALIDITY_DAYS,
+  buildPfx,
+  MacCertificateStore,
+} from "@devcontainer-dev-certs/shared";
 
 // Mock os.homedir so the macStore points at a writable temp dir.
 let testHomeDir = "";
@@ -22,7 +25,6 @@ vi.mock("@devcontainer-dev-certs/shared/src/platform/processUtil", () => ({
   runProcess: vi.fn(),
 }));
 
-import { MacCertificateStore } from "../src/platform/macStore";
 import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
 
 const mockedRunProcess = vi.mocked(runProcess);
@@ -55,12 +57,20 @@ function devCertsDir(): string {
 function setupSecurityMock(opts: {
   keychainThumbs?: Set<string>;
   extraKeychainPems?: string[];
+  /**
+   * Simulate `runProcess` killing `security` for exceeding the output cap:
+   * exitCode 1, empty stderr, a truncated stdout prefix. That is exactly the
+   * shape Node produces (`error.code` is the string
+   * ERR_CHILD_PROCESS_STDIO_MAXBUFFER, so it lands in the same exitCode 1
+   * bucket as a real failure).
+   */
+  truncateHashEnumeration?: boolean;
 } = {}) {
   const calls: Array<{ cmd: string; args: readonly string[] }> = [];
   mockedRunProcess.mockImplementation(async (cmd: string, args: readonly string[]) => {
     calls.push({ cmd, args: [...args] });
     if (cmd !== "security") {
-      return { exitCode: 0, stdout: "", stderr: "" };
+      return { exitCode: 0, stdout: "", stderr: "", truncated: false };
     }
     const sub = args[0];
     if (sub === "find-certificate") {
@@ -73,7 +83,15 @@ function setupSecurityMock(opts: {
               `SHA-256 hash: ${"AB".repeat(32)}\nSHA-1 hash: ${t}\nkeychain: "/Users/test/Library/Keychains/login.keychain-db"\n`
           )
           .join("");
-        return { exitCode: 0, stdout, stderr: "" };
+        if (opts.truncateHashEnumeration) {
+          return {
+            exitCode: 1,
+            stdout: stdout.slice(0, 32),
+            stderr: "",
+            truncated: true,
+          };
+        }
+        return { exitCode: 0, stdout, stderr: "", truncated: false };
       }
       // enumerate all as PEM
       if (args.includes("-a") && args.includes("-p")) {
@@ -82,10 +100,11 @@ function setupSecurityMock(opts: {
           exitCode: 0,
           stdout: pems.join("\n"),
           stderr: "",
+          truncated: false,
         };
       }
     }
-    return { exitCode: 0, stdout: "", stderr: "" };
+    return { exitCode: 0, stdout: "", stderr: "", truncated: false };
   });
   return {
     calls,
@@ -125,6 +144,64 @@ describe("MacCertificateStore.findExistingDevCert", () => {
     const found = await store.findExistingDevCert();
     expect(found?.thumbprint).toBe(thumbprint);
     expect(sec.securityExportCalled()).toBe(false);
+  });
+
+  it("keeps the cert when keychain enumeration is truncated, instead of regenerating", async () => {
+    // `security find-certificate -a` dumps the whole login keychain, which on
+    // a large one blows past the output cap. Node reports that with a STRING
+    // error.code, so it arrives as exitCode 1 with empty stderr —
+    // indistinguishable from a real failure without the `truncated` flag.
+    //
+    // Reading it as "not in the keychain" is the destructive answer: the PFX
+    // gets force-skipped as an orphan, findExistingDevCert comes back empty,
+    // checkStatus reports exists:false, and CertManager.trust() generates a
+    // fresh cert plus an add-trusted-cert password prompt. That cert then
+    // lands in the same keychain, so the next call truncates sooner — a loop
+    // that feeds itself. So we deliberately fail OPEN here.
+    const { cert, key, thumbprint } = await makeTestCert();
+    const pfxBytes = await buildPfx({ cert, key });
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
+      pfxBytes
+    );
+
+    setupSecurityMock({
+      keychainThumbs: new Set([thumbprint]),
+      truncateHashEnumeration: true,
+    });
+
+    const found = await store.findExistingDevCert();
+    expect(found?.thumbprint).toBe(thumbprint);
+    // Specifically NOT classified as an orphaned cache file.
+    expect(
+      logMessages.find((m) => m.includes("orphaned cache file"))
+    ).toBeUndefined();
+    expect(
+      logMessages.find((m) => m.includes("exceeded the output cap"))
+    ).toBeDefined();
+  });
+
+  it("still reports a genuinely absent cert as an orphan when output is complete", async () => {
+    // The fail-open above must be scoped to truncation only — an untruncated
+    // enumeration that simply doesn't list the thumbprint still means the PFX
+    // is orphaned, and that classification has to survive.
+    const { cert, key, thumbprint } = await makeTestCert();
+    const pfxBytes = await buildPfx({ cert, key });
+    fs.writeFileSync(
+      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
+      pfxBytes
+    );
+
+    setupSecurityMock({
+      keychainThumbs: new Set(),
+      truncateHashEnumeration: false,
+    });
+
+    const found = await store.findExistingDevCert();
+    expect(found).toBeNull();
+    expect(
+      logMessages.find((m) => m.includes("orphaned cache file"))
+    ).toBeDefined();
   });
 
   it("excludes a PFX whose cert is NOT in the keychain and logs the orphan warning", async () => {
@@ -237,130 +314,3 @@ describe("MacCertificateStore.findExistingDevCert", () => {
   });
 });
 
-describe("MacCertificateStore.removeCertificates", () => {
-  let store: MacCertificateStore;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    logMessages.length = 0;
-    testHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-mac-rm-"));
-    fs.mkdirSync(devCertsDir(), { recursive: true });
-    store = new MacCertificateStore();
-  });
-
-  afterEach(() => {
-    fs.rmSync(testHomeDir, { recursive: true, force: true });
-  });
-
-  it("calls `security remove-trusted-cert <cert-file>` for each dev cert (no `-d`, no keychain positional)", async () => {
-    const { cert, key, thumbprint } = await makeTestCert();
-    const pfxBytes = await buildPfx({ cert, key });
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
-      pfxBytes
-    );
-
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-
-    const untrust = sec.calls.filter(
-      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
-    );
-    expect(untrust).toHaveLength(1);
-    // No `-d` (we trusted to user domain, not admin) — using -d here
-    // would look in the wrong trust-settings file and silently miss
-    // our entry.
-    expect(untrust[0].args).not.toContain("-d");
-    // The positional must be a cert file path under os.tmpdir() — NOT
-    // the keychain path. Past bug: we were passing the keychain path
-    // here, which made the command a no-op (or worse, errored).
-    const tmpDir = os.tmpdir();
-    const positional = untrust[0].args[untrust[0].args.length - 1];
-    expect(positional.startsWith(tmpDir)).toBe(true);
-    expect(positional).toMatch(/devcert-untrust-.*\.cer$/);
-  });
-
-  it("calls untrust BEFORE delete-certificate (so trust-settings entries aren't orphaned)", async () => {
-    const { cert, key, thumbprint } = await makeTestCert();
-    const pfxBytes = await buildPfx({ cert, key });
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
-      pfxBytes
-    );
-
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-
-    const untrustIdx = sec.calls.findIndex(
-      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
-    );
-    const deleteIdx = sec.calls.findIndex(
-      (c) => c.cmd === "security" && c.args[0] === "delete-certificate"
-    );
-    expect(untrustIdx).toBeGreaterThanOrEqual(0);
-    expect(deleteIdx).toBeGreaterThan(untrustIdx);
-  });
-
-  it("unlinks the PFX from disk after the keychain teardown", async () => {
-    const { cert, key, thumbprint } = await makeTestCert();
-    const pfxBytes = await buildPfx({ cert, key });
-    const pfxPath = path.join(
-      devCertsDir(),
-      `aspnetcore-localhost-${thumbprint}.pfx`
-    );
-    fs.writeFileSync(pfxPath, pfxBytes);
-
-    setupSecurityMock();
-    await store.removeCertificates();
-
-    expect(fs.existsSync(pfxPath)).toBe(false);
-  });
-
-  it("regression: never calls `security remove-trusted-cert -d <keychain-path>`", async () => {
-    const { cert, key, thumbprint } = await makeTestCert();
-    const pfxBytes = await buildPfx({ cert, key });
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${thumbprint}.pfx`),
-      pfxBytes
-    );
-
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-
-    const bad = sec.calls.find(
-      (c) =>
-        c.cmd === "security" &&
-        c.args[0] === "remove-trusted-cert" &&
-        c.args.includes("-d")
-    );
-    expect(bad).toBeUndefined();
-  });
-
-  it("processes multiple dev cert PFXes independently", async () => {
-    const a = await makeTestCert();
-    const b = await makeTestCert();
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${a.thumbprint}.pfx`),
-      await buildPfx({ cert: a.cert, key: a.key })
-    );
-    fs.writeFileSync(
-      path.join(devCertsDir(), `aspnetcore-localhost-${b.thumbprint}.pfx`),
-      await buildPfx({ cert: b.cert, key: b.key })
-    );
-
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-
-    const untrustCount = sec.calls.filter(
-      (c) => c.cmd === "security" && c.args[0] === "remove-trusted-cert"
-    ).length;
-    expect(untrustCount).toBe(2);
-  });
-
-  it("no-ops cleanly when the devCertsDir doesn't exist", async () => {
-    fs.rmSync(devCertsDir(), { recursive: true, force: true });
-    const sec = setupSecurityMock();
-    await store.removeCertificates();
-    expect(sec.calls).toHaveLength(0);
-  });
-});

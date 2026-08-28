@@ -1,11 +1,4 @@
-import {
-  describe,
-  it,
-  expect,
-  beforeEach,
-  afterEach,
-  vi,
-} from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi, } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -31,14 +24,14 @@ vi.mock("@devcontainer-dev-certs/shared/src/platform/nssTrust", () => ({
   trustInNss: vi.fn(),
 }));
 
-import { DotnetBackend } from "@devcontainer-dev-certs/shared";
-import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
-import { createPlatformStore } from "@devcontainer-dev-certs/shared/src/platform/types";
-import { trustInNss } from "@devcontainer-dev-certs/shared/src/platform/nssTrust";
 import {
+  DotnetBackend,
   generateCertificate,
   VALIDITY_DAYS,
 } from "@devcontainer-dev-certs/shared";
+import { runProcess } from "@devcontainer-dev-certs/shared/src/platform/processUtil";
+import { createPlatformStore } from "@devcontainer-dev-certs/shared/src/platform/types";
+import { trustInNss } from "@devcontainer-dev-certs/shared/src/platform/nssTrust";
 
 const mockedRunProcess = vi.mocked(runProcess);
 const mockedCreatePlatformStore = vi.mocked(createPlatformStore);
@@ -69,7 +62,7 @@ describe("DotnetBackend.generate", () => {
     cleanupDirs.push(outDir);
     const generated = await makeCert();
 
-    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "", truncated: false });
     mockedCreatePlatformStore.mockResolvedValue({
       findExistingDevCert: vi.fn(async () => generated),
     } as unknown as Shared.PlatformCertificateStore);
@@ -100,7 +93,7 @@ describe("DotnetBackend.generate", () => {
     cleanupDirs.push(outDir);
     const generated = await makeCert();
 
-    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "", truncated: false });
     mockedCreatePlatformStore.mockResolvedValue({
       findExistingDevCert: vi.fn(async () => generated),
     } as unknown as Shared.PlatformCertificateStore);
@@ -119,7 +112,7 @@ describe("DotnetBackend.generate", () => {
     cleanupDirs.push(outDir);
     const generated = await makeCert();
 
-    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "", truncated: false });
     mockedCreatePlatformStore.mockResolvedValue({
       findExistingDevCert: vi.fn(async () => generated),
     } as unknown as Shared.PlatformCertificateStore);
@@ -152,7 +145,7 @@ describe("DotnetBackend.generate", () => {
       cleanupDirs.push(outDir);
       const generated = await makeCert();
 
-      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "", truncated: false });
       mockedCreatePlatformStore.mockResolvedValue({
         findExistingDevCert: vi.fn(async () => generated),
       } as unknown as Shared.PlatformCertificateStore);
@@ -212,7 +205,7 @@ describe("DotnetBackend.generate", () => {
       // there before the backend runs.
       fs.writeFileSync(persistentPem, "sentinel-existing-pem");
 
-      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "", truncated: false });
       mockedCreatePlatformStore.mockResolvedValue({
         findExistingDevCert: vi.fn(async () => generated),
       } as unknown as Shared.PlatformCertificateStore);
@@ -241,7 +234,7 @@ describe("DotnetBackend.generate", () => {
       cleanupDirs.push(outDir);
       const generated = await makeCert();
 
-      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "", truncated: false });
       mockedCreatePlatformStore.mockResolvedValue({
         findExistingDevCert: vi.fn(async () => generated),
       } as unknown as Shared.PlatformCertificateStore);
@@ -261,7 +254,7 @@ describe("DotnetBackend.generate", () => {
       cleanupDirs.push(outDir);
       const generated = await makeCert();
 
-      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+      mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "", truncated: false });
       mockedCreatePlatformStore.mockResolvedValue({
         findExistingDevCert: vi.fn(async () => generated),
       } as unknown as Shared.PlatformCertificateStore);
@@ -282,6 +275,7 @@ describe("DotnetBackend.generate", () => {
       exitCode: 1,
       stdout: "",
       stderr: "Unrecognized command or argument 'whatever'",
+      truncated: false,
     });
 
     await expect(
@@ -293,7 +287,7 @@ describe("DotnetBackend.generate", () => {
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "devcerts-dotnet-"));
     cleanupDirs.push(outDir);
 
-    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+    mockedRunProcess.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "", truncated: false });
     mockedCreatePlatformStore.mockResolvedValue({
       findExistingDevCert: vi.fn(async () => null),
     } as unknown as Shared.PlatformCertificateStore);

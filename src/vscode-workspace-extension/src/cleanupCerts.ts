@@ -8,9 +8,9 @@ import {
   getPemFileName,
   getPfxFileName,
   parsePfx,
+  rehashDirectory,
 } from "@devcontainer-dev-certs/shared";
 import type { CertBundleV3 } from "@devcontainer-dev-certs/shared";
-import { rehashDirectory } from "./util/rehash";
 
 /**
  * Filename convention shared by .NET's OpenSslDirectoryBasedStoreProvider and

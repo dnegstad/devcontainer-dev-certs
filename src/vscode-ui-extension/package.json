@@ -41,6 +41,10 @@
       {
         "command": "devcontainer-dev-certs.trustInBrowsers",
         "title": "Dev Certs: Trust Certificate in Browsers"
+      },
+      {
+        "command": "devcontainer-dev-certs.resetContainerCertConsent",
+        "title": "Dev Certs: Reset Container Certificate Consent"
       }
     ],
     "configuration": {

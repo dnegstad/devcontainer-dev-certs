@@ -40,6 +40,12 @@ export {
   SAN_DNS_NAMES,
   SAN_IP_ADDRESSES,
 } from "./cert/properties";
+export {
+  computeSubjectHash,
+  ensureHashSymlink,
+  hasHashSymlink,
+  rehashDirectory,
+} from "./cert/rehash";
 export { buildPfx, parsePfx } from "./cert/pfx";
 export type { BuildPfxOptions, ParsedPfx } from "./cert/pfx";
 export { loadPfx, loadPemPair } from "./cert/loader";
@@ -49,11 +55,16 @@ export {
   getCertificateVersion,
   computeThumbprint,
   validateLocalSans,
-  collectSanEntries,
+  scanSanEntries,
+  validateLeafTrustShape,
 } from "./cert/validation";
 export type {
   NonLocalSanEntry,
   SanLocalValidationResult,
+  SanRejectReason,
+  SanScanResult,
+  LeafTrustShapeResult,
+  LeafTrustRejectReason,
 } from "./cert/validation";
 export {
   classifyCandidate,
@@ -99,12 +110,12 @@ export type {
   BaseStoreOptions,
   LinuxNssTrustReporter,
 } from "./platform/types";
-export {
-  BaseCertificateStore,
-  classifyCandidate as classifyPlatformCandidate,
-  selectBestDevCert as selectBestPlatformDevCert,
-} from "./platform/baseStore";
-export type { ClassifyOptions as PlatformClassifyOptions } from "./platform/baseStore";
+// Only the base class is re-exported here. The platform-flavored (localized,
+// logging) `classifyCandidate` / `selectBestDevCert` wrappers live in
+// `./platform/baseStore`; consumers that want those import the submodule
+// directly, so the barrel doesn't need aliases that shadow the pure
+// classifier exported above.
+export { BaseCertificateStore } from "./platform/baseStore";
 export { LinuxCertificateStore } from "./platform/linuxStore";
 export type { LinuxCertificateStoreOptions } from "./platform/linuxStore";
 export { MacCertificateStore } from "./platform/macStore";
@@ -133,7 +144,7 @@ export type {
 // reimplementing availability detection / selection logic.
 export { NativeBackend } from "./backends/native";
 export { DotnetBackend } from "./backends/dotnet";
-export { selectBackend, describeAutoBackend } from "./backends/select";
+export { selectBackend } from "./backends/select";
 export type {
   Backend,
   BackendKind,

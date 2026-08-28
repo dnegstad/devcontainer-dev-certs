@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { logMessages } from "./__mocks__/vscode";
-import { selectBestDevCert, type UsableDevCert } from "../src/platform/baseStore";
-import { generateCertificate } from "../src/cert/generator";
+import {
+  selectBestDevCert,
+} from "@devcontainer-dev-certs/shared/src/platform/baseStore";
+import type {
+  UsableDevCert,
+} from "@devcontainer-dev-certs/shared/src/platform/baseStore";
+import { generateCertificate } from "@devcontainer-dev-certs/shared";
 
 initLogger("test");
 
