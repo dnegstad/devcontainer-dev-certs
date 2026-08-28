@@ -32,6 +32,36 @@ export interface AcceptedContainerCert {
   thumbprint: string;
 }
 
+/**
+ * Persisted answer to "may Dev Containers put their own dev certs in this
+ * host's trust store?".
+ *
+ * Tri-state rather than a boolean because the previous shape could only ever
+ * record *yes*: an accept was written to global state forever, while a
+ * decline wrote nothing, so the prompt returned on every single activation.
+ * The only durable state a security prompt could reach was the permissive
+ * one — a one-way ratchet — and the sole way to stop being asked was to edit
+ * `devcontainer.json` and rebuild, or to disable host-side generation too.
+ *
+ * The decision is deliberately host-wide rather than per-certificate. Unless
+ * a container bakes its dev cert into the image or mounts a volume for
+ * `~/.dotnet/corefx/cryptography/x509stores/my/`, it mints a fresh one on
+ * every rebuild — so a per-thumbprint memory would re-prompt on every
+ * rebuild, which is the shape of consent people learn to click through
+ * without reading.
+ */
+export type ContainerCertConsent = "granted" | "denied" | "unset";
+
+/**
+ * What the user did with the consent modal.
+ *
+ * `dismiss` (Escape / Cancel) is distinct from `never` on purpose: dismissing
+ * declines this push without recording anything, so an accidental Escape
+ * doesn't silently turn the feature off forever. Only an explicit `never`
+ * persists a denial.
+ */
+export type ContainerCertConsentChoice = "trust" | "never" | "dismiss";
+
 export type AcceptContainerCertRejectReason =
   | "host-setting-disabled"
   | "user-declined"
@@ -83,15 +113,15 @@ export interface AcceptContainerCertDeps {
   autoProvision: boolean;
   /** `devcontainerDevCerts.allowNonLocalContainerCertSans` host setting. */
   allowNonLocalSans: boolean;
-  /** True iff the user has previously consented to container-cert sync. */
-  hasConsent: () => boolean;
-  /** Persist consent for future pushes. */
-  recordConsent: () => Promise<void>;
-  /** Show the modal consent prompt. Returns true iff the user accepted. */
+  /** The persisted host-wide decision, or `unset` if never answered. */
+  readConsent: () => ContainerCertConsent;
+  /** Persist the host-wide decision. */
+  recordConsent: (decision: "granted" | "denied") => Promise<void>;
+  /** Show the modal consent prompt and report which action the user took. */
   promptUser: (
     cert: AcceptedContainerCert,
     nonLocalSansOverridden: NonLocalSanEntry[]
-  ) => Promise<boolean>;
+  ) => Promise<ContainerCertConsentChoice>;
   /**
    * Trust the supplied cert in the host's OS trust store. The
    * implementation is the same code path the host-generation flow uses,
@@ -136,10 +166,13 @@ export interface AcceptContainerCertDeps {
  *     Together these defend against a malicious or misconfigured
  *     container tricking the host into trusting a cert valid for
  *     arbitrary domains.
- *  6. Modal consent prompt (one-time, gated on `containerCertProvisionConsented`
- *     in extension global state — distinct from the host-generation
- *     consent because the user is approving trust of a cert that came
- *     from a container they may or may not control). Declining →
+ *  6. Host-wide consent (`containerCertProvisionConsented` in extension
+ *     global state — distinct from the host-generation consent because
+ *     the user is approving trust of a cert that came from a container
+ *     they may or may not control). `denied` short-circuits here without
+ *     prompting; `unset` shows the modal, whose three outcomes are Trust
+ *     (record `granted`), Never (record `denied`), and dismiss (decline
+ *     this push, record nothing). All three non-Trust paths →
  *     `user-declined`.
  *  7. Trust the cert in the host platform store. Public-cert-only:
  *     writes the cert to the OS trust surfaces (.NET Root / OpenSSL
@@ -314,12 +347,38 @@ async function acceptContainerDevCertInner(
     );
   }
 
-  const needsConsent = !deps.hasConsent();
-  if (needsConsent) {
-    const consented = await deps.promptUser(parsed, nonLocalOverridden);
-    if (!consented) {
+  const consent = deps.readConsent();
+
+  // A standing denial short-circuits before the prompt, so declining once
+  // actually stops the asking instead of re-showing the modal on every
+  // container activation.
+  if (consent === "denied") {
+    log(
+      `acceptContainerDevCert: declining ${parsed.thumbprint} — the user previously chose ` +
+        `not to trust container certificates on this host. Run "Dev Certs: Reset Container ` +
+        `Certificate Consent" from the Command Palette to be asked again.`
+    );
+    return {
+      accepted: false,
+      reason: "user-declined",
+      detail: "previously declined for this host",
+    };
+  }
+
+  if (consent === "unset") {
+    const choice = await deps.promptUser(parsed, nonLocalOverridden);
+    if (choice === "never") {
+      // Persisted immediately: unlike the grant below there is no trust step
+      // that could fail and leave the decision half-applied.
+      await deps.recordConsent("denied");
       log(
-        `acceptContainerDevCert: user declined trusting ${parsed.thumbprint}.`
+        `acceptContainerDevCert: user declined trusting ${parsed.thumbprint} and asked not to be prompted again.`
+      );
+      return { accepted: false, reason: "user-declined" };
+    }
+    if (choice === "dismiss") {
+      log(
+        `acceptContainerDevCert: user dismissed the prompt for ${parsed.thumbprint}; not recording a decision.`
       );
       return { accepted: false, reason: "user-declined" };
     }
@@ -333,8 +392,8 @@ async function acceptContainerDevCertInner(
   // re-trying trust without UX.
   await deps.trustCertificate(parsed);
 
-  if (needsConsent) {
-    await deps.recordConsent();
+  if (consent === "unset") {
+    await deps.recordConsent("granted");
   }
 
   log(`acceptContainerDevCert: ${parsed.thumbprint} trusted on host.`);

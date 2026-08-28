@@ -12,6 +12,7 @@ import {
 } from "@devcontainer-dev-certs/shared";
 import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import { acceptContainerDevCert, type AcceptContainerCertDeps, type AcceptContainerCertPayload, } from "../src/containerCertAccept";
+import { normalizeContainerCertConsent } from "../src/extension";
 
 cryptoProvider.set(webcrypto as unknown as Crypto);
 initLogger("test");
@@ -127,7 +128,7 @@ function makeDeps(
     vi.fn<AcceptContainerCertDeps["trustCertificate"]>(async () => undefined);
   const promptUser =
     overrides.promptUser ??
-    vi.fn<AcceptContainerCertDeps["promptUser"]>(async () => true);
+    vi.fn<AcceptContainerCertDeps["promptUser"]>(async () => "trust");
   const recordConsent =
     overrides.recordConsent ??
     vi.fn<AcceptContainerCertDeps["recordConsent"]>(async () => undefined);
@@ -135,7 +136,7 @@ function makeDeps(
     generateDotNetCert: true,
     autoProvision: true,
     allowNonLocalSans: false,
-    hasConsent: () => false,
+    readConsent: () => "unset" as const,
     ...overrides,
     trustCertificate,
     promptUser,
@@ -300,9 +301,9 @@ describe("acceptContainerDevCert", () => {
     expect(deps.trustCertificate).toHaveBeenCalledTimes(1);
   });
 
-  it("skips the modal when consent was previously recorded", async () => {
+  it("skips the modal when consent was previously granted", async () => {
     const { pemCertBase64, thumbprint } = await makeDevPem();
-    const deps = makeDeps({ hasConsent: () => true });
+    const deps = makeDeps({ readConsent: () => "granted" });
     const result = await acceptContainerDevCert(
       { pemCertBase64, thumbprint },
       deps
@@ -313,9 +314,11 @@ describe("acceptContainerDevCert", () => {
     expect(deps.trustCertificate).toHaveBeenCalledTimes(1);
   });
 
-  it("returns user-declined when the prompt is dismissed", async () => {
+  it("returns user-declined and records NOTHING when the prompt is dismissed", async () => {
+    // Cancel / Escape declines this push only. Recording a denial here would
+    // let a stray keystroke disable the feature for good.
     const { pemCertBase64, thumbprint } = await makeDevPem();
-    const deps = makeDeps({ promptUser: vi.fn(async () => false) });
+    const deps = makeDeps({ promptUser: vi.fn(async () => "dismiss") });
     const result = await acceptContainerDevCert(
       { pemCertBase64, thumbprint },
       deps
@@ -323,6 +326,45 @@ describe("acceptContainerDevCert", () => {
     expect(result).toEqual({ accepted: false, reason: "user-declined" });
     expect(deps.trustCertificate).not.toHaveBeenCalled();
     expect(deps.recordConsent).not.toHaveBeenCalled();
+  });
+
+  it("records a denial when the user picks Never", async () => {
+    const { pemCertBase64, thumbprint } = await makeDevPem();
+    const deps = makeDeps({ promptUser: vi.fn(async () => "never") });
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+    expect(result).toEqual({ accepted: false, reason: "user-declined" });
+    expect(deps.recordConsent).toHaveBeenCalledWith("denied");
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits a standing denial without re-prompting", async () => {
+    // The defect this fixes: an accept persisted forever while a decline
+    // persisted nothing, so the only durable state the prompt could reach was
+    // the permissive one and declining meant being asked again on every
+    // single container activation.
+    const { pemCertBase64, thumbprint } = await makeDevPem();
+    const deps = makeDeps({ readConsent: () => "denied" });
+    const result = await acceptContainerDevCert(
+      { pemCertBase64, thumbprint },
+      deps
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toBe("user-declined");
+    expect(deps.promptUser).not.toHaveBeenCalled();
+    expect(deps.trustCertificate).not.toHaveBeenCalled();
+    expect(deps.recordConsent).not.toHaveBeenCalled();
+  });
+
+  it("records the grant as \"granted\", not a bare boolean", async () => {
+    // The stored value is read back through a migration that maps legacy
+    // `true` to "granted"; writing a boolean again would defeat the tri-state.
+    const { pemCertBase64, thumbprint } = await makeDevPem();
+    const deps = makeDeps();
+    await acceptContainerDevCert({ pemCertBase64, thumbprint }, deps);
+    expect(deps.recordConsent).toHaveBeenCalledWith("granted");
   });
 
   it("repeat pushes of the same cert call trustCertificate twice at the handler level — idempotency is enforced one layer down in CertManager.trustExternalCertificate via store.isCertTrusted", async () => {
@@ -335,7 +377,7 @@ describe("acceptContainerDevCert", () => {
     // invoked twice — the dep itself decides whether to make a real
     // platform-trust call.
     const { pemCertBase64, thumbprint } = await makeDevPem();
-    const deps = makeDeps({ hasConsent: () => true });
+    const deps = makeDeps({ readConsent: () => "granted" });
     const first = await acceptContainerDevCert(
       { pemCertBase64, thumbprint },
       deps
@@ -590,5 +632,27 @@ describe("acceptContainerDevCert accepts what this project actually generates", 
 
     expect(result).toEqual({ accepted: true });
     expect(deps.trustCertificate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("normalizeContainerCertConsent", () => {
+  it("maps the legacy boolean grant to 'granted' so upgraders are not re-prompted", () => {
+    // The key previously held a boolean that could only ever be `true`.
+    // Reading that back as anything but a grant would show the modal again to
+    // every user who had already consented.
+    expect(normalizeContainerCertConsent(true)).toBe("granted");
+  });
+
+  it("round-trips the tri-state values", () => {
+    expect(normalizeContainerCertConsent("granted")).toBe("granted");
+    expect(normalizeContainerCertConsent("denied")).toBe("denied");
+  });
+
+  it("falls back to 'unset' for anything unrecognized", () => {
+    // Ask, rather than silently opting the user in or out, for a stale value,
+    // a hand-edited state file, or a key that was never written.
+    for (const value of [undefined, null, false, 0, "", "yes", {}, []]) {
+      expect(normalizeContainerCertConsent(value)).toBe("unset");
+    }
   });
 });
