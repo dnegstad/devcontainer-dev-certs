@@ -110,6 +110,45 @@ describe.skipIf(!opensslAvailable)(
       expect(result).toContain("OK");
     });
 
+    it("keeps the newest cert reachable after 12 rebuild-style rotations", async () => {
+      // The worst case the design has to survive: most dotnet devcontainer
+      // base images mint a fresh dev cert on every rebuild, and nothing lets
+      // this extension verify that a container opting into syncContainerCert
+      // has persisted its store. So assume rotation, and assume the host's
+      // trust dir accumulates.
+      //
+      // Every dev cert is CN=localhost, so all of them land on ONE subject
+      // hash. With the old ten-slot bound the eleventh rotation got no symlink
+      // at all: the host went on trusting ten dead certs while the live one
+      // failed `openssl verify -CApath`, silently and with the feature exactly
+      // inverted. openssl is the oracle here rather than the symlink count,
+      // because being reachable by `by_dir` is the only property that matters.
+      const store = new LinuxCertificateStore();
+      let newestPem = "";
+
+      for (let rotation = 0; rotation < 12; rotation++) {
+        const { cert, thumbprint } = await makeTestCert();
+        await store.trustCertificate(cert);
+        newestPem = path.join(testTrustDir, getPemFileName(thumbprint));
+      }
+
+      const pems = fs
+        .readdirSync(testTrustDir)
+        .filter((f) => f.endsWith(".pem"));
+      expect(pems).toHaveLength(12);
+
+      const verified = execFileSync("openssl", [
+        "verify",
+        "-CApath",
+        testTrustDir,
+        "-partial_chain",
+        newestPem,
+      ])
+        .toString()
+        .trim();
+      expect(verified).toContain("OK");
+    }, 120_000);
+
     it("trustCertificate is idempotent — re-trust replaces symlinks cleanly", async () => {
       const store = new LinuxCertificateStore();
       const { cert } = await makeTestCert();

@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import { log } from "../logger";
 
 /**
  * Pure TypeScript implementation of OpenSSL's c_rehash for certificate directories.
@@ -39,6 +40,21 @@ const CANONICALIZED_STRING_TAGS = new Set<number>([
 
 /** Tag OpenSSL re-labels every canonicalized string with. */
 const UTF8_STRING_TAG = 0x0c;
+
+/**
+ * Upper bound on `{hash}.{n}` slots probed for one subject hash. OpenSSL has
+ * no limit of its own; this exists only so a pathological directory can't spin
+ * forever. Set far above any plausible dev-cert count so exhausting it means
+ * something is genuinely wrong rather than merely busy.
+ */
+const MAX_HASH_SLOTS = 256;
+
+/**
+ * Slot index past which the trust directory is worth remarking on. Ten
+ * same-subject certs is already more than a healthy setup accumulates, and
+ * silence here is what let the old bound break trust unnoticed.
+ */
+const CROWDED_HASH_SLOTS = 10;
 
 /**
  * Compute the OpenSSL subject hash from a PEM certificate string.
@@ -109,10 +125,24 @@ export function ensureHashSymlink(
 ): void {
   const hash = computeSubjectHash(pemContent);
   if (!hash) return;
-  // Slot 0-9 covers any realistic number of collisions in a dev trust dir.
-  // Catch EEXIST so a concurrent rehash from another process doesn't crash
-  // the caller.
-  for (let i = 0; i < 10; i++) {
+  // Every ASP.NET dev cert shares the subject `CN=localhost`, so every one of
+  // them collides on the SAME hash — slots are consumed by cert COUNT, not by
+  // genuine hash collisions. The old bound of 10 therefore ran out in ordinary
+  // use: a container that mints a fresh dev cert on each rebuild (the default
+  // for most dotnet devcontainer base images, and not something this extension
+  // can enforce otherwise) fills ten slots in ten rebuilds, after which this
+  // function fell out of the loop and returned silently. The host was then left
+  // trusting ten dead certs while the live one had no symlink at all and failed
+  // `openssl verify -CApath` — the feature inverted, with no error and no log.
+  //
+  // OpenSSL imposes no such limit: `by_dir` walks `{hash}.{n}` upward until a
+  // file is missing. The corollary is that slots must stay CONTIGUOUS from 0 —
+  // a gap makes everything past it unreachable — which is why pruning entries
+  // has to re-densify via `rehashDirectory` rather than unlink in place.
+  //
+  // Catch EEXIST so a concurrent rehash from another process doesn't crash the
+  // caller.
+  for (let i = 0; i < MAX_HASH_SLOTS; i++) {
     const linkName = `${hash}.${i}`;
     const linkPath = path.join(directory, linkName);
 
@@ -149,12 +179,27 @@ export function ensureHashSymlink(
 
     try {
       fs.symlinkSync(pemFileName, linkPath);
+      if (i >= CROWDED_HASH_SLOTS) {
+        log(
+          `OpenSSL trust dir ${directory} now holds ${i + 1} certificates sharing subject hash ${hash}. ` +
+            `Trust is still correct, but nothing prunes superseded certificates — see the accumulation ` +
+            `note in AGENTS.md.`
+        );
+      }
       return;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "EEXIST") continue;
       throw err;
     }
   }
+
+  // Never silently: a cert with no reachable slot is a cert OpenSSL will not
+  // find, which is indistinguishable from "not trusted" at the point of use.
+  log(
+    `[warn] Could not allocate an OpenSSL hash symlink for ${pemFileName} in ${directory}: ` +
+      `all ${MAX_HASH_SLOTS} slots for subject hash ${hash} are taken. This certificate will NOT be ` +
+      `found via SSL_CERT_DIR. Remove superseded certificates from that directory and re-run the sync.`
+  );
 }
 
 // --- Internal helpers ---

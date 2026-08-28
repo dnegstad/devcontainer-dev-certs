@@ -154,27 +154,51 @@ describe.skipIf(process.platform === "win32")("ensureHashSymlink", () => {
     );
   });
 
-  it("returns silently when all 10 hash slots are taken by different PEMs", () => {
-    // Defensive bound check: 11th install must not throw and must not
-    // allocate slot 10+ (there's no slot 10 in c_rehash).
+  it("keeps allocating slots past 10 — every dev cert shares one subject hash", () => {
+    // This used to assert the opposite: that an 11th same-subject PEM was
+    // silently refused a slot. That bound was reachable in ordinary use rather
+    // than pathological, because every ASP.NET dev cert is CN=localhost, so
+    // slots are consumed by cert COUNT, not by real hash collisions. A
+    // container minting a fresh cert per rebuild — the default for most dotnet
+    // devcontainer base images, and not something this extension can enforce
+    // otherwise — exhausted all ten in ten rebuilds, after which the LIVE cert
+    // got no symlink while ten dead ones kept theirs, and `openssl verify
+    // -CApath` failed for the only cert that mattered. OpenSSL's `by_dir` has
+    // no such limit; it walks `{hash}.{n}` until a file is missing.
     const dir = tmp();
-    // Same content under 10 distinct filenames → same subject hash.
     for (let i = 0; i < 10; i++) {
       const name = `collide${i}.pem`;
       fs.writeFileSync(path.join(dir, name), SAMPLE_PEM_A);
       ensureHashSymlink(dir, name, SAMPLE_PEM_A);
     }
-    const before = listHashSymlinks(dir);
-    expect(before).toHaveLength(10);
+    expect(listHashSymlinks(dir)).toHaveLength(10);
 
-    // 11th attempt — must NOT throw and must NOT create an 11th symlink.
-    fs.writeFileSync(path.join(dir, "overflow.pem"), SAMPLE_PEM_A);
-    expect(() =>
-      ensureHashSymlink(dir, "overflow.pem", SAMPLE_PEM_A)
-    ).not.toThrow();
+    fs.writeFileSync(path.join(dir, "eleventh.pem"), SAMPLE_PEM_A);
+    ensureHashSymlink(dir, "eleventh.pem", SAMPLE_PEM_A);
 
-    const after = listHashSymlinks(dir);
-    expect(after).toEqual(before);
+    const links = listHashSymlinks(dir);
+    expect(links).toHaveLength(11);
+    // The newcomer is the one that has to be reachable.
+    const mine = links.filter(
+      (l) => fs.readlinkSync(path.join(dir, l)) === "eleventh.pem"
+    );
+    expect(mine).toHaveLength(1);
+  });
+
+  it("allocates slots contiguously from 0, which is what OpenSSL requires", () => {
+    // `by_dir` stops at the first missing `{hash}.{n}`, so a gap makes every
+    // later slot unreachable. Anything that prunes entries must re-densify
+    // via rehashDirectory rather than unlink in place.
+    const dir = tmp();
+    for (let i = 0; i < 12; i++) {
+      const name = `c${i}.pem`;
+      fs.writeFileSync(path.join(dir, name), SAMPLE_PEM_A);
+      ensureHashSymlink(dir, name, SAMPLE_PEM_A);
+    }
+    const suffixes = listHashSymlinks(dir)
+      .map((l) => Number(l.split(".")[1]))
+      .sort((a, b) => a - b);
+    expect(suffixes).toEqual([...Array(12).keys()]);
   });
 
   it("leaves pre-existing hash symlinks for OTHER PEMs untouched", () => {
