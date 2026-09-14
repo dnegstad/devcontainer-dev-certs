@@ -9,9 +9,12 @@ import {
   getPfxFileName,
   getPemFileName,
   getPemFileNameForUser,
+  computeSubjectHash,
+  ensureHashSymlink,
+  hasHashSymlink,
+  rehashDirectory,
 } from "@devcontainer-dev-certs/shared";
 import type { CertMaterialV3 } from "@devcontainer-dev-certs/shared";
-import { ensureHashSymlink, rehashDirectory } from "./util/rehash";
 import type { ExtraDestination } from "./util/destinations";
 
 export type {
@@ -155,8 +158,17 @@ export function installUserCert(material: CertMaterialV3): void {
  * dotnet-dev we check the three historic paths; for user certs we check that
  * the thumbprint-keyed PFX (when applicable) and, when trust is requested,
  * the named PEM exist.
+ *
+ * "Installed" includes a hash symlink OpenSSL would actually resolve, not just
+ * the PEM being present. Without that, a container installed before the subject
+ * hash was computed canonically has its symlink under the WRONG hash: the files
+ * all exist, this returns true, the install is skipped, and the symlink is never
+ * repaired — so upgrading would leave trust broken precisely for the users the
+ * fix exists for. Re-running the install is cheap and rewrites identical bytes.
  */
 export function isCertInstalled(material: CertMaterialV3): boolean {
+  const trustDir = getOpenSslTrustDir();
+
   if (material.kind === "dotnet-dev") {
     const pfxPath = path.join(
       getDotNetStorePath(),
@@ -166,32 +178,87 @@ export function isCertInstalled(material: CertMaterialV3): boolean {
       getDotNetRootStorePath(),
       getPfxFileName(material.thumbprint)
     );
-    const pemPath = path.join(
-      getOpenSslTrustDir(),
-      getPemFileName(material.thumbprint)
-    );
-    return (
-      fs.existsSync(pfxPath) &&
-      fs.existsSync(rootPfxPath) &&
-      fs.existsSync(pemPath)
+    if (!fs.existsSync(pfxPath) || !fs.existsSync(rootPfxPath)) return false;
+    return pemInstalledAndLinked(
+      trustDir,
+      getPemFileName(material.thumbprint),
+      decodePem(material)
     );
   }
 
+  const storePfxPath = path.join(
+    getDotNetStorePath(),
+    getPfxFileName(material.thumbprint)
+  );
   if (material.installToDotNetStore) {
-    const pfxPath = path.join(
-      getDotNetStorePath(),
-      getPfxFileName(material.thumbprint)
-    );
-    if (!fs.existsSync(pfxPath)) return false;
+    if (!fs.existsSync(storePfxPath)) return false;
+  } else if (fs.existsSync(storePfxPath)) {
+    // Opted out, but a passwordless copy from a previous opt-in is still
+    // sitting in the .NET store. Report "not installed" so the caller runs
+    // `installUserCert`, whose else-branch sweeps that file — otherwise the
+    // sweep is unreachable and the plain-text key copy lives on forever
+    // after the user flips `installUserCertsToDotNetStore` off (or adds
+    // `excludeFromDotNetStore`).
+    return false;
   }
   if (material.trustInContainer) {
-    const pemPath = path.join(
-      getOpenSslTrustDir(),
-      getPemFileNameForUser(material.name)
+    // `installUserCert` writes the .NET Root-store PFX too whenever the bundle
+    // carries one, so checking only the OpenSSL side would report a user cert
+    // fully installed after its Root PFX was deleted (or a previous install
+    // stopped between the two writes) — activation would skip the reinstall
+    // and .NET clients in the container would go on distrusting it. Gated on
+    // `rootPfxBase64` so a bundle that never supplied one isn't held to a file
+    // the install would not have written.
+    if (material.rootPfxBase64) {
+      const rootPfxPath = path.join(
+        getDotNetRootStorePath(),
+        getPfxFileName(material.thumbprint)
+      );
+      if (!fs.existsSync(rootPfxPath)) return false;
+    }
+    return pemInstalledAndLinked(
+      trustDir,
+      getPemFileNameForUser(material.name),
+      decodePem(material)
     );
-    if (!fs.existsSync(pemPath)) return false;
   }
   return true;
+}
+
+function decodePem(material: CertMaterialV3): string {
+  return Buffer.from(material.pemCertBase64, "base64").toString("utf-8");
+}
+
+/**
+ * True when the trust directory already holds exactly this certificate under
+ * `pemFileName`, with a hash symlink OpenSSL can resolve to it.
+ *
+ * Compares content, not just existence, because user certs are keyed by the
+ * user-chosen `name` rather than by thumbprint: rotating the certificate while
+ * keeping the same name leaves a stale `{name}.pem` whose own hash link
+ * resolves perfectly well, so an existence check would report "installed" and
+ * the container would go on serving the superseded certificate indefinitely.
+ * (The dotnet-dev PEM is thumbprint-keyed, so rotation changes its filename —
+ * comparing content there is merely consistent rather than load-bearing.)
+ *
+ * A PEM whose subject can't be hashed counts as settled: `ensureHashSymlink`
+ * is a no-op for it, so demanding a link would re-run the install on every
+ * activation and never converge.
+ */
+function pemInstalledAndLinked(
+  trustDir: string,
+  pemFileName: string,
+  expectedPem: string
+): boolean {
+  let onDisk: string;
+  try {
+    onDisk = fs.readFileSync(path.join(trustDir, pemFileName), "utf-8");
+  } catch {
+    return false;
+  }
+  if (onDisk !== expectedPem) return false;
+  if (computeSubjectHash(onDisk) === null) return true;
+  return hasHashSymlink(trustDir, pemFileName, onDisk);
 }
 
 /**

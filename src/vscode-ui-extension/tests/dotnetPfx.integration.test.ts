@@ -3,9 +3,11 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { execFileSync, spawnSync } from "child_process";
-import { generateCertificate } from "../src/cert/generator";
-import { exportPfx } from "../src/cert/exporter";
-import { VALIDITY_DAYS } from "../src/cert/properties";
+import {
+  generateCertificate,
+  exportPfx,
+  VALIDITY_DAYS,
+} from "@devcontainer-dev-certs/shared";
 
 /**
  * Skips unless `dotnet --version` reports a major SDK version >= 10. The

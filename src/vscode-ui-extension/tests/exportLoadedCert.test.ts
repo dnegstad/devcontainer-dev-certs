@@ -2,10 +2,13 @@ import { describe, it, expect, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { exportLoadedCert, exportPem } from "../src/cert/exporter";
-import { loadPemPair } from "../src/cert/loader";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
+import {
+  exportLoadedCert,
+  exportPem,
+  loadPemPair,
+  generateCertificate,
+  VALIDITY_DAYS,
+} from "@devcontainer-dev-certs/shared";
 
 async function makeTestCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();

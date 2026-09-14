@@ -5,10 +5,37 @@ import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Cap on captured stdout/stderr, well above Node's 1 MiB `execFile` default.
+ *
+ * The default is reachable in practice by `security find-certificate -a` on
+ * macOS, which dumps every certificate in the login keychain: roughly 2 KB per
+ * entry for the attribute form and 1.5 KB for the PEM form, so ~500-700 certs.
+ * That's uncommon but real — MDM-pushed user certs, heavy client-cert use, or
+ * years of accumulated dev certs. 32 MiB is ~16,000 keychain entries, and the
+ * buffer is only as large as the output actually produced.
+ */
+const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
+
+/** Node's `error.code` when a child exceeds `maxBuffer`. A string, not a number. */
+const MAXBUFFER_ERROR_CODE = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+
 export interface ProcessResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * True when the child was killed for exceeding `MAX_OUTPUT_BYTES` — the
+   * command may well have been on its way to succeeding, and `stdout` holds a
+   * truncated prefix of its output.
+   *
+   * Callers that read `exitCode !== 0` as "the answer is no" MUST check this
+   * first. Node reports the overflow with a *string* `error.code`, so it lands
+   * in the same `exitCode: 1` bucket as a genuine failure, and `stderr` comes
+   * back empty — without this flag there is nothing in the result to tell the
+   * two apart.
+   */
+  truncated: boolean;
 }
 
 export interface ResolveSafeExecPathOptions {
@@ -146,11 +173,20 @@ export async function runProcess(
       exitCode: 127,
       stdout: "",
       stderr: `command not found on PATH: ${command}`,
+      truncated: false,
     };
   }
   try {
-    const result = await execFileAsync(resolved, args, { timeout });
-    return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+    const result = await execFileAsync(resolved, args, {
+      timeout,
+      maxBuffer: MAX_OUTPUT_BYTES,
+    });
+    return {
+      exitCode: 0,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      truncated: false,
+    };
   } catch (err: unknown) {
     const error = err as Error & {
       code?: number | string;
@@ -163,6 +199,7 @@ export async function runProcess(
       exitCode,
       stdout: error.stdout ?? "",
       stderr: error.stderr ?? error.message,
+      truncated: error.code === MAXBUFFER_ERROR_CODE,
     };
   }
 }

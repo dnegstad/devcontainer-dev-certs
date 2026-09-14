@@ -3,30 +3,54 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { getRenamedSetting } from "./settings";
-import { CertManager } from "./cert/manager";
-import { CertProvider } from "./certProvider";
-import type { GetAllCertMaterialArgs } from "./certProvider";
 import {
-  acceptContainerDevCert,
-  type AcceptContainerCertPayload,
-  type AcceptContainerCertResult,
-  type AcceptedContainerCert,
-} from "./containerCertAccept";
-import { trustInNss } from "./platform/nssTrust";
-import {
+  CertManager,
+  trustInNss,
   log,
   getOpenSslTrustDir,
   getPemFileName,
-  type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
-import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 import type {
+  NonLocalSanEntry,
   CertBundle,
   CertBundleV3,
   LinuxNssTrustReporter,
 } from "@devcontainer-dev-certs/shared";
+import { CertProvider } from "./certProvider";
+import type { GetAllCertMaterialArgs } from "./certProvider";
+import { acceptContainerDevCert, type AcceptContainerCertPayload, type AcceptContainerCertResult, type AcceptedContainerCert, type ContainerCertConsent, type ContainerCertConsentChoice, } from "./containerCertAccept";
+import { initLogger } from "@devcontainer-dev-certs/shared/src/loggerVscode";
 
 const CONTAINER_CERT_CONSENT_KEY = "containerCertProvisionConsented";
+
+/**
+ * Map whatever is sitting in global state onto the tri-state decision.
+ *
+ * Migrates the historical shape: this key used to hold a boolean that could
+ * only ever be `true` (an accept), so an existing consenter must read back as
+ * `granted` and never be re-prompted. Anything unrecognized — a stale value, a
+ * hand-edited state file — falls back to `unset`, which asks the user rather
+ * than silently opting them into or out of the feature.
+ *
+ * Exported for testing: the legacy-boolean path is the one that decides
+ * whether upgrading users get an unexpected modal, and it deserves a direct
+ * assertion rather than one mediated by a fake ExtensionContext.
+ */
+export function normalizeContainerCertConsent(
+  stored: unknown
+): ContainerCertConsent {
+  if (stored === true || stored === "granted") return "granted";
+  if (stored === "denied") return "denied";
+  return "unset";
+}
+
+function readContainerCertConsent(
+  context: vscode.ExtensionContext
+): ContainerCertConsent {
+  return normalizeContainerCertConsent(
+    context.globalState.get(CONTAINER_CERT_CONSENT_KEY)
+  );
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs"));
@@ -207,14 +231,10 @@ export function activate(context: vscode.ExtensionContext): void {
           generateDotNetCert,
           autoProvision,
           allowNonLocalSans,
-          hasConsent: () =>
-            context.globalState.get<boolean>(
-              CONTAINER_CERT_CONSENT_KEY,
-              false
-            ),
-          recordConsent: () =>
+          readConsent: () => readContainerCertConsent(context),
+          recordConsent: (decision) =>
             Promise.resolve(
-              context.globalState.update(CONTAINER_CERT_CONSENT_KEY, true)
+              context.globalState.update(CONTAINER_CERT_CONSENT_KEY, decision)
             ).then(() => undefined),
           promptUser: (cert, nonLocal) =>
             promptForContainerCertConsent(cert, nonLocal),
@@ -224,6 +244,34 @@ export function activate(context: vscode.ExtensionContext): void {
         });
 
         return result;
+      }
+    )
+  );
+
+  // Undo a standing container-cert decision. Without this, "Never" would be
+  // a one-way ratchet in the opposite direction from the one it fixes —
+  // reachable only by clearing the extension's global state by hand. Also
+  // lets a user who granted consent stop future silent acceptances.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "devcontainer-dev-certs.resetContainerCertConsent",
+      async () => {
+        const previous = readContainerCertConsent(context);
+        await context.globalState.update(CONTAINER_CERT_CONSENT_KEY, undefined);
+        log(`Container certificate consent reset (was: ${previous}).`);
+        if (previous === "unset") {
+          vscode.window.showInformationMessage(
+            vscode.l10n.t(
+              "Dev Certs: No container certificate decision was recorded; you will be asked the next time a Dev Container offers one."
+            )
+          );
+          return;
+        }
+        vscode.window.showInformationMessage(
+          vscode.l10n.t(
+            "Dev Certs: Container certificate consent reset. You will be asked again the next time a Dev Container offers one. Certificates already trusted on this host are not removed."
+          )
+        );
       }
     )
   );
@@ -340,8 +388,9 @@ async function promptForCertConsent(): Promise<boolean> {
 async function promptForContainerCertConsent(
   cert: AcceptedContainerCert,
   nonLocalSans: NonLocalSanEntry[]
-): Promise<boolean> {
+): Promise<ContainerCertConsentChoice> {
   const trust = vscode.l10n.t("Trust");
+  const never = vscode.l10n.t("Never Trust Container Certificates");
   const platformDetail =
     process.platform === "darwin"
       ? vscode.l10n.t(
@@ -384,17 +433,24 @@ async function promptForContainerCertConsent(
 
   sections.push(
     vscode.l10n.t(
-      "Declining skips trusting this certificate. To permanently disable this flow, set devcontainerDevCerts.generateDotNetCert to false (which also disables host-side generation)."
+      "Cancel skips this certificate and asks again next time. 'Never Trust Container Certificates' declines for this host permanently — no further prompts, and no container certificate is trusted — and can be undone with 'Dev Certs: Reset Container Certificate Consent' from the Command Palette."
     )
   );
 
   const detail = sections.join("\n\n");
+  // Three outcomes, not two. Cancel/Escape has to stay separable from an
+  // explicit refusal: a dismissed dialog declines this one push and records
+  // nothing, so a stray Escape can't silently disable the feature forever,
+  // while "Never" is the durable answer that actually stops the prompting.
   const choice = await vscode.window.showInformationMessage(
     message,
     { modal: true, detail },
-    trust
+    trust,
+    never
   );
-  return choice === trust;
+  if (choice === trust) return "trust";
+  if (choice === never) return "never";
+  return "dismiss";
 }
 
 export interface ResolveDotnetProvisioningDeps {

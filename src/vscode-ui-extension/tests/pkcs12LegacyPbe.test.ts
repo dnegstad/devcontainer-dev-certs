@@ -2,12 +2,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import { loadPfx } from "@devcontainer-dev-certs/shared";
-import {
-  SUPPORTED_LEGACY_PBE_OID,
-  decryptLegacyPbe,
-  isSupportedLegacyPbe,
-  pkcs12Kdf,
-} from "@devcontainer-dev-certs/shared/src/cert/pkcs12LegacyPbe";
+import { SUPPORTED_LEGACY_PBE_OID, decryptLegacyPbe, isSupportedLegacyPbe, pkcs12Kdf, } from "@devcontainer-dev-certs/shared/src/cert/pkcs12LegacyPbe";
 
 /**
  * Lifecycle: delete this file when the parent module is removed. See

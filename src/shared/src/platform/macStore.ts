@@ -12,6 +12,7 @@ import { getCertificateVersion, isValidDevCert } from "../cert/validation";
 import { certToDer } from "../cert/exporter";
 import { ASPNET_HTTPS_OID } from "../cert/properties";
 import { DevCert, type DevKey } from "../cert/types";
+import { log } from "../logger";
 
 /**
  * macOS certificate store implementation.
@@ -141,6 +142,28 @@ export class MacCertificateStore extends BaseCertificateStore {
       "-Z",
       this.keychainPath,
     ]);
+    // Truncated output means we scanned a prefix of the keychain and simply
+    // don't know. Answer YES — deliberately failing open, which inverts the
+    // usual instinct because here the closed direction is the destructive one.
+    //
+    // A `false` gets the on-disk PFX force-skipped as an orphaned cache file,
+    // which empties `findExistingDevCert`, which makes `checkStatus()` report
+    // `exists: false`, which sends `CertManager.trust()` down the `generate()`
+    // branch: a brand-new cert plus an `add-trusted-cert` keychain password
+    // prompt. That new cert then lands in the same keychain, so the next call
+    // truncates even sooner — a self-feeding loop with no way out.
+    //
+    // The open direction costs at most one redundant re-trust: `checkStatus`
+    // establishes trust separately via `security verify-cert` in `isTrusted`,
+    // so a cert that genuinely isn't in the keychain is caught there.
+    if (result.truncated) {
+      log(
+        `macOS keychain enumeration exceeded the output cap while looking for ${thumbprint}; ` +
+          `assuming the certificate IS present rather than regenerating it. ` +
+          `A login keychain this large may want pruning.`
+      );
+      return true;
+    }
     if (result.exitCode !== 0) return false;
     const needle = thumbprint.toUpperCase();
     // Modern macOS prints both `SHA-256 hash:` and `SHA-1 hash:` lines
@@ -167,7 +190,18 @@ export class MacCertificateStore extends BaseCertificateStore {
       "-Z",
       this.keychainPath,
     ]);
-    if (result.exitCode !== 0) return [];
+    // Unlike `isCertInKeychain`, an incomplete answer here is harmless: this
+    // pass only emits a "in the keychain but no cache PFX" warning, so a short
+    // list costs a log line rather than a decision. Say why, then carry on
+    // with whatever prefix we got.
+    if (result.truncated) {
+      log(
+        "macOS keychain enumeration exceeded the output cap; the keychain-resident " +
+          "dev cert warnings below cover only part of the keychain."
+      );
+    } else if (result.exitCode !== 0) {
+      return [];
+    }
 
     const out: Array<{ cert: DevCert; thumbprint: string }> = [];
     const pemBlocks = extractPemBlocks(result.stdout);
@@ -228,86 +262,6 @@ export class MacCertificateStore extends BaseCertificateStore {
       throw new Error(
         `Failed to trust certificate in keychain: ${result.stderr}`
       );
-    }
-  }
-
-  async removeCertificates(): Promise<void> {
-    // For each PFX we manage on disk, load it, run untrust + delete-from-
-    // keychain by thumbprint, then unlink the PFX. Three-step structure
-    // because trust settings are stored separately from the cert (in
-    // TrustSettings.plist) and reference it by hash — if we delete the
-    // cert from the keychain first, the trust settings become orphaned
-    // dangling entries that the next `add-trusted-cert` may flag as
-    // duplicates.
-    //
-    // Matching dev certs by filename (`aspnetcore-localhost-*.pfx`) +
-    // the dev-cert OID is narrower than matching keychain entries by
-    // `-c localhost`: the user may have unrelated `localhost` certs
-    // added for other tools, and bulk-untrusting by keychain or by CN
-    // would nuke those too.
-    if (!fs.existsSync(this.devCertsDir)) return;
-
-    const pfxFiles = fs
-      .readdirSync(this.devCertsDir)
-      .filter(
-        (f) => f.startsWith("aspnetcore-localhost-") && f.endsWith(".pfx")
-      );
-
-    for (const pfxFile of pfxFiles) {
-      const pfxPath = path.join(this.devCertsDir, pfxFile);
-      let parsed: Awaited<ReturnType<typeof this.loadPfx>>;
-      try {
-        parsed = await this.loadPfx(pfxPath);
-      } catch {
-        // Unparseable — skip the untrust step but still unlink below
-        // so we don't leave stale files around.
-        parsed = null;
-      }
-
-      if (parsed && parsed.cert.hasExtension(ASPNET_HTTPS_OID)) {
-        // Step 1: untrust. `security remove-trusted-cert` takes a
-        // cert file (DER / PEM) as its positional, NOT a keychain
-        // path. Trust settings were added without `-d` (user domain,
-        // matching `add-trusted-cert` above), so we remove without
-        // `-d` too. Non-zero exit just means there was no trust
-        // settings entry to remove — not an error in cleanup.
-        const tmpCert = path.join(
-          os.tmpdir(),
-          `devcert-untrust-${randomUUID()}.cer`
-        );
-        fs.writeFileSync(tmpCert, certToDer(parsed.cert));
-        try {
-          await runProcess("security", ["remove-trusted-cert", tmpCert]);
-        } finally {
-          try {
-            fs.unlinkSync(tmpCert);
-          } catch {
-            /* ignore */
-          }
-        }
-
-        // Step 2: delete the keychain entries. delete-certificate exits
-        // non-zero once there are no more entries matching the hash;
-        // loop with a generous bound to drain any duplicates left by
-        // past regenerations.
-        for (let i = 0; i < 100; i++) {
-          const result = await runProcess("security", [
-            "delete-certificate",
-            "-Z",
-            parsed.thumbprint,
-            this.keychainPath,
-          ]);
-          if (result.exitCode !== 0) break;
-        }
-      }
-
-      // Step 3: unlink the PFX. Done last so a mid-cleanup interruption
-      // leaves the file in place and the cleanup is restartable.
-      try {
-        fs.unlinkSync(pfxPath);
-      } catch {
-        /* ignore */
-      }
     }
   }
 

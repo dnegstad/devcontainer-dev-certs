@@ -1,15 +1,18 @@
-import {
-  describe,
-  it,
-  expect,
-  beforeEach,
-  vi,
-  type Mock,
-} from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock, } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import type { Backend } from "@devcontainer-dev-certs/shared";
+import {
+  selectBackend,
+  generateCertificate,
+  VALIDITY_DAYS,
+} from "@devcontainer-dev-certs/shared";
+import type {
+  Backend,
+  CertManager,
+  DevCert,
+  DevKey,
+} from "@devcontainer-dev-certs/shared";
 
 import type * as Shared from "@devcontainer-dev-certs/shared";
 
@@ -26,12 +29,7 @@ vi.mock("@devcontainer-dev-certs/shared", async () => {
   };
 });
 
-import { selectBackend } from "@devcontainer-dev-certs/shared";
 import { CertProvider } from "../src/certProvider";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import type { CertManager } from "../src/cert/manager";
-import type { DevCert, DevKey } from "../src/cert/types";
 import { __resetConfig, __setConfig } from "./__mocks__/vscode";
 
 const mockedSelectBackend = vi.mocked(selectBackend);

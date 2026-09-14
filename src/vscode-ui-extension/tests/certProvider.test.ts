@@ -4,18 +4,19 @@ import * as os from "os";
 import * as path from "path";
 import { CertProvider } from "../src/certProvider";
 import type { UserCertificateConfig } from "../src/certProvider";
-import { exportPem } from "../src/cert/exporter";
-import { generateCertificate } from "../src/cert/generator";
-import { buildPfx, parsePfx } from "../src/cert/pfx";
-import { VALIDITY_DAYS } from "../src/cert/properties";
-import type { CertManager } from "../src/cert/manager";
-import { type DevCert, type DevKey } from "../src/cert/types";
 import {
-  __resetConfig,
-  __setConfig,
-  errorMessages,
-  warningMessages,
-} from "./__mocks__/vscode";
+  exportPem,
+  generateCertificate,
+  buildPfx,
+  parsePfx,
+  VALIDITY_DAYS,
+} from "@devcontainer-dev-certs/shared";
+import type {
+  CertManager,
+  DevCert,
+  DevKey,
+} from "@devcontainer-dev-certs/shared";
+import { __resetConfig, __setConfig, errorMessages, warningMessages, } from "./__mocks__/vscode";
 
 async function makeValidCert(): ReturnType<typeof generateCertificate> {
   const now = new Date();

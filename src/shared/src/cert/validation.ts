@@ -98,10 +98,48 @@ export interface NonLocalSanEntry {
   value: string;
 }
 
+/**
+ * Why a SAN set was rejected. Split into *structural* problems — the cert's
+ * SAN extension isn't the shape a dev cert has, so we can't meaningfully say
+ * what it's scoped to — and `non-local`, which means we read it fine and it
+ * covers names outside local scopes.
+ *
+ * The distinction is load-bearing at the call site:
+ * `allowNonLocalContainerCertSans` is an opt-out for *scope*, so it may
+ * override `non-local` and must never override a structural reject. Trusting
+ * a cert whose SAN we could not read is not a scope decision the user is in
+ * a position to make.
+ */
+export type SanRejectReason =
+  /** No SubjectAlternativeName extension at all. */
+  | "missing"
+  /** SAN extension present but its DER doesn't decode. */
+  | "unparseable"
+  /** SAN decoded but held zero entries. */
+  | "no-host-entries"
+  /** SAN carried a GeneralName type other than dNSName / iPAddress. */
+  | "unsupported-entry"
+  /** SAN read fine; at least one dNSName / iPAddress is outside local scope. */
+  | "non-local";
+
 export interface SanLocalValidationResult {
   ok: boolean;
+  /** Set whenever `ok` is false. */
+  reason?: SanRejectReason;
+  /** Populated only for `reason === "non-local"`. */
   nonLocalEntries: NonLocalSanEntry[];
+  /** Human-readable supplement for logs / UI. */
+  detail?: string;
 }
+
+/** Successful scan, or the structural reason the SAN set is unusable. */
+export type SanScanResult =
+  | { ok: true; entries: NonLocalSanEntry[] }
+  | {
+      ok: false;
+      reason: Exclude<SanRejectReason, "non-local">;
+      detail?: string;
+    };
 
 const ALLOWED_DNS_EXACT = new Set<string>([
   "localhost",
@@ -138,62 +176,226 @@ const ALLOWED_DNS_SUFFIXES = [
  *          link-local (169.254/16).
  *   IPv6 — loopback (::1), unique-local (fc00::/7), link-local (fe80::/10).
  *
- * A SAN entry that doesn't parse is treated as non-local — fail-closed.
+ * Fail-closed on anything we can't fully read: a missing, undecodable, empty,
+ * or non-dNSName/iPAddress SAN set is rejected outright rather than being
+ * treated as "nothing to object to". See `scanSanEntries`.
  */
 export function validateLocalSans(cert: DevCert): SanLocalValidationResult {
-  const sanEntries = collectSanEntries(cert);
-  const nonLocalEntries: NonLocalSanEntry[] = [];
-
-  for (const entry of sanEntries) {
-    if (entry.type === "dns") {
-      if (!isLocalDnsName(entry.value)) {
-        nonLocalEntries.push(entry);
-      }
-    } else {
-      if (!isLocalIp(entry.value)) {
-        nonLocalEntries.push(entry);
-      }
-    }
+  const scan = scanSanEntries(cert);
+  if (!scan.ok) {
+    return {
+      ok: false,
+      reason: scan.reason,
+      nonLocalEntries: [],
+      detail: scan.detail,
+    };
   }
 
-  return { ok: nonLocalEntries.length === 0, nonLocalEntries };
+  const nonLocalEntries = scan.entries.filter((entry) =>
+    entry.type === "dns"
+      ? !isLocalDnsName(entry.value)
+      : !isLocalIp(entry.value)
+  );
+
+  if (nonLocalEntries.length > 0) {
+    return { ok: false, reason: "non-local", nonLocalEntries };
+  }
+  return { ok: true, nonLocalEntries: [] };
 }
 
 /**
- * Extract DNS + IP entries from a cert's SubjectAlternativeName extension.
- * Returns an empty list when the extension is missing — callers treat that
- * as "no entries to inspect"; the surrounding `isValidDevCert` check
- * separately enforces CN=localhost.
+ * Read a cert's SubjectAlternativeName entries, or say precisely why they
+ * can't be read.
+ *
+ * Every rejection here is deliberate rather than a silent drop, because the
+ * caller's next step is installing the cert into an OS trust store. Three
+ * cases that a "collect what we recognize and ignore the rest" reader would
+ * have waved through:
+ *
+ * - **No SAN extension / an empty one.** Nothing to scope-check, so the
+ *   local-only restriction has nothing to bite on. No genuine ASP.NET dev
+ *   cert looks like this (the canonical one carries seven entries), and a
+ *   cert with no SAN can't authenticate a hostname to any modern client
+ *   anyway — so there's no legitimate reason to trust one.
+ * - **A GeneralName type other than dNSName / iPAddress** (rfc822Name,
+ *   uniformResourceIdentifier, directoryName, otherName…). These aren't
+ *   used for TLS server identity, so ignoring them is defensible on paper —
+ *   but it means reporting "SANs are local-only" about a cert we only
+ *   partially inspected. A dev cert has no business carrying them, so
+ *   rejecting costs nothing real and keeps the report honest.
+ * - **Undecodable SAN DER.** `@peculiar/x509` parses extensions lazily and
+ *   throws from `getExtension`, so this used to surface as an exception that
+ *   happened to be caught two frames up in the accept handler and mapped to
+ *   a generic parse failure. That made fail-closed an accident of the call
+ *   site: adding a `try/catch` here — the obvious defensive edit — would
+ *   have silently turned it into fail-open. It's now explicit and local.
  */
-export function collectSanEntries(cert: DevCert): NonLocalSanEntry[] {
-  const ext = cert.inner.getExtension(SAN_EXTENSION_OID);
-  if (!ext) return [];
+export function scanSanEntries(cert: DevCert): SanScanResult {
+  let items: { type?: string; value?: string }[];
+  try {
+    const ext = cert.inner.getExtension(SAN_EXTENSION_OID);
+    if (!ext) return { ok: false, reason: "missing" };
 
-  // @peculiar/x509 exposes SubjectAlternativeNameExtension with parsed
-  // `names` (a GeneralNames sequence). Walking it via the wrapper avoids
-  // re-implementing ASN.1 parsing here.
-  const names = (
-    ext as unknown as {
-      names?: { items?: { type?: string; value?: string }[] };
+    // @peculiar/x509 exposes SubjectAlternativeNameExtension with parsed
+    // `names` (a GeneralNames sequence). Walking it via the wrapper avoids
+    // re-implementing ASN.1 parsing here.
+    const names = (
+      ext as unknown as {
+        names?: { items?: { type?: string; value?: string }[] };
+      }
+    ).names;
+    if (!Array.isArray(names?.items)) {
+      return {
+        ok: false,
+        reason: "unparseable",
+        detail: "SAN extension did not decode into GeneralNames",
+      };
     }
-  ).names;
-  const items = names?.items ?? [];
+    items = names.items;
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      reason: "unparseable",
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
 
-  const out: NonLocalSanEntry[] = [];
+  const entries: NonLocalSanEntry[] = [];
   for (const item of items) {
     if (item.type === "dns" && typeof item.value === "string") {
-      out.push({ type: "dns", value: item.value });
+      entries.push({ type: "dns", value: item.value });
     } else if (
       (item.type === "ip" || item.type === "ipAddress") &&
       typeof item.value === "string"
     ) {
-      out.push({ type: "ip", value: item.value });
+      entries.push({ type: "ip", value: item.value });
+    } else {
+      return {
+        ok: false,
+        reason: "unsupported-entry",
+        detail: `SAN entry of type '${item.type ?? "unknown"}'`,
+      };
     }
   }
-  return out;
+
+  if (entries.length === 0) return { ok: false, reason: "no-host-entries" };
+  return { ok: true, entries };
 }
 
 const SAN_EXTENSION_OID = "2.5.29.17";
+
+// ---------------------------------------------------------------------------
+// Trust-anchor shape validation — the second half of the container-push
+// gate. `validateLocalSans` asks "what names is this cert scoped to?", which
+// only constrains anything if the cert is a leaf that can authenticate ONLY
+// itself. A CA certificate's own SANs say nothing about what it may issue
+// for, so without the check below the SAN restriction is trivially bypassed:
+// push a CA whose own SANs are `localhost`, then sign a leaf for any name
+// you like and the host trusts the chain.
+// ---------------------------------------------------------------------------
+
+export type LeafTrustRejectReason =
+  /** basicConstraints / EKU present but undecodable. */
+  | "unreadable"
+  /** No basicConstraints extension, so "is this a CA?" is unanswerable. */
+  | "missing-basic-constraints"
+  /** basicConstraints says cA=TRUE. */
+  | "is-certificate-authority"
+  /** No extendedKeyUsage, which most stacks read as "any purpose". */
+  | "missing-eku"
+  /** EKU contains anyExtendedKeyUsage, which re-opens "any purpose". */
+  | "eku-any-purpose"
+  /** EKU present but without id-kp-serverAuth. */
+  | "eku-no-server-auth";
+
+export interface LeafTrustShapeResult {
+  ok: boolean;
+  reason?: LeafTrustRejectReason;
+  detail?: string;
+}
+
+const BASIC_CONSTRAINTS_OID = "2.5.29.19";
+const EKU_OID = "2.5.29.37";
+const EKU_SERVER_AUTH_OID = "1.3.6.1.5.5.7.3.1";
+const EKU_ANY_PURPOSE_OID = "2.5.29.37.0";
+
+/**
+ * Check that a certificate is safe to install as a trust anchor for TLS and
+ * nothing more: it must be a leaf (cannot issue other certificates) and it
+ * must be scoped to server authentication.
+ *
+ * Required, not merely preferred, because `trustCertificate` puts the cert in
+ * `CurrentUser\Root` on Windows, the login keychain's SSL trust settings on
+ * macOS, and the .NET Root store + OpenSSL CApath + browser NSS databases
+ * (with the `C` "trusted CA" flag) on Linux. Those are CA positions. Whether
+ * the cert can actually *act* as a CA from there comes down to
+ * basicConstraints — which nothing checked before this.
+ *
+ * Both extensions are required to be **present**, not just non-contradictory.
+ * An absent basicConstraints leaves "is this a CA?" to each validator's
+ * historical quirks, and an absent EKU reads as "any purpose" on Windows,
+ * where `certutil -addstore Root` applies no policy constraint of its own.
+ * Every genuine ASP.NET dev cert carries both — ours via `generateCertificate`
+ * and .NET's via `CertificateManager` — so requiring them rejects nothing
+ * legitimate.
+ *
+ * Additional specific EKUs (say `clientAuth`) are tolerated; only
+ * `anyExtendedKeyUsage` is refused, since it is equivalent to no constraint.
+ */
+export function validateLeafTrustShape(cert: DevCert): LeafTrustShapeResult {
+  let isCa: boolean | undefined;
+  let ekuUsages: string[] | undefined;
+
+  try {
+    const bc = cert.inner.getExtension(BASIC_CONSTRAINTS_OID) as unknown as
+      | { ca?: boolean }
+      | null;
+    if (!bc) return { ok: false, reason: "missing-basic-constraints" };
+    isCa = bc.ca;
+
+    const eku = cert.inner.getExtension(EKU_OID) as unknown as
+      | { usages?: string[] }
+      | null;
+    ekuUsages = eku ? eku.usages : undefined;
+    if (eku && !Array.isArray(ekuUsages)) {
+      return {
+        ok: false,
+        reason: "unreadable",
+        detail: "extendedKeyUsage did not decode into a usage list",
+      };
+    }
+    if (!eku) return { ok: false, reason: "missing-eku" };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      reason: "unreadable",
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  if (typeof isCa !== "boolean") {
+    return {
+      ok: false,
+      reason: "unreadable",
+      detail: "basicConstraints did not decode a cA flag",
+    };
+  }
+  if (isCa) return { ok: false, reason: "is-certificate-authority" };
+
+  const usages = ekuUsages ?? [];
+  if (usages.includes(EKU_ANY_PURPOSE_OID)) {
+    return { ok: false, reason: "eku-any-purpose" };
+  }
+  if (!usages.includes(EKU_SERVER_AUTH_OID)) {
+    return {
+      ok: false,
+      reason: "eku-no-server-auth",
+      detail: usages.join(", "),
+    };
+  }
+
+  return { ok: true };
+}
 
 function isLocalDnsName(name: string): boolean {
   let candidate = name.trim().toLowerCase();

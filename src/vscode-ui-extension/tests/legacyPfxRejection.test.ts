@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { execFileSync } from "child_process";
-import { parsePfx } from "../src/cert/pfx";
+import { parsePfx } from "@devcontainer-dev-certs/shared";
 
 let opensslAvailable = false;
 try {

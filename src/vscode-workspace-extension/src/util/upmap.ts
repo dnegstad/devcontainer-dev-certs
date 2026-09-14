@@ -1,3 +1,4 @@
+import { DOTNET_DEV_CERT_NAME } from "@devcontainer-dev-certs/shared";
 import type {
   CertMaterial,
   CertMaterialV2,
@@ -35,7 +36,7 @@ export function upmapV2ToV3(material: CertMaterialV2): CertMaterialV3 {
 export function upmapV1ToV3(legacy: CertMaterial): CertMaterialV3 {
   return {
     kind: "dotnet-dev",
-    name: "aspnetcore-dev",
+    name: DOTNET_DEV_CERT_NAME,
     thumbprint: legacy.thumbprint,
     pfxBase64: legacy.pfxBase64,
     pemCertBase64: legacy.pemCertBase64,

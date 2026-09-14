@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type * as PlatformTypes from "@devcontainer-dev-certs/shared/src/platform/types";
 import {
-  type PlatformCertificateStore,
-  type CertificateStatus,
-} from "../src/platform/types";
-import { generateCertificate } from "../src/cert/generator";
-import { VALIDITY_DAYS } from "../src/cert/properties";
+  generateCertificate,
+  VALIDITY_DAYS,
+  CertManager,
+} from "@devcontainer-dev-certs/shared";
+import type {
+  PlatformCertificateStore,
+  CertificateStatus,
+} from "@devcontainer-dev-certs/shared";
 
 // Mock createPlatformStore so the CertManager uses our fake store. The
 // CertManager now lives in `@devcontainer-dev-certs/shared` and imports
@@ -19,7 +22,6 @@ vi.mock("@devcontainer-dev-certs/shared/src/platform/types", async (importOrigin
   };
 });
 
-import { CertManager } from "../src/cert/manager";
 import { createPlatformStore } from "@devcontainer-dev-certs/shared/src/platform/types";
 
 const mockedCreateStore = vi.mocked(createPlatformStore);
@@ -44,7 +46,6 @@ function makeFakeStore(
     // in tests that pre-date that check. Tests that want to assert the
     // short-circuit fires override this to true.
     isCertTrusted: vi.fn().mockResolvedValue(false),
-    removeCertificates: vi.fn().mockResolvedValue(undefined),
     checkStatus: vi.fn().mockResolvedValue({
       exists: false,
       isTrusted: false,
@@ -71,19 +72,6 @@ describe("CertManager", () => {
       const manager = new CertManager();
       await manager.generate();
       expect(store.saveCertificate).toHaveBeenCalledOnce();
-    });
-
-    it("removes existing certs when force is true", async () => {
-      const manager = new CertManager();
-      await manager.generate(true);
-      expect(store.removeCertificates).toHaveBeenCalledOnce();
-      expect(store.saveCertificate).toHaveBeenCalledOnce();
-    });
-
-    it("does not remove existing certs when force is false", async () => {
-      const manager = new CertManager();
-      await manager.generate(false);
-      expect(store.removeCertificates).not.toHaveBeenCalled();
     });
   });
 
@@ -237,14 +225,6 @@ describe("CertManager", () => {
       const manager = new CertManager();
       const result = await manager.check();
       expect(result).toEqual(expected);
-    });
-  });
-
-  describe("clean", () => {
-    it("delegates to the platform store", async () => {
-      const manager = new CertManager();
-      await manager.clean();
-      expect(store.removeCertificates).toHaveBeenCalledOnce();
     });
   });
 

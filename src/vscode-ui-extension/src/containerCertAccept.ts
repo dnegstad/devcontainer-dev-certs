@@ -2,9 +2,10 @@ import {
   DevCert,
   isValidDevCert,
   log,
+  validateLeafTrustShape,
   validateLocalSans,
-  type NonLocalSanEntry,
 } from "@devcontainer-dev-certs/shared";
+import type { NonLocalSanEntry } from "@devcontainer-dev-certs/shared";
 
 /**
  * Wire-protocol payload sent by the workspace extension when it scans the
@@ -31,11 +32,61 @@ export interface AcceptedContainerCert {
   thumbprint: string;
 }
 
+/**
+ * Persisted answer to "may Dev Containers put their own dev certs in this
+ * host's trust store?".
+ *
+ * Tri-state rather than a boolean because the previous shape could only ever
+ * record *yes*: an accept was written to global state forever, while a
+ * decline wrote nothing, so the prompt returned on every single activation.
+ * The only durable state a security prompt could reach was the permissive
+ * one — a one-way ratchet — and the sole way to stop being asked was to edit
+ * `devcontainer.json` and rebuild, or to disable host-side generation too.
+ *
+ * The decision is deliberately host-wide rather than per-certificate. Unless
+ * a container bakes its dev cert into the image or mounts a volume for
+ * `~/.dotnet/corefx/cryptography/x509stores/my/`, it mints a fresh one on
+ * every rebuild — so a per-thumbprint memory would re-prompt on every
+ * rebuild, which is the shape of consent people learn to click through
+ * without reading.
+ */
+export type ContainerCertConsent = "granted" | "denied" | "unset";
+
+/**
+ * What the user did with the consent modal.
+ *
+ * `dismiss` (Escape / Cancel) is distinct from `never` on purpose: dismissing
+ * declines this push without recording anything, so an accidental Escape
+ * doesn't silently turn the feature off forever. Only an explicit `never`
+ * persists a denial.
+ */
+export type ContainerCertConsentChoice = "trust" | "never" | "dismiss";
+
 export type AcceptContainerCertRejectReason =
   | "host-setting-disabled"
   | "user-declined"
   | "parse-failed"
+  // The cert parsed and validated; establishing trust on the host failed.
+  // Kept distinct from `parse-failed` so the container can tell the user
+  // something true — the two have entirely different remedies.
+  | "trust-failed"
   | "not-valid-dev-cert"
+  /**
+   * basicConstraints says cA=TRUE, or is absent so we can't tell. Trusting
+   * it would put an issuing CA in the host's root store, which the SAN-local
+   * restriction cannot constrain — a CA's own SANs say nothing about what it
+   * may issue for.
+   */
+  | "not-a-leaf-cert"
+  /** No extendedKeyUsage, anyExtendedKeyUsage, or no id-kp-serverAuth. */
+  | "unsupported-eku"
+  /**
+   * The SAN set is structurally unusable (absent, undecodable, empty, or
+   * carrying a GeneralName type other than dNSName / iPAddress) — distinct
+   * from `non-local-sans`, and NOT overridable by
+   * `allowNonLocalContainerCertSans`.
+   */
+  | "malformed-sans"
   | "non-local-sans";
 
 export interface AcceptContainerCertResult {
@@ -66,15 +117,15 @@ export interface AcceptContainerCertDeps {
   autoProvision: boolean;
   /** `devcontainerDevCerts.allowNonLocalContainerCertSans` host setting. */
   allowNonLocalSans: boolean;
-  /** True iff the user has previously consented to container-cert sync. */
-  hasConsent: () => boolean;
-  /** Persist consent for future pushes. */
-  recordConsent: () => Promise<void>;
-  /** Show the modal consent prompt. Returns true iff the user accepted. */
+  /** The persisted host-wide decision, or `unset` if never answered. */
+  readConsent: () => ContainerCertConsent;
+  /** Persist the host-wide decision. */
+  recordConsent: (decision: "granted" | "denied") => Promise<void>;
+  /** Show the modal consent prompt and report which action the user took. */
   promptUser: (
     cert: AcceptedContainerCert,
     nonLocalSansOverridden: NonLocalSanEntry[]
-  ) => Promise<boolean>;
+  ) => Promise<ContainerCertConsentChoice>;
   /**
    * Trust the supplied cert in the host's OS trust store. The
    * implementation is the same code path the host-generation flow uses,
@@ -100,18 +151,34 @@ export interface AcceptContainerCertDeps {
  *  3. Validate it actually is an ASP.NET dev cert (CN, validity, OID,
  *     version) — independent of whatever the workspace asserted.
  *     Failure → `not-valid-dev-cert`.
- *  4. SAN-local restriction. Unless the
- *     `allowNonLocalContainerCertSans` override is on, any SAN entry
- *     outside well-known local scopes (see validateLocalSans) rejects
- *     the cert with `non-local-sans`. Defends against a malicious or
- *     misconfigured container tricking the host into trusting a cert
- *     valid for arbitrary domains.
- *  5. Modal consent prompt (one-time, gated on `containerCertProvisionConsented`
- *     in extension global state — distinct from the host-generation
- *     consent because the user is approving trust of a cert that came
- *     from a container they may or may not control). Declining →
+ *  4. Trust-anchor shape (`validateLeafTrustShape`). The cert must be a
+ *     leaf (basicConstraints present, cA=FALSE) and scoped to server
+ *     auth (EKU present, includes serverAuth, not anyExtendedKeyUsage).
+ *     Failure → `not-a-leaf-cert` / `unsupported-eku`. This gates step 5
+ *     rather than sitting beside it: step 5 asks what names the cert
+ *     covers, which only constrains anything for a cert that can
+ *     authenticate ONLY itself. A CA's own SANs place no limit on what
+ *     it may issue, so without this check the SAN restriction is
+ *     bypassed by pushing a CA with `localhost` SANs and then signing a
+ *     leaf for any name at all.
+ *  5. SAN-local restriction. A structurally unusable SAN set (absent,
+ *     undecodable, empty, or carrying a GeneralName type other than
+ *     dNSName / iPAddress) rejects with `malformed-sans` and is NOT
+ *     overridable. Otherwise, unless the `allowNonLocalContainerCertSans`
+ *     override is on, any dNSName / iPAddress outside well-known local
+ *     scopes (see validateLocalSans) rejects with `non-local-sans`.
+ *     Together these defend against a malicious or misconfigured
+ *     container tricking the host into trusting a cert valid for
+ *     arbitrary domains.
+ *  6. Host-wide consent (`containerCertProvisionConsented` in extension
+ *     global state — distinct from the host-generation consent because
+ *     the user is approving trust of a cert that came from a container
+ *     they may or may not control). `denied` short-circuits here without
+ *     prompting; `unset` shows the modal, whose three outcomes are Trust
+ *     (record `granted`), Never (record `denied`), and dismiss (decline
+ *     this push, record nothing). All three non-Trust paths →
  *     `user-declined`.
- *  6. Trust the cert in the host platform store. Public-cert-only:
+ *  7. Trust the cert in the host platform store. Public-cert-only:
  *     writes the cert to the OS trust surfaces (.NET Root / OpenSSL
  *     trust dir / NSS / login keychain / CurrentUser-Root) but NEVER
  *     to a my-store location and NEVER with a private key — the host
@@ -211,7 +278,60 @@ async function acceptContainerDevCertInner(
     return { accepted: false, reason: "not-valid-dev-cert" };
   }
 
+  // Shape before scope. A CA cert can be perfectly "local" by its own SANs
+  // and still issue a leaf for any name it likes, so this has to gate the
+  // SAN check rather than sit beside it — and its rejection is the more
+  // useful one to surface when a cert fails both.
+  const shape = validateLeafTrustShape(parsed.cert);
+  if (!shape.ok) {
+    const suffix = shape.detail ? ` (${shape.detail})` : "";
+    if (
+      shape.reason === "is-certificate-authority" ||
+      shape.reason === "missing-basic-constraints"
+    ) {
+      log(
+        `acceptContainerDevCert: rejected ${parsed.thumbprint} — ${shape.reason}${suffix}. ` +
+          `Trusting it would install an issuing CA in this host's root store; the SAN-local ` +
+          `restriction cannot constrain what a CA signs.`
+      );
+      return {
+        accepted: false,
+        reason: "not-a-leaf-cert",
+        detail: shape.reason,
+      };
+    }
+    if (shape.reason === "unreadable") {
+      log(
+        `acceptContainerDevCert: rejected ${parsed.thumbprint} — could not read basicConstraints/EKU${suffix}.`
+      );
+      return { accepted: false, reason: "parse-failed", detail: shape.detail };
+    }
+    log(
+      `acceptContainerDevCert: rejected ${parsed.thumbprint} — ${shape.reason}${suffix}. ` +
+        `A dev cert this host will trust must be scoped to server authentication.`
+    );
+    return {
+      accepted: false,
+      reason: "unsupported-eku",
+      detail: shape.detail ? `${shape.reason}: ${shape.detail}` : shape.reason,
+    };
+  }
+
   const sanResult = validateLocalSans(parsed.cert);
+  // Structural SAN failures are NOT scope decisions, so
+  // `allowNonLocalContainerCertSans` deliberately does not override them.
+  // That setting exists so a user can say "yes, I really do mean to trust
+  // this cert for that name" — it can't mean anything about a cert whose
+  // names we were unable to read in the first place.
+  if (!sanResult.ok && sanResult.reason !== "non-local") {
+    const detail = sanResult.detail
+      ? `${sanResult.reason}: ${sanResult.detail}`
+      : sanResult.reason;
+    log(
+      `acceptContainerDevCert: rejected ${parsed.thumbprint} — unusable SAN set (${detail}).`
+    );
+    return { accepted: false, reason: "malformed-sans", detail };
+  }
   if (!sanResult.ok && !deps.allowNonLocalSans) {
     const detail = sanResult.nonLocalEntries
       .map((e) => `${e.type}:${e.value}`)
@@ -231,27 +351,66 @@ async function acceptContainerDevCertInner(
     );
   }
 
-  const needsConsent = !deps.hasConsent();
-  if (needsConsent) {
-    const consented = await deps.promptUser(parsed, nonLocalOverridden);
-    if (!consented) {
+  const consent = deps.readConsent();
+
+  // A standing denial short-circuits before the prompt, so declining once
+  // actually stops the asking instead of re-showing the modal on every
+  // container activation.
+  if (consent === "denied") {
+    log(
+      `acceptContainerDevCert: declining ${parsed.thumbprint} — the user previously chose ` +
+        `not to trust container certificates on this host. Run "Dev Certs: Reset Container ` +
+        `Certificate Consent" from the Command Palette to be asked again.`
+    );
+    return {
+      accepted: false,
+      reason: "user-declined",
+      detail: "previously declined for this host",
+    };
+  }
+
+  if (consent === "unset") {
+    const choice = await deps.promptUser(parsed, nonLocalOverridden);
+    if (choice === "never") {
+      // Persisted immediately: unlike the grant below there is no trust step
+      // that could fail and leave the decision half-applied.
+      await deps.recordConsent("denied");
       log(
-        `acceptContainerDevCert: user declined trusting ${parsed.thumbprint}.`
+        `acceptContainerDevCert: user declined trusting ${parsed.thumbprint} and asked not to be prompted again.`
+      );
+      return { accepted: false, reason: "user-declined" };
+    }
+    if (choice === "dismiss") {
+      log(
+        `acceptContainerDevCert: user dismissed the prompt for ${parsed.thumbprint}; not recording a decision.`
       );
       return { accepted: false, reason: "user-declined" };
     }
   }
 
-  // Run the trust step BEFORE persisting consent. If trustCertificate
-  // throws (macOS keychain dialog cancelled, NSS DB not writable, etc.)
-  // we let the outer try/catch convert it to `parse-failed` — and
-  // crucially the consent stays UN-persisted, so the next push retries
-  // the modal prompt with the same fresh state instead of silently
-  // re-trying trust without UX.
-  await deps.trustCertificate(parsed);
+  // Run the trust step BEFORE persisting consent, so that when it fails the
+  // consent stays UN-persisted and the next push retries the modal prompt
+  // with the same fresh state instead of silently re-trying trust without UX.
+  //
+  // Caught here rather than left to the outer handler: the certificate has
+  // already parsed and validated by this point, so a failure now is an
+  // install/trust failure, not a parse failure. Letting it fall through
+  // reported a cancelled macOS keychain dialog — or an `ensureHashSymlink`
+  // slot exhaustion, which throws as of this branch — to the user as "the
+  // host could not parse the certificate", which is both wrong and
+  // un-actionable.
+  try {
+    await deps.trustCertificate(parsed);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    log(
+      `acceptContainerDevCert: trusting ${parsed.thumbprint} on host failed: ${message}`
+    );
+    return { accepted: false, reason: "trust-failed", detail: message };
+  }
 
-  if (needsConsent) {
-    await deps.recordConsent();
+  if (consent === "unset") {
+    await deps.recordConsent("granted");
   }
 
   log(`acceptContainerDevCert: ${parsed.thumbprint} trusted on host.`);
