@@ -43,6 +43,7 @@ export default tseslint.config(
           "./src/shared/tsconfig.json",
           "./src/vscode-ui-extension/tsconfig.lint.json",
           "./src/vscode-workspace-extension/tsconfig.lint.json",
+          "./test/vscode-e2e/tsconfig.json",
         ],
         tsconfigRootDir: import.meta.dirname,
       },

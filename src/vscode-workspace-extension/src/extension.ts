@@ -54,12 +54,63 @@ function isTruthyEnv(val: string | undefined, defaultVal: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(val.trim());
 }
 
+/**
+ * Env var that lets the E2E harness pretend this window is remote. Honored
+ * ONLY outside `ExtensionMode.Production` — see `isRemoteContext`.
+ */
+const TEST_REMOTE_ENV = "DEVCONTAINER_DEV_CERTS_TEST_REMOTE";
+
+/**
+ * Whether this extension should do anything at all.
+ *
+ * The real signal is `vscode.env.remoteName`, which is read-only and is
+ * populated only by a resolver extension that has claimed an authority.
+ * Nothing inside a test can set it, so exercising this extension in a plain
+ * local VS Code instance (`test/vscode-e2e`) needs a seam.
+ *
+ * The seam is deliberately double-gated, and the `extensionMode` half is the
+ * part that matters: `ExtensionMode.Production` is what VS Code assigns to
+ * every installed extension — the marketplace VSIX, a sideloaded VSIX, a
+ * `--install-extension` copy. The override branch is therefore unreachable in
+ * any build a user runs, no matter what they put in their environment.
+ * `Development` (loaded via `--extensionDevelopmentPath`) and `Test` (a
+ * `--extensionTestsPath` run) are the only modes that can reach it, and both
+ * require someone to have launched VS Code with a flag pointing at a source
+ * checkout. An env var alone is not enough, which is the property that makes
+ * this safe to ship: an attacker (or a confused user) who can set environment
+ * variables still cannot flip this on.
+ *
+ * The alternative — a resolver extension implementing the proposed
+ * `resolveAuthority` API purely to populate `remoteName` — would avoid a
+ * product-code seam entirely, at the cost of riding a proposed API that
+ * requires `--enable-proposed-api` and can break between VS Code releases.
+ * That trade is the open question this spike exists to answer; see AGENTS.md.
+ *
+ * Exported for testing: `tests/remoteGate.test.ts` pins that the override is
+ * refused under `ExtensionMode.Production`. That assertion is the reason this
+ * seam is acceptable in product code at all, so it deserves a direct test in
+ * the fast suite rather than only implicit coverage from the E2E run.
+ */
+export function isRemoteContext(context: vscode.ExtensionContext): boolean {
+  if (vscode.env.remoteName) return true;
+
+  if (context.extensionMode === vscode.ExtensionMode.Production) return false;
+  if (!isTruthyEnv(process.env[TEST_REMOTE_ENV], false)) return false;
+
+  log(
+    `${TEST_REMOTE_ENV} is set and extensionMode is ` +
+      `${vscode.ExtensionMode[context.extensionMode]} (not Production) — ` +
+      "treating this window as remote for testing."
+  );
+  return true;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(initLogger("Dev Container Dev Certs (Remote)"));
 
   log(`Workspace extension activated. remoteName=${vscode.env.remoteName}`);
 
-  if (!vscode.env.remoteName) {
+  if (!isRemoteContext(context)) {
     log("Not running in a remote context, extension will no-op.");
     return;
   }

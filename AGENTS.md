@@ -93,6 +93,36 @@ These decisions were made deliberately. Do not change them without discussion.
 - **Extension testing**: F5 launches an Extension Development Host. The `build-extensions` task hydrates a test project at `.out/test-project/` from the template at `test/sample-project/`. The workspace extension VSIX is staged in `.out/test-project/.devcontainer/` and referenced via `${containerWorkspaceFolder}` in `customizations.vscode.extensions`.
 - **The `trust` operation generates the cert if it doesn't exist.** This is intentional — it's the single entry point for provisioning.
 
+### VS Code E2E harness (`test/vscode-e2e/`) — spike status
+
+`@vscode/test-electron` launches a real VS Code with **both** extensions loaded into one window (`--extensionDevelopmentPath` twice) and runs the suite in the extension host. Scripts, from the repo root:
+
+```
+npm run typecheck:e2e     # tsc pass; esbuild and the runner never typecheck
+npm run build:e2e         # bundles the suite to .out/vscode-e2e/suite.cjs
+npm run test:e2e          # on Linux: xvfb-run -a npm run test:e2e
+```
+
+It needs `dist/extension.js` for both extensions and the `.out/test-fixtures/` cert (the launcher runs `gen:test-cert` itself if it's missing). CI runs it as the separate `vscode-e2e` job in `build-extensions.yml` — separate so a VS Code download failure can't be confused with a unit-test regression.
+
+**What it covers:** activation of both extensions without throwing, command registration on both sides, and one vertical slice — `getAllCertMaterialV3` driven from the workspace extension to the UI extension, with the container-side install asserted on disk (PEM present and matching, `{hash}.N` symlink resolving, .NET Root store PFX written, My-store PFX correctly *absent*). All writes are redirected into a `mkdtemp` sandbox via `HOME` and `DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY`, so the runner's real `~/.aspnet` and `~/.dotnet` are untouched.
+
+**What it does NOT cover — do not oversell this as full E2E:**
+
+- **The actual host↔server hop.** Both extensions share one extension host, so `executeCommand` passes objects **by reference**. In production the payload is serialized. This is the approach's central fidelity gap, and `src/wireGuard.ts` is the compensation: every cross-host payload is walked for non-JSON values (Buffer, Date, Map, class instances, functions, bigint, non-finite numbers, cycles, own `toJSON`) and round-tripped through `structuredClone` and JSON. Its negative self-tests are not optional decoration — without them a guard that silently accepted everything would produce an identical green run. `undefined`-valued object properties are the one tolerated difference (VS Code's RPC drops them exactly as JSON does); `undefined` inside an *array* is still rejected, because it becomes `null`.
+- **The container filesystem.** The "container" is a temp dir on the same machine. Nothing exercises a real container's users, permissions, mounts, or a genuinely separate `$HOME`.
+- **The dotnet dev-cert path.** The slice runs a *user* certificate. Generating the dev cert would write to the runner's real OS trust store and raise a modal consent dialog nothing headless can dismiss, so `generateDotNetCert` is off for the run. Reverse-sync (`acceptContainerDevCert`) is likewise uncovered.
+
+### The remote-gate seam (`DEVCONTAINER_DEV_CERTS_TEST_REMOTE`) — test-only
+
+`src/vscode-workspace-extension/src/extension.ts` no-ops unless `vscode.env.remoteName` is set. That property is read-only and is populated only by a resolver extension that has claimed an authority, so nothing inside a test can set it — hence `isRemoteContext()`, which also accepts `DEVCONTAINER_DEV_CERTS_TEST_REMOTE=1`.
+
+**This is a test-only code path in production code, and the gating is the whole reason it's acceptable.** The env var alone does nothing. It is honored only when `context.extensionMode !== vscode.ExtensionMode.Production`, and `Production` is what VS Code assigns to *every* installed extension — the marketplace VSIX, a sideloaded VSIX, a `--install-extension` copy. Reaching the override requires launching VS Code with `--extensionDevelopmentPath` or `--extensionTestsPath` pointed at a source checkout. So the branch is not merely unlikely in a shipped build, it is unreachable: someone who can set environment variables still cannot flip it on.
+
+If you change this, keep both halves. An env-var-only check would be a genuine escape hatch in shipped code and should be rejected in review. `tests/remoteGate.test.ts` pins exactly that — it asserts the override is refused under `ExtensionMode.Production` for every truthy spelling of the variable — and it runs in the fast vitest suite, not only in the E2E job, so the guarantee doesn't depend on a VS Code download succeeding.
+
+The alternative that avoids a product-code seam entirely is a resolver extension implementing `resolveAuthority` to populate `remoteName` for real. It is more faithful and would also unlock testing against a real container — but it rides a **proposed API**, so it needs `--enable-proposed-api` and can break between VS Code releases. Choosing between the two is the open question this spike exists to inform.
+
 ## File Paths That Matter
 
 | Path (in container) | Purpose |
