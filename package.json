@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "typecheck:e2e": "tsc --noEmit -p test/vscode-e2e/tsconfig.json",
     "build:e2e": "node test/vscode-e2e/esbuild.mjs",
+    "check:e2e-load": "node test/vscode-e2e/loadCheck.cjs",
     "test:e2e": "node test/vscode-e2e/runTests.mjs"
   },
   "devDependencies": {
@@ -19,6 +20,7 @@
     "@vscode/test-electron": "^2.5.2",
     "eslint": "^10.3.0",
     "globals": "^17.6.0",
+    "reflect-metadata": "^0.2.2",
     "semver": "^7.7.4",
     "typescript-eslint": "^8.59.2"
   }

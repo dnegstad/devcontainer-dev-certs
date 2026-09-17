@@ -118,6 +118,14 @@ jobs:
       - name: Generate test certificate fixture
         run: npm run gen:test-cert
 
+      # ~200ms, and it runs BEFORE the VS Code download on purpose. A bundle
+      # that throws during module init (a missing reflect-metadata polyfill is
+      # the one that already bit us) fails identically inside the extension
+      # host — but only after npm ci, two builds and a ~110MB download. Cheapest
+      # failure, earliest.
+      - name: Check E2E suite bundle loads
+        run: npm run check:e2e-load
+
       # VS Code is an Electron app and needs an X server even with
       # --disable-gpu. The hosted ubuntu images ship xvfb, but installing it
       # explicitly costs a few seconds and removes a dependency on the runner
