@@ -119,7 +119,15 @@ jobs:
         run: npm run gen:test-cert
 
       # VS Code is an Electron app and needs an X server even with
-      # --disable-gpu. `xvfb-run -a` picks a free display number.
+      # --disable-gpu. The hosted ubuntu images ship xvfb, but installing it
+      # explicitly costs a few seconds and removes a dependency on the runner
+      # image's contents staying the way they are.
+      - name: Install xvfb
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb
+
+      # `xvfb-run -a` picks a free display number. DEVCERTS_E2E_VSCODE_VERSION
+      # pins a specific VS Code build if `stable` ever regresses; unset means
+      # stable, which is what we want CI tracking by default.
       - name: Run VS Code E2E suite
         run: xvfb-run -a npm run test:e2e
 
