@@ -1,5 +1,27 @@
 // Minimal vscode module stub for workspace extension tests.
 
+/**
+ * Mirrors `vscode.env`. Only `remoteName` matters here: it is read-only in
+ * the real API and drives the workspace extension's activation gate.
+ */
+export const env: { remoteName: string | undefined } = {
+  remoteName: undefined,
+};
+
+export function __setRemoteName(name: string | undefined) {
+  env.remoteName = name;
+}
+
+/** Mirrors the real `vscode.ExtensionMode` enum values. */
+export const ExtensionMode = {
+  Production: 1,
+  Development: 2,
+  Test: 3,
+  1: "Production",
+  2: "Development",
+  3: "Test",
+} as const;
+
 // Captured output-channel lines from the shared `log()` helper. Tests can
 // snapshot / clear / assert against this array to verify what was (and
 // wasn't) written to the Remote output channel.

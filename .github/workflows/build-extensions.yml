@@ -76,6 +76,69 @@ jobs:
           name: vsix
           path: src/vscode-*-extension/*.vsix
 
+  vscode-e2e:
+    # Deliberately a separate job from `extensions`, not a step inside it.
+    # This one is the only thing in CI that downloads a VS Code build at run
+    # time, so it is also the only thing that can fail for reasons that have
+    # nothing to do with the code (update.code.visualstudio.com being down, a
+    # slow CDN, a runner with no egress). Keeping it separate means such a
+    # failure shows up as "vscode-e2e red, extensions green" instead of
+    # masking — or being mistaken for — a real unit-test regression.
+    name: VS Code E2E (spike)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # esbuild/vitest never typecheck; the E2E sources sit outside every
+      # workspace tsconfig, so they need their own pass like the others do.
+      - name: Typecheck E2E suite
+        run: npm run typecheck:e2e
+
+      # The suite loads the extensions' real bundles via
+      # --extensionDevelopmentPath, so `dist/extension.js` has to exist for
+      # both. Never the production build: the remote-gate seam the suite
+      # depends on is only honored outside ExtensionMode.Production, and a
+      # minified bundle makes failures unreadable for no benefit here.
+      - name: Build UI Extension
+        run: npm run build -w src/vscode-ui-extension
+
+      - name: Build Workspace Extension
+        run: npm run build -w src/vscode-workspace-extension
+
+      - name: Build E2E suite
+        run: npm run build:e2e
+
+      - name: Generate test certificate fixture
+        run: npm run gen:test-cert
+
+      # ~200ms, and it runs BEFORE the VS Code download on purpose. A bundle
+      # that throws during module init (a missing reflect-metadata polyfill is
+      # the one that already bit us) fails identically inside the extension
+      # host — but only after npm ci, two builds and a ~110MB download. Cheapest
+      # failure, earliest.
+      - name: Check E2E suite bundle loads
+        run: npm run check:e2e-load
+
+      # VS Code is an Electron app and needs an X server even with
+      # --disable-gpu. The hosted ubuntu images ship xvfb, but installing it
+      # explicitly costs a few seconds and removes a dependency on the runner
+      # image's contents staying the way they are.
+      - name: Install xvfb
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb
+
+      # `xvfb-run -a` picks a free display number. DEVCERTS_E2E_VSCODE_VERSION
+      # pins a specific VS Code build if `stable` ever regresses; unset means
+      # stable, which is what we want CI tracking by default.
+      - name: Run VS Code E2E suite
+        run: xvfb-run -a npm run test:e2e
+
   windows-certificate-validation:
     name: Windows Certificate Validation
     runs-on: windows-latest
