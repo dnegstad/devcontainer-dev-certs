@@ -100,8 +100,11 @@ These decisions were made deliberately. Do not change them without discussion.
 ```
 npm run typecheck:e2e     # tsc pass; esbuild and the runner never typecheck
 npm run build:e2e         # bundles the suite to .out/vscode-e2e/suite.cjs
+npm run check:e2e-load    # ~200ms: does the bundle even load? (see below)
 npm run test:e2e          # on Linux: xvfb-run -a npm run test:e2e
 ```
+
+**Run `check:e2e-load` before `test:e2e`, and keep it ahead of the download step in CI.** It stubs `vscode` and `require()`s the built bundle, which is where module-init bugs surface. That is not hypothetical: the suite bundles the shared package, which pulls in `@peculiar/x509` → tsyringe, and a missing `import "reflect-metadata"` in the entry point threw inside the extension host before a single test ran. The load check reproduces that in ~200ms; discovering it the other way costs `npm ci`, two extension builds, a ~110MB VS Code download and an Electron launch. If you add an import to the suite that reaches new runtime machinery, this is the check that tells you cheaply.
 
 It needs `dist/extension.js` for both extensions and the `.out/test-fixtures/` cert (the launcher runs `gen:test-cert` itself if it's missing). CI runs it as the separate `vscode-e2e` job in `build-extensions.yml` — separate so a VS Code download failure can't be confused with a unit-test regression.
 
