@@ -156,7 +156,11 @@ async function main() {
       extensionTestsEnv: {
         // Redirects getDotNetStorePath / getDotNetRootStorePath /
         // getKestrelDefaultCertPath, which are all os.homedir()-relative.
+        // BOTH are required: Node's os.homedir() reads $HOME on POSIX and
+        // %USERPROFILE% on Windows. Setting only HOME leaves a Windows run
+        // writing the Root-store PFX into the developer's real profile.
         HOME: sandbox.home,
+        USERPROFILE: sandbox.home,
         DOTNET_DEV_CERTS_OPENSSL_CERTIFICATE_DIRECTORY: sandbox.trustDir,
         // The remote-gate seam. Only honored outside ExtensionMode.Production
         // — see isRemoteContext in the workspace extension.
@@ -177,7 +181,11 @@ async function main() {
   } else {
     console.error(`Sandbox left in place for inspection: ${sandbox.root}`);
   }
-  process.exit(exitCode);
+  // Setting exitCode and returning, rather than process.exit(), so Node drains
+  // stdout/stderr before exiting. process.exit() truncates pending writes on a
+  // pipe — which is exactly what CI gives us, and exactly when the stack trace
+  // and the sandbox path above are the only things worth having.
+  process.exitCode = exitCode;
 }
 
 await main();

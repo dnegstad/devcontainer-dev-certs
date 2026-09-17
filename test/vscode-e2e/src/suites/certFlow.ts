@@ -37,6 +37,16 @@ import { assert, assertEqual, test } from "../runner";
 import { sandbox } from "../env";
 import { activateBoth } from "./activation";
 
+/**
+ * True when `candidate` sits inside `root`. Uses path.relative rather than
+ * startsWith so it survives Windows separators and drive-letter casing, and
+ * so `/tmp/sandbox-evil` isn't read as being inside `/tmp/sandbox`.
+ */
+function isInside(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 /** Strip PEM armor and whitespace, leaving the base64 DER body. */
 function pemBody(pem: string): string {
   const begin = pem.indexOf("-----BEGIN CERTIFICATE-----");
@@ -90,6 +100,24 @@ export function registerCertFlowTests(): void {
   test("workspace extension installs the material into the sandbox", async () => {
     const bundle = await fetchBundle();
     const material = userCert(bundle, userCertName);
+
+    // Precondition, checked BEFORE anything is written. These three
+    // directories are where the install lands, and two of them are derived
+    // from os.homedir() — which reads $HOME on POSIX but %USERPROFILE% on
+    // Windows. If the redirect ever fails, the install would plant a
+    // certificate in the developer's real profile and a check made afterwards
+    // would report the damage rather than prevent it.
+    for (const [label, dir] of [
+      [".NET My store", getDotNetStorePath()],
+      [".NET Root store", getDotNetRootStorePath()],
+      ["OpenSSL trust dir", trustDir],
+    ] as const) {
+      assert(
+        isInside(home, dir),
+        `refusing to run: ${label} resolves to ${dir}, which is outside the ` +
+          `sandbox ${home}. The HOME/USERPROFILE redirect did not take effect.`
+      );
+    }
 
     // This is the command the activation path calls; auto-inject is turned
     // off for the run so the flow is driven explicitly rather than racing
@@ -174,12 +202,6 @@ export function registerCertFlowTests(): void {
       fs.existsSync(myPfx),
       false,
       `${myPfx} should NOT exist — the cert did not opt into the My store`
-    );
-
-    // --- the sandbox actually contained the writes ---
-    assert(
-      rootPfx.startsWith(home),
-      `install wrote outside the sandbox: ${rootPfx} is not under ${home}`
     );
   });
 }
