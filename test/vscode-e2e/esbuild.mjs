@@ -11,10 +11,18 @@ const repoRoot = resolve(here, "..", "..");
 // node_modules. Everything else — including the shared package, which is
 // published as TypeScript source — is bundled in, so the suite is a single
 // self-contained file with no resolution surprises at runtime.
+//
+// Two bundles: `suite.cjs` for the local level (runTests.mjs) and
+// `remote-suite.cjs` for the devcontainer level (runDevcontainer.mjs), which
+// is copied into the container and loaded by the remote extension host.
 await esbuild.build({
-  entryPoints: [resolve(here, "src", "index.ts")],
+  entryPoints: {
+    suite: resolve(here, "src", "index.ts"),
+    "remote-suite": resolve(here, "src", "remote", "index.ts"),
+  },
   bundle: true,
-  outfile: resolve(repoRoot, ".out", "vscode-e2e", "suite.cjs"),
+  outdir: resolve(repoRoot, ".out", "vscode-e2e"),
+  outExtension: { ".js": ".cjs" },
   external: ["vscode"],
   format: "cjs",
   platform: "node",

@@ -126,6 +126,12 @@ If you change this, keep both halves. An env-var-only check would be a genuine e
 
 The alternative that avoids a product-code seam entirely is a resolver extension implementing `resolveAuthority` to populate `remoteName` for real. It is more faithful and would also unlock testing against a real container — but it rides a **proposed API**, so it needs `--enable-proposed-api` and can break between VS Code releases. Choosing between the two is the open question this spike exists to inform.
 
+### Devcontainer level (`test/vscode-e2e/runDevcontainer.mjs`) — spike status
+
+The resolver alternative above, prototyped as a second level rather than a replacement: the seam-based local level stays, because it is cheap and needs no Docker. `npm run test:e2e:devcontainer` stages `.out/devcontainer-e2e/` with this checkout's feature, `devcontainer up`s it with the open-source `@devcontainers/cli`, starts a VS Code server of the **same commit** as the downloaded desktop build inside the container via `devcontainer exec` (so it gets the CLI's userEnvProbe), and launches desktop VS Code on `vscode-remote://devcerts-e2e+e2e/...`. `test/vscode-e2e/resolver/` is a ~40-line test-only extension whose only job is `registerRemoteAuthorityResolver("devcerts-e2e")` → the server's published loopback port. The UI extension and resolver load locally; the workspace extension and `remote-suite.cjs` load from the container through `vscode-remote://` development/test paths.
+
+That closes the gaps the local level lists: the `getAllCertMaterialV3` payload crosses VS Code's real RPC, the gate opens on a real `remoteName` (the suite asserts the seam variable is **unset**), `install.sh` runs for real and its `SSL_CERT_DIR` must reach the extension host, and the final check is `openssl verify` inside the container using only that inherited `SSL_CERT_DIR`. Still not covered: the Dev Containers extension itself (closed-source; it would also install the marketplace builds the feature names over the checkout under test), and the dotnet dev-cert / reverse-sync paths. `--container-only` stops after `devcontainer up` plus an env probe — Docker but no VS Code download. Linux-only for now (server arch is read from the container; the published port assumes Docker on the same host).
+
 ## File Paths That Matter
 
 | Path (in container) | Purpose |

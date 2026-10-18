@@ -1,0 +1,20 @@
+{
+  "name": "devcerts-e2e-resolver",
+  "displayName": "devcontainer-dev-certs E2E remote resolver (test only)",
+  "publisher": "dnegstad",
+  "version": "0.0.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "enabledApiProposals": [
+    "resolvers"
+  ],
+  "activationEvents": [
+    "onResolveRemoteAuthority:devcerts-e2e"
+  ],
+  "main": "./extension.js"
+}
