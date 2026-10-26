@@ -160,7 +160,7 @@
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@devcontainer-dev-certs/shared": "*",
