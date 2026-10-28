@@ -3,7 +3,7 @@
   "displayName": "Dev Container Dev Certificates (Host)",
   "description": "Generates and trusts ASP.NET and Aspire compatible HTTPS development certificates on the host machine for use in Dev Containers and remote environments.",
   "icon": "images/dn_ui_extension_icon_256.png",
-  "version": "1.4.3-pre",
+  "version": "1.4.3",
   "publisher": "dnegstad",
   "license": "MIT",
   "repository": {
@@ -160,7 +160,7 @@
     "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.12"
   },
   "dependencies": {
     "@devcontainer-dev-certs/shared": "*",
