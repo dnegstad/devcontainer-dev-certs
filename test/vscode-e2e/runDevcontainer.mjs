@@ -216,10 +216,15 @@ function startServer({ remoteE2e, token }) {
   );
 
   return new Promise((resolvePromise, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error("VS Code server did not start listening within 60s")),
-      60_000
-    );
+    // On timeout the caller never receives `child`, so its finally can't kill
+    // it; a live child and open pipes would keep Node running until CI's job
+    // limit. Kill it and drop the pipes here before rejecting.
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      child.stdout.destroy();
+      child.stderr.destroy();
+      reject(new Error("VS Code server did not start listening within 60s"));
+    }, 60_000);
     const onData = (chunk) => {
       const text = chunk.toString();
       process.stdout.write(`[server] ${text}`);
