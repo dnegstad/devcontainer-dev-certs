@@ -1,0 +1,24 @@
+// Template for the devcontainer E2E level. runDevcontainer.mjs stages this
+// folder into .out/devcontainer-e2e/ and copies the feature next to it as
+// .devcontainer/devcontainer-dev-certs, so the feature under test is the one
+// in this checkout rather than the published ghcr.io build.
+{
+  "name": "devcontainer-dev-certs-e2e",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+  "remoteUser": "vscode",
+  // Explicit, because the CLI otherwise mounts the enclosing git checkout and
+  // points workspaceFolder at .out/devcontainer-e2e inside it. Only the staged
+  // folder should be visible to the container.
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/devcerts-e2e,type=bind",
+  "workspaceFolder": "/workspaces/devcerts-e2e",
+  "features": {
+    "./devcontainer-dev-certs": {}
+  },
+  // The VS Code server listens on 8123 inside the container. Published on
+  // loopback only, on an ephemeral host port the launcher reads back with
+  // `docker port`, so parallel runs don't collide.
+  "runArgs": ["-p", "127.0.0.1::8123"],
+  "containerEnv": {
+    "DEVCERTS_E2E": "1"
+  }
+}
