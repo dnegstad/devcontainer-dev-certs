@@ -205,7 +205,8 @@ describe.skipIf(!opensslAvailable)(
       expect(textOutput).toContain("DNS:localhost");
       expect(textOutput).toContain("IP Address:127.0.0.1");
       expect(textOutput).toContain("IP Address:0:0:0:0:0:0:0:1");
-      expect(textOutput).toContain("CN = localhost");
+      // OpenSSL 3.0 prints "CN = localhost"; newer releases (e.g. Ubuntu 26.04) print "CN=localhost".
+      expect(textOutput).toMatch(/Subject: CN ?= ?localhost/);
     });
 
     it("ECDSA certificate is parseable by openssl", async () => {
