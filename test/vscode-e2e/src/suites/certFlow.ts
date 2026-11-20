@@ -48,7 +48,7 @@ function isInside(root: string, candidate: string): boolean {
 }
 
 /** Strip PEM armor and whitespace, leaving the base64 DER body. */
-function pemBody(pem: string): string {
+export function pemBody(pem: string): string {
   const begin = pem.indexOf("-----BEGIN CERTIFICATE-----");
   const end = pem.indexOf("-----END CERTIFICATE-----", begin);
   assert(begin >= 0 && end > begin, "input should contain a PEM certificate");

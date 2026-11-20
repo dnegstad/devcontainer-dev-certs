@@ -139,6 +139,48 @@ jobs:
       - name: Run VS Code E2E suite
         run: xvfb-run -a npm run test:e2e
 
+  vscode-e2e-devcontainer:
+    # The second E2E level: the workspace extension and suite run in a real
+    # remote extension host inside a dev container built from this checkout's
+    # feature, reached through a test-only resolver extension. Separate from
+    # `vscode-e2e` because it adds Docker and a second (server) download to
+    # the things that can fail for reasons unrelated to the code.
+    name: VS Code E2E in a dev container (spike)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck E2E suite
+        run: npm run typecheck:e2e
+
+      - name: Build UI Extension
+        run: npm run build -w src/vscode-ui-extension
+
+      - name: Build Workspace Extension
+        run: npm run build -w src/vscode-workspace-extension
+
+      - name: Build E2E suite
+        run: npm run build:e2e
+
+      - name: Generate test certificate fixture
+        run: npm run gen:test-cert
+
+      - name: Check E2E suite bundles load
+        run: npm run check:e2e-load
+
+      - name: Install xvfb
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends xvfb
+
+      - name: Run VS Code E2E suite in a dev container
+        run: xvfb-run -a npm run test:e2e:devcontainer
+
   windows-certificate-validation:
     name: Windows Certificate Validation
     runs-on: windows-latest

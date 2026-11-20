@@ -26,11 +26,14 @@ const Module = require("node:module");
 const path = require("node:path");
 const fs = require("node:fs");
 
-const BUNDLE = path.resolve(__dirname, "..", "..", ".out", "vscode-e2e", "suite.cjs");
+const OUT = path.resolve(__dirname, "..", "..", ".out", "vscode-e2e");
+const BUNDLES = [path.join(OUT, "suite.cjs"), path.join(OUT, "remote-suite.cjs")];
 
-if (!fs.existsSync(BUNDLE)) {
-  console.error(`Suite bundle is missing (${BUNDLE}). Run: npm run build:e2e`);
-  process.exit(1);
+for (const bundle of BUNDLES) {
+  if (!fs.existsSync(bundle)) {
+    console.error(`Suite bundle is missing (${bundle}). Run: npm run build:e2e`);
+    process.exit(1);
+  }
 }
 
 /**
@@ -72,22 +75,25 @@ require.cache["vscode"] = {
   exports: vscodeStub,
 };
 
-try {
-  const suite = require(BUNDLE);
-  if (typeof suite.run !== "function") {
+for (const bundle of BUNDLES) {
+  const name = path.basename(bundle);
+  try {
+    const suite = require(bundle);
+    if (typeof suite.run !== "function") {
+      console.error(
+        `${name} loaded but does not export run(). VS Code's ` +
+          "--extensionTestsPath contract requires it."
+      );
+      process.exit(1);
+    }
+    console.log(`${name} loads cleanly and exports run().`);
+  } catch (err) {
+    console.error(`${name} threw during module initialization:`);
+    console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
     console.error(
-      "Suite bundle loaded but does not export run(). VS Code's " +
-        "--extensionTestsPath contract requires it."
+      "\nThis would fail identically inside the extension host, after the " +
+        "VS Code download. Fix it here."
     );
     process.exit(1);
   }
-  console.log("E2E suite bundle loads cleanly and exports run().");
-} catch (err) {
-  console.error("Suite bundle threw during module initialization:");
-  console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-  console.error(
-    "\nThis would fail identically inside the extension host, after the " +
-      "VS Code download. Fix it here."
-  );
-  process.exit(1);
 }

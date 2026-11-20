@@ -13,9 +13,11 @@
     "typecheck:e2e": "tsc --noEmit -p test/vscode-e2e/tsconfig.json",
     "build:e2e": "node test/vscode-e2e/esbuild.mjs",
     "check:e2e-load": "node test/vscode-e2e/loadCheck.cjs",
-    "test:e2e": "node test/vscode-e2e/runTests.mjs"
+    "test:e2e": "node test/vscode-e2e/runTests.mjs",
+    "test:e2e:devcontainer": "node test/vscode-e2e/runDevcontainer.mjs"
   },
   "devDependencies": {
+    "@devcontainers/cli": "^0.89.0",
     "@eslint/js": "^10.0.1",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.28.0",
